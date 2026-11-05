@@ -1259,7 +1259,11 @@ private fun FilterSheet(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            Text(Money.format(spent[cat] ?: 0L), style = RowMeta, color = c.inkMuted, maxLines = 1)
+                            // Ellipsis, not a silent cut: a clipped "₹1,23,4" reads as a different amount.
+                            Text(
+                                Money.format(spent[cat] ?: 0L), style = RowMeta, color = c.inkMuted,
+                                maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }

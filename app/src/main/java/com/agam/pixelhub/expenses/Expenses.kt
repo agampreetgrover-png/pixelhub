@@ -46,8 +46,12 @@ object Money {
         return runCatching { value.movePointRight(2).longValueExact() }.getOrNull()
     }
 
-    fun fromRupees(rupees: Double): Long? =
-        BigDecimal.valueOf(rupees).setScale(2, RoundingMode.HALF_UP).movePointRight(2).toLong().takeIf { it > 0 }
+    /** Null for zero, negative, or an amount too big to hold (a pasted 300-digit number is Infinity). */
+    fun fromRupees(rupees: Double): Long? {
+        if (!rupees.isFinite()) return null
+        return runCatching { BigDecimal.valueOf(rupees).setScale(2, RoundingMode.HALF_UP).movePointRight(2).longValueExact() }
+            .getOrNull()?.takeIf { it > 0 }
+    }
 }
 
 data class CategoryTotal(val category: ExpenseCategory, val spentPaise: Long, val budgetPaise: Long?)
@@ -145,6 +149,9 @@ class ExpenseRepository(
 
         val id = if (expense.id == 0L) expenses.insert(expense) else expense.id.also { expenses.update(expense) }
 
+        // Budgets (and their "spent this month" alert) are about the current month: backdating an
+        // entry into an earlier month mustn't announce that month crossing 80% or 100% today.
+        if (month != YearMonth.now(zone())) return expense.copy(id = id)
         val totalAfter = expenses.sumBetween(start, end)
         val categoryAfter = expenses.sumBetween(start, end, expense.category)
         budgets.get(Budget.TOTAL)?.let { b ->

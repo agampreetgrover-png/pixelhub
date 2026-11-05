@@ -61,6 +61,9 @@ class LedgerRepository(private val people: PeopleDao, private val records: Ledge
 
     /** Puts back a just-deleted entry (Undo), with its old id. */
     suspend fun restore(record: LedgerRecord) {
+        // The person may have been deleted while the Undo was showing; an entry without them
+        // would sit in the table forever, counted by nobody.
+        if (people.get(record.personId) == null) return
         records.insert(record)
     }
 

@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,6 +43,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -90,6 +93,19 @@ import java.util.Locale
 import kotlin.math.abs
 
 private val ShortDate: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())
+private val ShortDateYear: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.getDefault())
+
+/** "6 Nov", with the year once it isn't this year: a ledger runs for years, and "6 Nov" alone is ambiguous. */
+private fun shortDate(d: LocalDate): String = d.format(if (d.year == LocalDate.now().year) ShortDate else ShortDateYear)
+
+/** Keeps the open entry sheet (the record and who paid) across rotation. */
+private val EditingSaver = Saver<Pair<LedgerRecord, Boolean>?, ArrayList<Any>>(
+    save = { p -> p?.let { (r, paid) -> arrayListOf(r.id, r.personId, r.amountPaise, r.note, r.at, paid) } },
+    restore = { l ->
+        LedgerRecord(id = l[0] as Long, personId = l[1] as Long, amountPaise = l[2] as Long, note = l[3] as String, at = l[4] as Long) to
+            (l[5] as Boolean)
+    },
+)
 
 /** Green when they owe you, red when you owe them, muted when square. */
 private fun HubColors.balanceColor(paise: Long): Color = when {
@@ -164,14 +180,18 @@ fun PeopleScreen(onBack: () -> Unit) {
 }
 
 /** Owed to you, you owe, and the net across everyone. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TotalsCard(list: List<PersonBalance>, modifier: Modifier = Modifier) {
     val c = Hub.colors
     val owedToYou = list.sumOf { it.balancePaise.coerceAtLeast(0) }
     val youOwe = list.sumOf { (-it.balancePaise).coerceAtLeast(0) }
-    Row(
+    // Wraps a stat onto the next line when lakh-sized amounts or a large font don't fit, instead
+    // of cutting a number off mid-digit (which reads as a different amount).
+    FlowRow(
         modifier.fillMaxWidth().hubCard(c.raised).padding(horizontal = 20.dp, vertical = 18.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Stat("Owed to you", Money.format(owedToYou), c.ok)
         Stat("You owe", Money.format(youOwe), c.danger)
@@ -191,7 +211,7 @@ private fun Stat(label: String, value: String, color: Color) {
 @Composable
 private fun PersonRow(pb: PersonBalance, onClick: () -> Unit) {
     val c = Hub.colors
-    val last = pb.lastAt?.let { "Last: " + Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).format(ShortDate) }
+    val last = pb.lastAt?.let { "Last: " + shortDate(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate()) }
     HubListRow(
         icon = Icons.Outlined.Person,
         title = pb.person.name,
@@ -214,14 +234,16 @@ private fun PersonPage(pb: PersonBalance, onBack: () -> Unit) {
     val c = Hub.colors
     val person = pb.person
     val entriesFlow = remember(person.id) { app.ledger.entries(person.id) }
-    val entries by entriesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    // Null until Room answers, so the page doesn't flash "Nothing yet" on every open.
+    val loaded by entriesFlow.collectAsStateWithLifecycle<List<LedgerRecord>?>(initialValue = null)
+    val entries = loaded.orEmpty()
     val balance = pb.balancePaise
     val running = remember(entries) { LedgerMath.runningBalances(entries) }
     val snackbar = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
 
     // The entry sheet: null when closed; otherwise the record (id 0 = new) and whether you paid.
-    var editing by remember { mutableStateOf<Pair<LedgerRecord, Boolean>?>(null) }
+    var editing by rememberSaveable(stateSaver = EditingSaver) { mutableStateOf<Pair<LedgerRecord, Boolean>?>(null) }
     var renaming by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
 
@@ -294,7 +316,7 @@ private fun PersonPage(pb: PersonBalance, onBack: () -> Unit) {
                 item(key = "historyHead") {
                     Text("History", style = HubType.section, color = c.ink, modifier = hubAnimateItem().padding(start = 4.dp, top = 8.dp))
                 }
-            } else {
+            } else if (loaded != null) {
                 item(key = "noHistory") {
                     Text(
                         "Nothing yet. Use “I paid” when you pay or lend, and “${person.name.substringBefore(' ')} paid” when they do.",
@@ -329,15 +351,15 @@ private fun PersonPage(pb: PersonBalance, onBack: () -> Unit) {
         )
     }
     if (renaming) {
-        var taken by remember { mutableStateOf(false) }
+        var takenName by remember { mutableStateOf<String?>(null) }
         NameSheet(
             title = "Rename",
             initial = person.name,
-            error = if (taken) "Someone else already has that name" else null,
+            takenName = takenName,
             onDismiss = { renaming = false },
             onSave = { name ->
                 app.appScope.launch {
-                    if (app.ledger.rename(person, name)) renaming = false else taken = true
+                    if (app.ledger.rename(person, name)) renaming = false else takenName = name
                 }
             },
         )
@@ -380,7 +402,7 @@ private fun EntryRow(
     val haptics = LocalHapticFeedback.current
     val shape = RoundedCornerShape(20.dp)
     val date = Instant.ofEpochMilli(record.at).atZone(ZoneId.systemDefault()).toLocalDate()
-    val dateText = if (date == LocalDate.now()) "Today" else date.format(ShortDate)
+    val dateText = if (date == LocalDate.now()) "Today" else shortDate(date)
     val what = LedgerMath.entryText(name, record.amountPaise)
 
     // Not saved state: an entry brought back by Undo must come back settled, not already swiped.

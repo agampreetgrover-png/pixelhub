@@ -141,7 +141,8 @@ fun ExpenseEditorSheet(
     val zone = remember { ZoneId.systemDefault() }
     val isNew = initial == null || initial.id == 0L
 
-    var amount by rememberSaveable { mutableStateOf(initial?.amountPaise?.takeIf { it > 0L }?.let { plainAmount(it) }.orEmpty()) }
+    val startAmount = remember { initial?.amountPaise?.takeIf { it > 0L }?.let { plainAmount(it) }.orEmpty() }
+    var amount by rememberSaveable { mutableStateOf(startAmount) }
     // The kind is saved by name so it survives rotation and process death as a plain string.
     var kindName by rememberSaveable { mutableStateOf((initial?.kind ?: ExpenseKind.EXPENSE).name) }
     val kind = ExpenseKind.valueOf(kindName)
@@ -204,9 +205,10 @@ fun ExpenseEditorSheet(
     }
 
     // Unsaved edits: a swipe down, a tap outside or Back asks before throwing them away. A new
-    // entry counts once anything is typed; an existing one once a field differs from what it was.
+    // entry counts once anything is typed (a "Repeat" or assistant draft: once it's changed); an
+    // existing one once a field differs from what it was.
     val dirty = if (isNew) {
-        amount.isNotEmpty() || note.isNotEmpty()
+        amount != startAmount || note != initial?.note.orEmpty()
     } else {
         val start = initial!!
         val startKind = start.kind
@@ -464,12 +466,15 @@ private fun AmountDisplay(
         label = "amountColor",
     )
     val rupee by animateColorAsState(if (flash) c.danger else accent, tween(200), label = "rupeeColor")
-    val style = HubType.clockLarge.copy(fontSize = size.sp, lineHeight = (size * 1.15f).sp)
+    // The steps above are sized to fit the sheet at 100% font; a larger phone font would push the
+    // last digits typed off the edge, so the figure doesn't grow with it.
+    val fs = LocalDensity.current.fontScale.coerceAtLeast(1f)
+    val style = HubType.clockLarge.copy(fontSize = (size / fs).sp, lineHeight = (size * 1.15f / fs).sp)
 
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(
             if (income) "+₹" else "₹",
-            style = HubType.clockMedium.copy(fontSize = (size * 0.55f).sp, lineHeight = (size * 0.6f).sp),
+            style = HubType.clockMedium.copy(fontSize = (size * 0.55f / fs).sp, lineHeight = (size * 0.6f / fs).sp),
             color = rupee,
             modifier = Modifier.padding(end = 6.dp),
         )
@@ -496,14 +501,15 @@ private fun KindToggle(kind: ExpenseKind, onKind: (ExpenseKind) -> Unit, modifie
             .fillMaxWidth()
             .height(48.dp)
             .clip(CircleShape)
-            .background(c.raised2)
-            .padding(4.dp),
+            .background(c.raised2),
     ) {
+        // The 4dp inset is on the indicator, not the pill, so each half stays a full 48dp to tap.
         Box(
             Modifier
                 .fillMaxWidth(0.5f)
                 .fillMaxHeight()
                 .graphicsLayer { translationX = position * size.width * (if (rtl) -1f else 1f) }
+                .padding(4.dp)
                 .clip(CircleShape)
                 .background(c.ink),
         )
