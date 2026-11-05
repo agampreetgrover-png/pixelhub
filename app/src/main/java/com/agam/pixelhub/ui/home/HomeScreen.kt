@@ -724,9 +724,12 @@ private fun dayLabel(d: LocalDate, today: LocalDate): String = when (d) {
     else -> d.format(DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault()))
 }
 
+/** What the greeting calls you. */
+private const val UserName = "Aggu"
+
 private fun greeting(t: LocalTime): String = when (t.hour) {
-    in 5..11 -> "Good morning!"
-    in 12..16 -> "Good afternoon!"
-    in 17..21 -> "Good evening!"
-    else -> "Good night!"
+    in 5..11 -> "Good morning, $UserName!"
+    in 12..16 -> "Good afternoon, $UserName!"
+    in 17..21 -> "Good evening, $UserName!"
+    else -> "Good night, $UserName!"
 }
