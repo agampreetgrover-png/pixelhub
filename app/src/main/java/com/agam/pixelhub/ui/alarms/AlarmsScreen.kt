@@ -1,6 +1,7 @@
 package com.agam.pixelhub.ui.alarms
 
-import android.widget.Toast
+import com.agam.pixelhub.ui.notchWidthFor
+import com.agam.pixelhub.ui.heroHeight
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
@@ -36,6 +37,9 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Snooze
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.Icon
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,6 +47,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,7 +61,11 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -79,7 +88,10 @@ import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
+import com.agam.pixelhub.ui.motion.animatedRadius
+import com.agam.pixelhub.ui.motion.hubAnimateItem
 import com.agam.pixelhub.ui.motion.pressable
+import com.agam.pixelhub.ui.motion.quickFade
 import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.theme.Hub
@@ -101,8 +113,9 @@ internal val HubColors.onDawnSoft: Color
     get() = onDawn.copy(alpha = 0.92f)
 
 private val Peek = 54.dp
-private val HeroHeight = 204.dp
-private val NotchWidth = 158.dp
+// Both grow with the phone's font size so the card's text and the pill's label are never cut off.
+private val HeroHeight: Dp @Composable get() = heroHeight()
+private val NotchWidth: Dp @Composable get() = notchWidthFor(listOf("New alarm"), chrome = 8.dp + 40.dp + 10.dp + 14.dp + NotchGap, min = 158.dp)
 private val NotchHeight = 64.dp
 private val NotchGap = 6.dp
 
@@ -143,13 +156,30 @@ fun AlarmsScreen() {
             .sortedBy { it.second }
     }
 
+    val snackbar = remember { SnackbarHostState() }
+    val uiScope = rememberCoroutineScope()
+
     fun save(alarm: Alarm) {
         c.appScope.launch {
             val saved = c.alarms.save(alarm)
             if (saved.enabled) {
                 val at = AlarmRepository.nextTrigger(saved).toInstant().toEpochMilli()
-                Toast.makeText(context, "Alarm set for ${Fmt.untilText(at)} from now", Toast.LENGTH_SHORT).show()
+                uiScope.launch {
+                    snackbar.currentSnackbarData?.dismiss()
+                    snackbar.showSnackbar("Alarm set for ${Fmt.untilText(at)} from now", duration = SnackbarDuration.Short)
+                }
             }
+        }
+    }
+
+    fun delete(a: Alarm) {
+        c.appScope.launch { c.alarms.delete(a) }
+        uiScope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val name = a.label.ifBlank { Fmt.time(context, LocalTime.of(a.hour, a.minute)) }
+            val undo = snackbar.showSnackbar("Deleted “$name”", actionLabel = "Undo", duration = SnackbarDuration.Short)
+            // Comes back as a new row (and is scheduled again if it was on).
+            if (undo == SnackbarResult.ActionPerformed) c.appScope.launch { c.alarms.save(a.copy(id = 0L)) }
         }
     }
 
@@ -164,6 +194,7 @@ fun AlarmsScreen() {
 
     ScreenScaffold(
         title = "Alarms",
+        snackbarHost = snackbar,
         actions = {
             CircleIconButton(icon = Icons.Outlined.Add, contentDescription = "New alarm", onClick = { creating = true })
         },
@@ -183,8 +214,7 @@ fun AlarmsScreen() {
                     then = upcoming.getOrNull(1),
                     onOpen = { editingId = it.id },
                     onNew = { creating = true },
-                    modifier = Modifier
-                        .animateItem()
+                    modifier = hubAnimateItem(fadeIn = false)
                         .staggerIn(stagger, "hero", 0)
                         .padding(horizontal = Gutter),
                 )
@@ -192,8 +222,7 @@ fun AlarmsScreen() {
             item(key = "quick") {
                 QuickAlarms(
                     onPick = { quickAlarm(it) },
-                    modifier = Modifier
-                        .animateItem()
+                    modifier = hubAnimateItem(fadeIn = false)
                         .staggerIn(stagger, "quick", 1)
                         .padding(horizontal = Gutter)
                         .padding(top = 12.dp),
@@ -204,8 +233,7 @@ fun AlarmsScreen() {
                     ListHead(
                         total = list.size,
                         on = list.count { it.enabled },
-                        modifier = Modifier
-                            .animateItem()
+                        modifier = hubAnimateItem(fadeIn = false)
                             .staggerIn(stagger, "head", 2)
                             .padding(top = 12.dp),
                     )
@@ -218,7 +246,12 @@ fun AlarmsScreen() {
                     now = now,
                     onToggle = { on -> save(a.copy(enabled = on)) },
                     onClick = { editingId = a.id },
-                    modifier = Modifier.animateItem().staggerIn(stagger, a.id, i + 3),
+                    // Only the first screenful takes part in the entrance; the rest are just there.
+                    modifier = if (i + 3 <= 5) {
+                        hubAnimateItem(fadeIn = false).staggerIn(stagger, a.id, i + 3)
+                    } else {
+                        hubAnimateItem()
+                    },
                 )
             }
         }
@@ -242,7 +275,7 @@ fun AlarmsScreen() {
                 onSave = { editingId = null; save(it) },
                 onDelete = {
                     editingId = null
-                    c.appScope.launch { c.alarms.delete(a) }
+                    delete(a)
                 },
             )
         }
@@ -276,21 +309,27 @@ private fun NextAlarmHero(
 ) {
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
-    val notch = remember { NotchShape(CardRadius, 18.dp, NotchWidth, NotchHeight) }
+    val notchWidth = NotchWidth
+    val notch = remember(notchWidth) { NotchShape(CardRadius, 18.dp, notchWidth, NotchHeight) }
     val peek by animateDpAsState(
         if (then != null) Peek else 0.dp,
         if (reduced) snap<Dp>() else Motion.snappy<Dp>(),
         label = "peek",
     )
     val next = state.next
+    // When the following alarm goes away, keep drawing it while the card slides down over it,
+    // instead of blanking the strip while the gap is still closing.
+    val lastThen = remember { arrayOfNulls<Pair<Alarm, Long>>(1) }
+    if (then != null) lastThen[0] = then
+    val strip = then ?: lastThen[0].takeIf { peek > 0.dp }
 
     Box(modifier.fillMaxWidth().height(peek + HeroHeight)) {
-        if (then != null) {
+        if (strip != null) {
             ThenStrip(
-                alarm = then.first,
-                at = then.second,
+                alarm = strip.first,
+                at = strip.second,
                 now = state.now,
-                onClick = { onOpen(then.first) },
+                onClick = { onOpen(strip.first) },
             )
         }
         Box(
@@ -316,7 +355,7 @@ private fun NextAlarmHero(
                 .align(Alignment.BottomEnd)
                 .width(NotchWidth - NotchGap)
                 .height(NotchHeight - NotchGap)
-                .pressable(onClick = onNew, pressedScale = 0.95f, onClickLabel = "New alarm")
+                .pressable(onClick = onNew, pressedScale = 0.95f, onClickLabel = "New alarm", showRipple = false)
                 .clip(CircleShape)
                 .background(c.chrome)
                 .padding(start = 8.dp, end = 14.dp),
@@ -465,6 +504,7 @@ private fun ThenStrip(alarm: Alarm, at: Long, now: Long, onClick: () -> Unit) {
 @Composable
 private fun QuickAlarms(onPick: (Int) -> Unit, modifier: Modifier = Modifier) {
     val c = Hub.colors
+    val haptics = LocalHapticFeedback.current
     Column(modifier.fillMaxWidth().hubCard(c.raised).padding(horizontal = 8.dp, vertical = 14.dp)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Quick alarm", style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
@@ -476,7 +516,11 @@ private fun QuickAlarms(onPick: (Int) -> Unit, modifier: Modifier = Modifier) {
                 QuickAction(
                     icon = icon,
                     label = if (minutes % 60 == 0) "In ${minutes / 60} hour" else "In $minutes min",
-                    onClick = { onPick(minutes) },
+                    onClick = {
+                        // One tap sets a real alarm: confirm it.
+                        haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                        onPick(minutes)
+                    },
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -485,11 +529,16 @@ private fun QuickAlarms(onPick: (Int) -> Unit, modifier: Modifier = Modifier) {
 }
 
 /** Rounds only the corners at the card's ends, so consecutive list items read as one card. */
-private fun Modifier.cardSlice(color: Color, top: Boolean, bottom: Boolean): Modifier {
-    val t = if (top) CardRadius else 0.dp
-    val b = if (bottom) CardRadius else 0.dp
-    return clip(RoundedCornerShape(topStart = t, topEnd = t, bottomStart = b, bottomEnd = b)).background(color)
-}
+private fun Modifier.cardSlice(color: Color, top: Boolean, bottom: Boolean): Modifier =
+    cardSlice(color, if (top) CardRadius else 0.dp, if (bottom) CardRadius else 0.dp)
+
+/** As above with the radii given, so a row can ease its corners when it becomes the last. */
+private fun Modifier.cardSlice(color: Color, top: Dp, bottom: Dp): Modifier =
+    clip(RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)).background(color)
+
+/** [animatedRadius], never below zero (the spring overshoots a little on the way down). */
+@Composable
+private fun animatedEdge(target: Dp): Dp = animatedRadius(target).coerceAtLeast(0.dp)
 
 /** The top of the alarms card: its title and how many are on. */
 @Composable
@@ -504,7 +553,11 @@ private fun ListHead(total: Int, on: Int, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("Your alarms", style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
-        Text("$on of $total on", style = HubType.small, color = c.inkMuted)
+        // The count rolls as alarms are switched on and off.
+        Row(Modifier.clearAndSetSemantics { contentDescription = "$on of $total on" }) {
+            RollingText("$on", HubType.small, color = c.inkMuted)
+            Text(" of $total on", style = HubType.small, color = c.inkMuted)
+        }
     }
 }
 
@@ -524,22 +577,24 @@ private fun AlarmRow(
 ) {
     val context = LocalContext.current
     val c = Hub.colors
+    val haptics = LocalHapticFeedback.current
     // Optimistic: the switch answers immediately, the database catches up.
     var on by remember(alarm.enabled) { mutableStateOf(alarm.enabled) }
     val timeColor by animateColorAsState(if (on) c.ink else c.inkMuted, tween(200, easing = Motion.EaseOut), label = "time")
     val (digits, period) = splitTime(Fmt.time(context, LocalTime.of(alarm.hour, alarm.minute)))
     val ringsAt = remember(alarm, now) { AlarmRepository.nextTrigger(alarm).toInstant().toEpochMilli() }
     val meta = listOfNotNull(alarm.label.takeIf { it.isNotBlank() }, repeatCaption(alarm.daysMask)).joinToString(" • ")
-    // Words, not just the dimmed time, say whether it is on.
-    val status = if (on) "in ${Fmt.untilText(ringsAt, now)}" else "Off"
     val metaStyle = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp)
+    // The card's bottom corners and margin ease in and out as this row becomes, or stops being, the last.
+    val bottomRadius = animatedEdge(if (last) CardRadius else 0.dp)
+    val bottomPad = animatedEdge(if (last) 10.dp else 0.dp)
 
     Box(
         modifier
             .fillMaxWidth()
             .padding(horizontal = Gutter)
-            .cardSlice(c.raised, top = false, bottom = last)
-            .padding(start = 8.dp, end = 8.dp, bottom = if (last) 10.dp else 0.dp),
+            .cardSlice(c.raised, top = 0.dp, bottom = bottomRadius)
+            .padding(start = 8.dp, end = 8.dp, bottom = bottomPad),
     ) {
         Row(
             Modifier
@@ -570,12 +625,25 @@ private fun AlarmRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    Text(" • $status", style = metaStyle, color = c.inkMuted, maxLines = 1)
+                    // Words, not just the dimmed time, say whether it is on. Fades only when it is
+                    // switched; the countdown itself just updates.
+                    AnimatedContent(targetState = on, transitionSpec = { quickFade() }, label = "status") { isOn ->
+                        Text(
+                            if (isOn) " • in ${Fmt.untilText(ringsAt, now)}" else " • Off",
+                            style = HubType.small.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                            color = c.inkMuted,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
             HubSwitch(
                 checked = on,
-                onCheckedChange = { on = it; onToggle(it) },
+                onCheckedChange = {
+                    haptics.performHapticFeedback(if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
+                    on = it
+                    onToggle(it)
+                },
                 accent = c.dawn,
                 contentDescription = buildString {
                     append("Alarm at ").append(digits)

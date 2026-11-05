@@ -1,8 +1,11 @@
 package com.agam.pixelhub.ui.theme
 
 import android.app.Activity
+import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
 import android.provider.Settings
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -15,12 +18,15 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
+import com.agam.pixelhub.ui.motion.Motion
 
 /** PixelHub's palette for the theme chosen in Settings (System follows the phone's dark mode). */
 @Composable
@@ -45,10 +51,52 @@ fun PixelHubTheme(content: @Composable () -> Unit) {
     val reduced = remember {
         Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
     }
-    CompositionLocalProvider(LocalHubColors provides hub, LocalReducedMotion provides reduced) {
-        MaterialTheme(colorScheme = hub.toScheme(), typography = HubTypography, content = content)
+    // Switching theme in Settings crossfades every colour instead of snapping. Colour change
+    // isn't travel, so it stays on under reduced motion; at launch start equals target.
+    val shown = animateHubColors(hub)
+    // Material's sheets and dialogs pick their bar icon colours from isSystemInDarkTheme(),
+    // which reads the configuration. Make its night bit follow the app theme, not the phone.
+    val base = LocalConfiguration.current
+    val config = remember(base, hub.isDark) {
+        Configuration(base).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                (if (hub.isDark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
+        }
+    }
+    CompositionLocalProvider(
+        LocalConfiguration provides config,
+        LocalHubColors provides shown,
+        LocalReducedMotion provides reduced,
+    ) {
+        MaterialTheme(colorScheme = shown.toScheme(), typography = HubTypography, content = content)
     }
 }
+
+@Composable
+private fun animateHubColors(target: HubColors): HubColors = target.copy(
+    ground = fade(target.ground),
+    raised = fade(target.raised),
+    raised2 = fade(target.raised2),
+    well = fade(target.well),
+    ink = fade(target.ink),
+    inkMuted = fade(target.inkMuted),
+    dawn = fade(target.dawn),
+    onDawn = fade(target.onDawn),
+    sky = fade(target.sky),
+    onSky = fade(target.onSky),
+    sun = fade(target.sun),
+    onSun = fade(target.onSun),
+    chrome = fade(target.chrome),
+    onChrome = fade(target.onChrome),
+    chromeWell = fade(target.chromeWell),
+    ok = fade(target.ok),
+    danger = fade(target.danger),
+    onDanger = fade(target.onDanger),
+)
+
+@Composable
+private fun fade(c: Color): Color =
+    animateColorAsState(c, tween(280, easing = Motion.EaseOut), label = "theme").value
 
 object Hub {
     val colors: HubColors
@@ -79,6 +127,7 @@ private fun HubColors.toScheme(): ColorScheme {
         outlineVariant = raised2,
         error = danger, onError = onDanger,
         errorContainer = dangerSoft.compositeOver(raised), onErrorContainer = ink,
-        scrim = ground.copy(alpha = 0.6f),
+        // Material applies its own alpha; a dark scrim dims in every theme.
+        scrim = Color.Black,
     )
 }

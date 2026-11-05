@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.currentCompositeKeyHash
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -49,8 +50,8 @@ object Motion {
     /** Large, calm movements. */
     fun <T> gentle() = spring<T>(dampingRatio = 0.9f, stiffness = Spring.StiffnessLow)
 
-    const val STAGGER_MS = 55L
-    const val ENTER_MS = 520
+    const val STAGGER_MS = 40L
+    const val ENTER_MS = 360
 }
 
 /**
@@ -98,14 +99,25 @@ class Stagger internal constructor() {
     internal val bornAt = SystemClock.uptimeMillis()
 }
 
-@Composable
-fun rememberStagger(): Stagger = remember { Stagger() }
+/** One Stagger per call site for the life of the process (a handful of screens). */
+private val staggers = HashMap<Int, Stagger>()
 
 /**
- * Rises 24dp and fades in, once per [key]. Items in the first screenful are staggered by
+ * A screen's entrance plays once per app launch. Leaving a tab disposes its screen, so a
+ * plain `remember` would replay the cascade on every return; keying by the call site's
+ * position in the composition keeps it, so coming back to Home is instant.
+ */
+@Composable
+fun rememberStagger(): Stagger {
+    val site = currentCompositeKeyHash
+    return remember(site) { staggers.getOrPut(site) { Stagger() } }
+}
+
+/**
+ * Rises 16dp and fades in, once per [key]. Items in the first screenful are staggered by
  * [index]; anything arriving later (scrolled into view, newly added) enters without delay.
  */
-fun Modifier.staggerIn(stagger: Stagger, key: Any, index: Int = 0, distance: Float = 24f): Modifier = composed {
+fun Modifier.staggerIn(stagger: Stagger, key: Any, index: Int = 0, distance: Float = 16f): Modifier = composed {
     val reduced = LocalReducedMotion.current
     val already = key in stagger.shown
     val progress = remember(key) { Animatable(if (already) 1f else 0f) }
@@ -114,8 +126,11 @@ fun Modifier.staggerIn(stagger: Stagger, key: Any, index: Int = 0, distance: Flo
         if (progress.value < 1f) {
             stagger.shown += key
             val sinceBirth = SystemClock.uptimeMillis() - stagger.bornAt
-            if (sinceBirth < 700) delay(index.coerceIn(0, 10) * Motion.STAGGER_MS)
-            progress.animateTo(1f, tween(if (reduced) 180 else Motion.ENTER_MS, easing = Motion.EaseOut))
+            val opening = sinceBirth < 700
+            if (opening) delay(index.coerceIn(0, 6) * Motion.STAGGER_MS)
+            // The opening cascade takes its time; anything arriving later should just be there.
+            val ms = when { reduced -> 180; opening -> Motion.ENTER_MS; else -> 240 }
+            progress.animateTo(1f, tween(ms, easing = Motion.EaseOut))
         }
     }
     graphicsLayer {

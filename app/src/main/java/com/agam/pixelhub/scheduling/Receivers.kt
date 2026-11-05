@@ -34,6 +34,7 @@ class TriggerReceiver : BroadcastReceiver() {
         if (id < 0) return
         val c = context.container
         runAsync {
+            intent.action?.let { c.scheduler.snoozeFired(it, id) }
             when (intent.action) {
                 Scheduler.ACTION_REMINDER ->
                     c.reminders.onFired(id)?.let { ReminderNotifier.show(context, it) }
@@ -46,7 +47,7 @@ class TriggerReceiver : BroadcastReceiver() {
                     }
                 Scheduler.ACTION_ALARM_SNOOZE_CANCEL -> c.scheduler.cancelAlarmSnooze(id)
                 Scheduler.ACTION_ALARM_SNOOZE ->
-                    c.alarms.get(id)?.let { AlarmRingService.start(context, it) }
+                    c.alarms.get(id)?.let { AlarmRingService.start(context, it, snoozed = true) }
                 Scheduler.ACTION_HEALTH_NUDGE ->
                     c.healthNudges.onFired(id)?.let { nudge ->
                         when (val check = c.health.check(nudge)) {
@@ -65,6 +66,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val c = context.container
         runAsync {
+            c.scheduler.restoreSnoozes()
             c.alarms.rescheduleAll()
             c.healthNudges.rescheduleAll()
             c.reminders.rescheduleAll().forEach { ReminderNotifier.show(context, it) }

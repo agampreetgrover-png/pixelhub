@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Handler
 import android.os.IBinder
@@ -20,6 +21,8 @@ import android.os.VibratorManager
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
+import com.agam.pixelhub.MainActivity
+import com.agam.pixelhub.ui.Tab
 import com.agam.pixelhub.R
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Alarm
@@ -43,12 +46,19 @@ class AlarmRingService : Service() {
         val hour: Int,
         val minute: Int,
         val snoozeMinutes: Int,
+        /** Ringing again after a snooze, so the ring screen and notification say so. */
+        val snoozed: Boolean = false,
     )
 
     private var player: MediaPlayer? = null
+    private var systemRingtone: Ringtone? = null
     private var vibrator: Vibrator? = null
     private val handler = Handler(Looper.getMainLooper())
-    private val autoStop = Runnable { finishRinging() }
+    /** Nobody answered for [AUTO_STOP_MS]: stop, but leave a "missed" note so it isn't silent. */
+    private val autoStop = Runnable {
+        ringingState.value?.let { showMissed(it) }
+        finishRinging()
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,6 +77,11 @@ class AlarmRingService : Service() {
                 ringingState.value?.let { container.scheduler.cancelAlarmSnooze(it.alarmId) }
                 finishRinging()
             }
+            // Android 14+ lets an unlocked user swipe a foreground-service notification away, which
+            // left the alarm ringing with no control anywhere. Put it straight back.
+            ACTION_REPOST -> ringingState.value?.let { r ->
+                runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(r)) }
+            }
             else -> if (ringingState.value == null) stopSelf()
         }
         return START_NOT_STICKY
@@ -79,9 +94,17 @@ class AlarmRingService : Service() {
             hour = intent.getIntExtra(EXTRA_HOUR, 0),
             minute = intent.getIntExtra(EXTRA_MINUTE, 0),
             snoozeMinutes = intent.getIntExtra(EXTRA_SNOOZE, 10),
+            snoozed = intent.getBooleanExtra(EXTRA_SNOOZED, false),
         )
+        // Another alarm is already ringing: snooze it rather than silently dropping it.
+        ringingState.value?.takeIf { it.alarmId != ringing.alarmId }?.let { previous ->
+            val at = System.currentTimeMillis() + previous.snoozeMinutes * 60_000L
+            container.scheduler.scheduleAlarmSnooze(previous.alarmId, at)
+            showSnoozed(previous, at)
+        }
         stopSound()
         getSystemService(NotificationManager::class.java).cancel(Scheduler.snoozedNotificationId(ringing.alarmId))
+        getSystemService(NotificationManager::class.java).cancel(missedNotificationId(ringing.alarmId))
         // Publish state before the full-screen intent can launch the activity.
         ringingState.value = ringing
         startForeground(
@@ -104,9 +127,13 @@ class AlarmRingService : Service() {
         return NotificationCompat.Builder(this, Channels.ALARMS)
             .setSmallIcon(R.drawable.ic_stat_pixelhub)
             .setContentTitle(r.label.ifBlank { "Alarm" })
-            .setContentText(Fmt.time(this, LocalTime.of(r.hour, r.minute)))
+            .setContentText(
+                if (r.snoozed) "Snoozed · set for ${Fmt.time(this, LocalTime.of(r.hour, r.minute))}"
+                else Fmt.time(this, LocalTime.of(r.hour, r.minute)),
+            )
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDeleteIntent(servicePending(ACTION_REPOST, 3))
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setFullScreenIntent(fullScreen, true)
@@ -135,6 +162,27 @@ class AlarmRingService : Service() {
         runCatching { getSystemService(NotificationManager::class.java).notify(Scheduler.snoozedNotificationId(r.alarmId), n) }
     }
 
+    /** Left when an alarm rang out unanswered; tapping it opens the alarms list. */
+    private fun showMissed(r: Ringing) {
+        val open = PendingIntent.getActivity(
+            this, MISSED_REQUEST,
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_TAB, Tab.ALARMS.name)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = NotificationCompat.Builder(this, Channels.ALARMS)
+            .setSmallIcon(R.drawable.ic_stat_pixelhub)
+            .setContentTitle("Missed alarm: ${r.label.ifBlank { "Alarm" }}")
+            .setContentText("Rang at ${Fmt.time(this, LocalTime.of(r.hour, r.minute))} for 10 minutes")
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setSilent(true)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .build()
+        runCatching { getSystemService(NotificationManager::class.java).notify(missedNotificationId(r.alarmId), n) }
+    }
+
     private fun servicePending(action: String, request: Int): PendingIntent = PendingIntent.getService(
         this, request,
         Intent(this, AlarmRingService::class.java).setAction(action),
@@ -152,7 +200,7 @@ class AlarmRingService : Service() {
             Settings.System.DEFAULT_ALARM_ALERT_URI,
             Settings.System.DEFAULT_RINGTONE_URI,
         )
-        for (uri in candidates) {
+        for ((i, uri) in candidates.withIndex()) {
             val mp = MediaPlayer()
             try {
                 mp.setAudioAttributes(attrs)
@@ -164,6 +212,22 @@ class AlarmRingService : Service() {
                 return
             } catch (e: Exception) {
                 mp.release()
+                // The chosen sound may live in shared storage PixelHub can't open; Ringtone can
+                // hand playback to the system, which can. Only for the user's own pick.
+                if (i == 0 && ringtone != null) {
+                    val r = runCatching {
+                        RingtoneManager.getRingtone(this, uri)?.apply {
+                            audioAttributes = attrs
+                            isLooping = true
+                            play()
+                        }
+                    }.getOrNull()
+                    if (r != null && r.isPlaying) {
+                        systemRingtone = r
+                        return
+                    }
+                    runCatching { r?.stop() }
+                }
             }
         }
     }
@@ -183,6 +247,8 @@ class AlarmRingService : Service() {
             it.release()
         }
         player = null
+        systemRingtone?.let { runCatching { it.stop() } }
+        systemRingtone = null
         vibrator?.cancel()
         vibrator = null
     }
@@ -206,6 +272,12 @@ class AlarmRingService : Service() {
         const val ACTION_START = "com.agam.pixelhub.alarm.START"
         const val ACTION_SNOOZE = "com.agam.pixelhub.alarm.SNOOZE"
         const val ACTION_DISMISS = "com.agam.pixelhub.alarm.DISMISS"
+        private const val ACTION_REPOST = "com.agam.pixelhub.alarm.REPOST"
+        private const val EXTRA_SNOOZED = "snoozed"
+        private const val MISSED_REQUEST = 7
+
+        /** Notification id of the "Missed alarm" note for one alarm. */
+        fun missedNotificationId(alarmId: Long): Int = 60_000 + alarmId.toInt()
         private const val EXTRA_ID = "id"
         private const val EXTRA_LABEL = "label"
         private const val EXTRA_HOUR = "hour"
@@ -220,7 +292,7 @@ class AlarmRingService : Service() {
         /** The alarm ringing right now, or null. */
         val state: StateFlow<Ringing?> = ringingState.asStateFlow()
 
-        fun start(context: Context, alarm: Alarm) {
+        fun start(context: Context, alarm: Alarm, snoozed: Boolean = false) {
             val intent = Intent(context, AlarmRingService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_ID, alarm.id)
@@ -230,6 +302,7 @@ class AlarmRingService : Service() {
                 .putExtra(EXTRA_SNOOZE, alarm.snoozeMinutes)
                 .putExtra(EXTRA_RINGTONE, alarm.ringtoneUri)
                 .putExtra(EXTRA_VIBRATE, alarm.vibrate)
+                .putExtra(EXTRA_SNOOZED, snoozed)
             context.startForegroundService(intent)
         }
 

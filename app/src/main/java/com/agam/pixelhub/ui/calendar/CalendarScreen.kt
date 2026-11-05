@@ -1,5 +1,8 @@
 package com.agam.pixelhub.ui.calendar
 
+import com.agam.pixelhub.ui.notchWidthFor
+import com.agam.pixelhub.ui.heroHeight
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,6 +32,7 @@ import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.EventAvailable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,7 +58,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,10 +71,11 @@ import com.agam.pixelhub.ui.Gutter
 import com.agam.pixelhub.ui.PrimaryButton
 import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.ScreenScaffold
-import com.agam.pixelhub.ui.SectionHeader
 import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
-import com.agam.pixelhub.ui.motion.Motion
+import com.agam.pixelhub.ui.motion.hubAnimateItem
+import com.agam.pixelhub.ui.motion.popEnter
+import com.agam.pixelhub.ui.motion.popExit
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
@@ -93,17 +98,18 @@ private const val SEP = " • "
 @Composable
 fun CalendarScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val reduced = LocalReducedMotion.current
     val events = rememberCalendarEvents()
     val access = rememberCalendarAccess(events)
     val now = rememberNow()
     val is24h = rememberIs24h()
-    val zone = remember { ZoneId.systemDefault() }
+    // Re-read on every tick and resume, so a time-zone change regroups the days instead of
+    // mixing the old zone (grouping) with the new one (the provider's times).
+    val zone = remember(now) { ZoneId.systemDefault() }
     val today = CalendarAgenda.date(now, zone)
     val lastDay = today.plusDays(LOOKAHEAD_DAYS - 1)
 
     // One query per day (and per grant); the minute tick only trims what has ended.
-    val flow = remember(access.granted, today) {
+    val flow = remember(access.granted, today, zone) {
         events.observe(
             CalendarAgenda.startOfDay(today, zone),
             CalendarAgenda.startOfDay(today.plusDays(LOOKAHEAD_DAYS), zone),
@@ -122,7 +128,8 @@ fun CalendarScreen(onBack: () -> Unit) {
 
     val stagger = rememberStagger()
     val list = rememberLazyListState()
-    val placement = if (reduced) null else tween<IntOffset>(250, easing = Motion.EaseOut)
+    // The empty card already says there's nothing coming up, so the hero leaves that line out.
+    val emptyShown = all != null && byDay.isEmpty() && selected == null
 
     ScreenScaffold(title = "Calendar", navigationIcon = { BackButton(onBack) }) { padding ->
         LazyColumn(
@@ -147,6 +154,7 @@ fun CalendarScreen(onBack: () -> Unit) {
                 CalendarHero(
                     next = next,
                     loading = all == null,
+                    showHint = !emptyShown,
                     now = now,
                     zone = zone,
                     is24h = is24h,
@@ -167,7 +175,7 @@ fun CalendarScreen(onBack: () -> Unit) {
 
             if (all == null) return@LazyColumn
 
-            if (byDay.isEmpty() && selected == null) {
+            if (emptyShown) {
                 item(key = "empty") {
                     EmptyCard(
                         onNewEvent = { newEvent(context, events, CalendarAgenda.suggestedStart(today, now, zone)) },
@@ -179,14 +187,14 @@ fun CalendarScreen(onBack: () -> Unit) {
 
             item(key = "header") {
                 val sel = selected
-                SectionHeader(
+                AgendaHeader(
                     text = if (sel == null) "Next 30 days" else "One day",
-                    action = if (sel == null) null else "Show all",
-                    onAction = if (sel == null) null else ({ selected = null }),
-                    modifier = Modifier.animateItem(placementSpec = placement),
+                    showAll = sel != null,
+                    onShowAll = { selected = null },
+                    modifier = hubAnimateItem(),
                 )
             }
-            shownDays.forEachIndexed { i, day ->
+            shownDays.forEach { day ->
                 item(key = "day-$day") {
                     DayCard(
                         day = day,
@@ -196,14 +204,46 @@ fun CalendarScreen(onBack: () -> Unit) {
                         is24h = is24h,
                         onOpen = { e -> openEvent(context, events, e) },
                         onNewEvent = { newEvent(context, events, CalendarAgenda.suggestedStart(day, now, zone)) },
-                        modifier = Modifier
-                            .animateItem(fadeInSpec = tween(200), placementSpec = placement, fadeOutSpec = tween(150))
+                        // Agenda cards are list items: the one list-item spec (a short fade). The
+                        // rise stays on the blocks above.
+                        modifier = hubAnimateItem()
                             .padding(horizontal = Gutter)
-                            .padding(bottom = 12.dp)
-                            .staggerIn(stagger, "day-$day", 2 + i),
+                            .padding(bottom = 12.dp),
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The agenda's section header ("Next 30 days" or "One day"). Laid out like SectionHeader, but
+ * its "Show all" pops in when a day is picked instead of appearing at once. The row keeps a
+ * 48dp height either way, so the list below doesn't jump as the action comes and goes.
+ */
+@Composable
+private fun AgendaHeader(text: String, showAll: Boolean, onShowAll: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(start = Gutter, end = Gutter - 8.dp, top = 28.dp, bottom = 10.dp)
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
+        AnimatedVisibility(visible = showAll, enter = popEnter(reduced), exit = popExit()) {
+            Text(
+                "Show all",
+                style = HubType.small,
+                color = c.inkMuted,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .clip(CircleShape)
+                    .pressable(onClick = onShowAll, onClickLabel = "Show all days")
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
         }
     }
 }
@@ -237,8 +277,9 @@ private fun AccessCard(onAllow: () -> Unit, modifier: Modifier = Modifier) {
 // Hero: the next event on the violet card, "New event" seated in the notched corner
 // ---------------------------------------------------------------------------------------------
 
-private val HeroHeight = 204.dp
-private val NotchWidth = 158.dp
+// Both grow with the phone's font size so the card's text and the pill's label are never cut off.
+private val HeroHeight: Dp @Composable get() = heroHeight()
+private val NotchWidth: Dp @Composable get() = notchWidthFor(listOf("New event"), chrome = 5.dp + 46.dp + 10.dp + 16.dp + NotchGap, min = 158.dp)
 private val NotchHeight = 64.dp
 private val NotchGap = 6.dp
 
@@ -246,6 +287,7 @@ private val NotchGap = 6.dp
 private fun CalendarHero(
     next: CalendarEvent?,
     loading: Boolean,
+    showHint: Boolean,
     now: Long,
     zone: ZoneId,
     is24h: Boolean,
@@ -254,7 +296,8 @@ private fun CalendarHero(
     modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
-    val notch = remember { CalendarNotchShape(CardRadius, 18.dp, NotchWidth, NotchHeight) }
+    val notchWidth = NotchWidth
+    val notch = remember(notchWidth) { CalendarNotchShape(CardRadius, 18.dp, notchWidth, NotchHeight) }
     val today = CalendarAgenda.date(now, zone)
     Box(modifier.fillMaxWidth().height(HeroHeight)) {
         Column(
@@ -269,16 +312,17 @@ private fun CalendarHero(
                 .background(c.dawn)
                 .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 14.dp),
         ) {
-            if (!loading) HeroContent(next, now, zone, today, is24h)
+            if (!loading) HeroContent(next, now, zone, today, is24h, showHint)
         }
         Row(
             Modifier
                 .align(Alignment.BottomEnd)
                 .width(NotchWidth - NotchGap)
                 .height(NotchHeight - NotchGap)
+                // Pressable first, so the whole pill shrinks, not just its contents.
+                .pressable(onClick = onNewEvent, pressedScale = 0.95f, showRipple = false, onClickLabel = "New event")
                 .clip(CircleShape)
                 .background(c.chrome)
-                .pressable(onClick = onNewEvent, pressedScale = 0.95f, onClickLabel = "New event")
                 .padding(start = 5.dp, end = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -286,13 +330,20 @@ private fun CalendarHero(
                 Icon(Icons.Outlined.Add, contentDescription = null, tint = c.chrome, modifier = Modifier.size(22.dp))
             }
             Spacer(Modifier.width(10.dp))
-            Text("New event", style = HubType.button, color = c.onChrome, maxLines = 1)
+            Text("New event", style = HubType.button, color = c.onChrome, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 @Composable
-private fun ColumnScope.HeroContent(next: CalendarEvent?, now: Long, zone: ZoneId, today: LocalDate, is24h: Boolean) {
+private fun ColumnScope.HeroContent(
+    next: CalendarEvent?,
+    now: Long,
+    zone: ZoneId,
+    today: LocalDate,
+    is24h: Boolean,
+    showHint: Boolean = true,
+) {
     val c = Hub.colors
     val on = c.onDawn
     val eyebrowStyle = HubType.small.copy(fontWeight = FontWeight.Medium)
@@ -300,13 +351,16 @@ private fun ColumnScope.HeroContent(next: CalendarEvent?, now: Long, zone: ZoneI
         Text("Next 30 days", style = eyebrowStyle, color = on)
         Text("All clear", style = HubType.clockLarge, color = on, maxLines = 1)
         Spacer(Modifier.weight(1f))
-        Text(
-            "No events coming up",
-            style = HubType.small,
-            color = on,
-            maxLines = 2,
-            modifier = Modifier.padding(end = NotchWidth - 12.dp),
-        )
+        // Left out while the empty card below already says so.
+        if (showHint) {
+            Text(
+                "No events coming up",
+                style = HubType.small,
+                color = on,
+                maxLines = 2,
+                modifier = Modifier.padding(end = NotchWidth - 12.dp),
+            )
+        }
         return
     }
     val ongoing = next.begin <= now && now < next.end

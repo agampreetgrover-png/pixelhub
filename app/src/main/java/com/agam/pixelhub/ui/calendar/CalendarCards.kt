@@ -11,8 +11,13 @@ import android.widget.Toast
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +62,7 @@ import com.agam.pixelhub.calendar.CalendarEvent
 import com.agam.pixelhub.calendar.CalendarEvents
 import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
+import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.openSafely
 import com.agam.pixelhub.ui.theme.Hub
@@ -94,17 +100,33 @@ internal fun rememberCalendarAccess(events: CalendarEvents): CalendarAccess {
         granted = events.hasPermission()
         onPauseOrDispose { }
     }
+    val prefs = remember { context.getSharedPreferences(PERMISSION_PREFS, Context.MODE_PRIVATE) }
+    // Whether Android showed its "why" state before this request: true only after one denial.
+    var rationaleBefore by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         granted = ok
-        // Denied twice: Android stops asking, so the button would do nothing. Open the app's
-        // settings page instead, where calendar access can be turned on.
-        if (!ok && activity?.shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR) != true) {
+        // A second denial (rationale was showing, now it isn't) means Android won't ask again.
+        // Remember that; never jump to settings from here, the user just made their choice.
+        // A first-time dismissal (no rationale before or after) isn't a block.
+        val rationaleNow = activity?.shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR) == true
+        prefs.edit().putBoolean(KEY_CALENDAR_BLOCKED, !ok && rationaleBefore && !rationaleNow).apply()
+    }
+    return CalendarAccess(granted) {
+        val rationale = activity?.shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR) == true
+        if (prefs.getBoolean(KEY_CALENDAR_BLOCKED, false) && !rationale) {
+            // Android no longer shows the prompt, so the button would do nothing: open the
+            // app's settings page, where calendar access can be turned on.
             Toast.makeText(context, "Turn on Calendar under Permissions", Toast.LENGTH_LONG).show()
             openSafely(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
+        } else {
+            rationaleBefore = rationale
+            launcher.launch(Manifest.permission.READ_CALENDAR)
         }
     }
-    return CalendarAccess(granted) { launcher.launch(Manifest.permission.READ_CALENDAR) }
 }
+
+private const val PERMISSION_PREFS = "permissions"
+private const val KEY_CALENDAR_BLOCKED = "calendar_blocked"
 
 /** The current time, refreshed on each minute boundary and on resume. */
 @Composable
@@ -208,9 +230,10 @@ internal fun SmallInkButton(text: String, onClick: () -> Unit, modifier: Modifie
     Box(
         modifier
             .minimumInteractiveComponentSize()
+            // Pressable first, so the whole pill (not just its label) shrinks; the scale is the feedback.
+            .pressable(onClick = onClick, pressedScale = 0.94f, showRipple = false)
             .clip(CircleShape)
             .background(c.ink)
-            .pressable(onClick = onClick, pressedScale = 0.94f)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -235,22 +258,29 @@ fun UpcomingEventsCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val access = rememberCalendarAccess(events)
     val now = rememberNow()
     val is24h = rememberIs24h()
-    val zone = remember { ZoneId.systemDefault() }
+    // Re-read on every tick and resume, so a time-zone change regroups the days instead of
+    // mixing the old zone (grouping) with the new one (the provider's times).
+    val zone = remember(now) { ZoneId.systemDefault() }
     val today = CalendarAgenda.date(now, zone)
 
     // One query per day; the minute tick only trims what has ended.
-    val flow = remember(access.granted, today) {
+    val flow = remember(access.granted, today, zone) {
         val from = CalendarAgenda.startOfDay(today, zone)
         events.observe(from, from + 8 * DAY_MS)
     }
     val all by flow.collectAsStateWithLifecycle<List<CalendarEvent>?>(initialValue = null)
     val upcoming = all?.filter { it.end > now && it.begin < now + 7 * DAY_MS }?.take(3)
+    val state = when {
+        !access.granted -> UpcomingState.NoAccess
+        upcoming == null -> UpcomingState.Loading
+        upcoming.isEmpty() -> UpcomingState.Empty
+        else -> UpcomingState.List
+    }
 
     Column(
         modifier
             .fillMaxWidth()
             .hubCard(c.raised)
-            .animateContentSize(tween(if (reduced) 0 else 220))
             .padding(horizontal = 6.dp, vertical = 10.dp),
     ) {
         Row(
@@ -269,41 +299,69 @@ fun UpcomingEventsCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
                     .padding(horizontal = 8.dp, vertical = 4.dp),
             )
         }
-        when {
-            !access.granted -> Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(42.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
+        // One state swaps for the next as a whole (fading while the card eases to its new
+        // height), so rows arriving after loading or after access is granted don't pop in.
+        // The rows themselves stay put while the list just updates.
+        AnimatedContent(
+            targetState = state to upcoming.orEmpty(),
+            contentKey = { it.first },
+            transitionSpec = {
+                if (reduced) {
+                    (fadeIn(tween(120)) togetherWith fadeOut(tween(80)))
+                        .using(SizeTransform(clip = false) { _, _ -> snap() })
+                } else {
+                    (fadeIn(tween(180, delayMillis = 40)) togetherWith fadeOut(tween(90)))
+                        .using(SizeTransform(clip = false) { _, _ -> tween(220, easing = Motion.EaseOut) })
                 }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Connect your calendar", style = EventTitleStyle, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("See your Google Calendar here", style = EventMetaStyle, color = c.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            },
+            label = "upcoming",
+        ) { (shownState, shownEvents) ->
+            when (shownState) {
+                UpcomingState.NoAccess -> Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(42.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.CalendarMonth, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Connect your calendar", style = EventTitleStyle, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("See your Google Calendar here", style = EventMetaStyle, color = c.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    SmallInkButton("Connect", onClick = access.request)
                 }
-                Spacer(Modifier.width(8.dp))
-                SmallInkButton("Connect", onClick = access.request)
-            }
-            upcoming == null -> Spacer(Modifier.heightIn(min = 60.dp))
-            upcoming.isEmpty() -> Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(42.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.EventAvailable, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
+                UpcomingState.Loading -> Spacer(Modifier.fillMaxWidth().heightIn(min = 60.dp))
+                UpcomingState.Empty -> Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(42.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.EventAvailable, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text("Nothing on your calendar this week", style = EventTitleStyle, color = c.ink, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    SmallInkButton(
+                        "New event",
+                        onClick = { newEvent(context, events, CalendarAgenda.suggestedStart(today, now, zone)) },
+                    )
                 }
-                Spacer(Modifier.width(12.dp))
-                Text("Nothing on your calendar this week", style = EventTitleStyle, color = c.ink, modifier = Modifier.weight(1f))
-            }
-            else -> upcoming.forEach { e ->
-                CalendarEventRow(
-                    event = e,
-                    meta = CalendarAgenda.upcomingLabel(e, now, zone, is24h),
-                    onClick = { openEvent(context, events, e) },
-                    showLocation = false,
-                )
+                UpcomingState.List -> Column(Modifier.fillMaxWidth()) {
+                    shownEvents.forEach { e ->
+                        CalendarEventRow(
+                            event = e,
+                            meta = CalendarAgenda.upcomingLabel(e, now, zone, is24h),
+                            onClick = { openEvent(context, events, e) },
+                            showLocation = false,
+                        )
+                    }
+                }
             }
         }
     }
 }
+
+/** What the Home calendar card is showing; each swaps for the next as a whole. */
+private enum class UpcomingState { NoAccess, Loading, Empty, List }

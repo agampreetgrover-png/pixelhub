@@ -2,6 +2,7 @@
 
 package com.agam.pixelhub.ui.health
 
+import androidx.compose.ui.graphics.toArgb
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -118,11 +119,21 @@ internal fun km(meters: Double): String = String.format(Locale.getDefault(), "%.
 
 internal fun kcal(a: DailyActivity): Long = a.activeKcal.roundToLong()
 
-/** Steps are green, exercise minutes sky, active energy dawn. */
+/**
+ * Steps are green, exercise minutes sky, active energy the theme accent. In a theme whose
+ * accent is itself green (Forest), energy takes the warm danger hue so it doesn't read as steps.
+ */
 internal fun HubColors.metric(metric: NudgeMetric): Color = when (metric) {
     NudgeMetric.STEPS -> ok
     NudgeMetric.EXERCISE_MINUTES -> sky
-    NudgeMetric.ACTIVE_CALORIES -> dawn
+    NudgeMetric.ACTIVE_CALORIES -> if (hueDistance(dawn, ok) < 40f) danger else dawn
+}
+
+private fun hueDistance(a: Color, b: Color): Float {
+    val ha = FloatArray(3).also { android.graphics.Color.colorToHSV(a.toArgb(), it) }[0]
+    val hb = FloatArray(3).also { android.graphics.Color.colorToHSV(b.toArgb(), it) }[0]
+    val d = kotlin.math.abs(ha - hb)
+    return minOf(d, 360f - d)
 }
 
 internal val HubColors.okSoft: Color get() = ok.copy(alpha = if (isDark) 0.16f else 0.12f)
@@ -150,19 +161,22 @@ internal class HealthAccess(private val repo: HealthRepository, private val scop
         scope.launch {
             val s = runCatching { repo.status() }.getOrDefault(HealthStatus.UNAVAILABLE)
             status = s
-            val on = s == HealthStatus.AVAILABLE && safely { repo.isConnected() }
+            // A failed check (Health Connect briefly unreachable) keeps the last answer instead of
+            // flipping a connected user to "Connect".
+            val on = if (s == HealthStatus.AVAILABLE) safely { repo.isConnected() } ?: connected else false
             connected = on
-            background = on && safely { repo.canReadInBackground() }
-            if (on) denied = false
+            background = if (on == true) safely { repo.canReadInBackground() } ?: background else false
+            if (on == true) denied = false
         }
     }
 
-    private suspend fun safely(block: suspend () -> Boolean): Boolean = try {
+    /** The answer, or null when the check itself failed. */
+    private suspend fun safely(block: suspend () -> Boolean): Boolean? = try {
         block()
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        false
+        null
     }
 }
 
@@ -410,119 +424,12 @@ fun HealthHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
                     color = if (reached) c.ok else c.ink,
                     track = c.well,
                     height = 8.dp,
+                    drawKey = "home-health",
                 )
             }
         }
     }
 }
+
 
 private enum class CardKind { LOADING, CONNECT, DATA }
-
-/* -------------------------------------- Settings block ------------------------------------ */
-
-/**
- * The body of the "Health" block in Settings: whether Health Connect is connected, whether
- * nudges can read in the background, and the step goal. The heading is added by Settings.
- */
-@Composable
-fun HealthSettingsSection() {
-    val c = Hub.colors
-    val context = LocalContext.current
-    val access = rememberHealthAccess()
-    val connect = rememberConnectAction(access)
-    val goal by context.container.settings.stepGoal.collectAsStateWithLifecycle(SettingsStore.DEFAULT_STEP_GOAL)
-    val connected = access.connected
-    val background = access.background
-
-    Column(Modifier.fillMaxWidth().padding(horizontal = com.agam.pixelhub.ui.Gutter)) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(CardRadius))
-                .background(c.raised)
-                .padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            StatusLine(
-                on = connected == true,
-                accent = c.ok,
-                title = when {
-                    connected == null -> "Checking Health Connect"
-                    connected == true -> "Connected to Health Connect"
-                    access.status == HealthStatus.NEEDS_UPDATE -> "Health Connect needs an update"
-                    access.status == HealthStatus.UNAVAILABLE -> "Health Connect isn't available"
-                    else -> "Not connected"
-                },
-                body = "Reads steps, distance, exercise and active energy. Nothing leaves this phone.",
-            )
-            StatusLine(
-                on = background == true,
-                accent = c.ok,
-                title = if (background == true) "Reads in the background" else "No background reading",
-                body = "Nudges need this to check your activity while PixelHub is closed.",
-            )
-            StatusLine(
-                on = true,
-                accent = c.ok,
-                title = "Daily goal of ${grouped(goal)} steps",
-                body = "Change it on the Health page.",
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            when {
-                connected == false -> PrimaryButton(
-                    text = when (access.status) {
-                        HealthStatus.AVAILABLE -> "Connect Health Connect"
-                        HealthStatus.NEEDS_UPDATE -> "Update Health Connect"
-                        HealthStatus.UNAVAILABLE -> "Open Play Store"
-                    },
-                    onClick = connect,
-                )
-                connected == true && background == false && access.status == HealthStatus.AVAILABLE ->
-                    QuietButton("Allow background reading", onClick = connect, color = c.ok)
-            }
-            if (connected == true || access.denied) {
-                QuietButton(
-                    "Manage access",
-                    onClick = { manageAccess(context) },
-                    icon = Icons.AutoMirrored.Outlined.OpenInNew,
-                )
-            }
-            QuietButton("Privacy", onClick = { openPrivacy(context) }, color = c.inkMuted)
-        }
-    }
-}
-
-/** A status dot that pops when it turns on, a title that cross-fades when it changes, and a note. */
-@Composable
-private fun StatusLine(on: Boolean, accent: Color, title: String, body: String) {
-    val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val dot by animateColorAsState(if (on) accent else c.inkMuted.copy(alpha = 0.5f), tween(240), label = "statusDot")
-    val dotScale by animateFloatAsState(if (on) 1f else 0.8f, Motion.bouncy(), label = "statusScale")
-    Row(verticalAlignment = Alignment.Top) {
-        Box(Modifier.padding(top = 7.dp).size(10.dp).graphicsLayer { scaleX = dotScale; scaleY = dotScale }.clip(CircleShape).background(dot))
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            AnimatedContent(
-                targetState = title,
-                transitionSpec = {
-                    if (reduced) {
-                        fadeIn(tween(160)) togetherWith fadeOut(tween(100)) using SizeTransform(clip = false)
-                    } else {
-                        (fadeIn(tween(220, delayMillis = 40)) + slideInVertically(tween(280, easing = Motion.EaseOut)) { it / 2 }) togetherWith
-                            (fadeOut(tween(120)) + slideOutVertically(tween(180)) { -it / 2 }) using SizeTransform(clip = false)
-                    }
-                },
-                label = "statusTitle",
-            ) { t ->
-                Text(t, style = HubType.bodyStrong, color = c.ink)
-            }
-            Text(body, style = HubType.small, color = c.inkMuted)
-        }
-    }
-}

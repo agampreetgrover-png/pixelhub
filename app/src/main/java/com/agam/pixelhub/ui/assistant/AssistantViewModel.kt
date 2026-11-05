@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.agam.pixelhub.ai.CommandParser
+import com.agam.pixelhub.ai.GeminiException
+import com.agam.pixelhub.ai.GrokException
 import com.agam.pixelhub.ai.ParsedCommand
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Alarm
@@ -17,6 +19,10 @@ import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.reminders.ReminderDraft
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +48,10 @@ sealed interface ChatItem {
         val isError: Boolean = false,
         /** Set when the backup AI answered, e.g. "Answered by Grok". */
         val via: String? = null,
+        /** The request to send again when the user taps Retry (failed or stopped turns). */
+        val retryText: String? = null,
+        /** The failure looks like a bad or missing key, so the bubble also offers Settings. */
+        val authError: Boolean = false,
     ) : ChatItem
     data class Action(
         override val id: Long,
@@ -72,23 +82,62 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     val hasApiKey: StateFlow<Boolean> = c.ai.hasKey
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
+    // The request being answered, and the ones sent while it runs (e.g. from Home's assistant
+    // bar, which clears and navigates straight away). They are answered in order.
+    private var job: Job? = null
+    private var current: String? = null
+    private val pending = ArrayDeque<String>()
+
     fun send(text: String) {
         val message = text.trim()
-        if (message.isEmpty() || _busy.value) return
+        if (message.isEmpty()) return
         add(ChatItem.User(newId(), message))
-        viewModelScope.launch {
-            _busy.value = true
+        if (_busy.value) pending.addLast(message) else process(message)
+    }
+
+    /** Sends a failed or stopped request again; its bubble's Retry goes away. */
+    fun retry(id: Long) {
+        val bot = _items.value.firstOrNull { it.id == id } as? ChatItem.Bot ?: return
+        val text = bot.retryText ?: return
+        _items.update { list -> list.map { if (it is ChatItem.Bot && it.id == id) it.copy(retryText = null, authError = false) else it } }
+        send(text)
+    }
+
+    /** Cancels the request in flight. Its reply, if one still arrives, is dropped. */
+    fun stop() {
+        val message = current ?: return
+        job?.cancel()
+        add(ChatItem.Bot(newId(), "Stopped", retryText = message))
+        next()
+    }
+
+    private fun process(message: String) {
+        current = message
+        _busy.value = true
+        // Lazy, so [job] is set before the body can finish and chain the next request.
+        val j = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 handle(message)
             } finally {
-                _busy.value = false
+                // A stopped job has already been replaced; only the live one moves the queue on.
+                if (job === coroutineContext[Job]) next()
             }
         }
+        job = j
+        j.start()
+    }
+
+    private fun next() {
+        job = null
+        current = null
+        val queued = pending.removeFirstOrNull()
+        if (queued != null) process(queued) else _busy.value = false
     }
 
     private suspend fun handle(message: String) {
         val shortcuts = c.shortcuts.list()
-        val apps = c.installedApps.list()
+        // Fresh each time (list() runs on IO), so an app installed since the last request can be opened.
+        val apps = c.installedApps.list(refresh = true)
         val prompt = CommandParser.systemPrompt(ZonedDateTime.now(), shortcuts.map { it.label }, apps.map { it.label })
         val reply = try {
             c.ai.generateCommand(prompt, message)
@@ -96,20 +145,37 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
             throw e
         } catch (e: IllegalStateException) {
             // "Add a … API key in Settings first." is already user-ready.
-            add(ChatItem.Bot(newId(), e.message ?: "Add an API key in Settings first.", isError = true))
+            add(ChatItem.Bot(newId(), e.message ?: "Add an API key in Settings first.", isError = true, retryText = message, authError = true))
             return
         } catch (e: Exception) {
-            add(ChatItem.Bot(newId(), "AI request failed: ${e.message ?: e.javaClass.simpleName}", isError = true))
+            add(
+                ChatItem.Bot(
+                    newId(), "AI request failed: ${e.message ?: e.javaClass.simpleName}",
+                    isError = true, retryText = message, authError = isAuthError(e),
+                ),
+            )
             return
         }
+        // Stopped while the blocking request was finishing: drop the reply.
+        currentCoroutineContext().ensureActive()
         val via = if (reply.usedFallback) "Answered by ${reply.provider.label}" else null
         when (val cmd = CommandParser.parse(reply.text)) {
             is ParsedCommand.Answer -> add(ChatItem.Bot(newId(), cmd.text, via = via))
             is ParsedCommand.Invalid ->
-                add(ChatItem.Bot(newId(), "I couldn't turn that into an action (${cmd.reason}). Try rephrasing.", isError = true, via = via))
+                add(ChatItem.Bot(newId(), "I couldn't turn that into an action (${cmd.reason}). Try rephrasing.", isError = true, via = via, retryText = message))
             is ParsedCommand.OpenApp -> add(ChatItem.Action(newId(), cmd, target = resolveApp(cmd.query, shortcuts, apps), via = via))
             else -> add(ChatItem.Action(newId(), cmd, via = via))
         }
+    }
+
+    /** Bad request, unauthorised or forbidden: almost always a wrong or revoked key. */
+    private fun isAuthError(e: Exception): Boolean {
+        val code = when (e) {
+            is GeminiException -> e.httpCode
+            is GrokException -> e.httpCode
+            else -> null
+        }
+        return code == 400 || code == 401 || code == 403 || e.message?.contains("API key not valid", ignoreCase = true) == true
     }
 
     /** Runs the action exactly as the AI proposed it. */
@@ -124,7 +190,7 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
                 is ParsedCommand.OpenApp -> {
                     val t = item.target
                     when {
-                        t == null -> Outcome(false, "No app matching \"${cmd.query}\". Add it as a shortcut in Apps.")
+                        t == null -> Outcome(false, "No installed app matching \"${cmd.query}\".")
                         ShortcutLauncher.launch(context, t) -> Outcome(true, "Opened ${t.label}")
                         else -> Outcome(false, "Couldn't open ${t.label}")
                     }
@@ -205,8 +271,13 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
             ?: apps.firstOrNull { it.label.equals(q, ignoreCase = true) }?.asShortcut()
             ?: shortcuts.firstOrNull { it.label.contains(q, ignoreCase = true) }
             ?: apps.firstOrNull { it.label.contains(q, ignoreCase = true) }?.asShortcut()
-            ?: apps.firstOrNull { q.contains(it.label, ignoreCase = true) }?.asShortcut()
+            // The query names an app inside a longer phrase ("Netflix app"): whole words only, and
+            // not for tiny labels, so "Open Netflix" can't land on an app called "X".
+            ?: apps.firstOrNull { it.label.length >= 3 && wholeWord(it.label).containsMatchIn(q) }?.asShortcut()
     }
+
+    private fun wholeWord(label: String) =
+        Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(label) + "(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
 
     private fun updateAction(id: Long, f: (ChatItem.Action) -> ChatItem.Action) {
         _items.update { list -> list.map { if (it is ChatItem.Action && it.id == id) f(it) else it } }

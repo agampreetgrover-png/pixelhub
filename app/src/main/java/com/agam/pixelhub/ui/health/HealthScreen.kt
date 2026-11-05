@@ -4,17 +4,19 @@ package com.agam.pixelhub.ui.health
 
 import android.content.Context
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -103,6 +105,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -139,8 +142,14 @@ import com.agam.pixelhub.ui.home.Dot
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
+import com.agam.pixelhub.ui.motion.hubAnimateItem
+import com.agam.pixelhub.ui.motion.labelSwap
 import com.agam.pixelhub.ui.motion.pressable
+import com.agam.pixelhub.ui.motion.rememberDrawIn
 import com.agam.pixelhub.ui.motion.rememberStagger
+import com.agam.pixelhub.ui.motion.revealEnter
+import com.agam.pixelhub.ui.motion.revealExit
+import com.agam.pixelhub.ui.motion.sizeSpec
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
@@ -192,7 +201,9 @@ fun HealthScreen() {
 
     val connected = access.connected == true
     val todaySteps = today?.steps
-    val history by produceState<List<DayActivity>?>(null, connected, todaySteps) {
+    // Bumped by "Try again" when the week couldn't be read.
+    var historyTry by remember { mutableIntStateOf(0) }
+    val history by produceState<List<DayActivity>?>(null, connected, todaySteps, historyTry) {
         if (!connected) return@produceState
         value = try {
             c.health.history(7)
@@ -220,7 +231,7 @@ fun HealthScreen() {
         ) {
             when (access.connected) {
                 null -> item(key = "checking") {
-                    Spacer(Modifier.fillMaxWidth().height(360.dp).animateItem())
+                    Spacer(hubAnimateItem(Modifier.fillMaxWidth().height(360.dp)))
                 }
                 false -> item(key = "connect") {
                     ConnectHero(
@@ -229,7 +240,7 @@ fun HealthScreen() {
                         onConnect = connect,
                         onManage = { manageAccess(context) },
                         onPrivacy = { openPrivacy(context) },
-                        modifier = Modifier.animateItem().staggerIn(stagger, "connect", 0),
+                        modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "connect", 0),
                     )
                 }
                 true -> {
@@ -238,7 +249,7 @@ fun HealthScreen() {
                             activity = today,
                             goal = goal,
                             onGoal = { draftGoal = it },
-                            modifier = Modifier.animateItem().staggerIn(stagger, "hero", 0).padding(horizontal = Gutter),
+                            modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "hero", 0).padding(horizontal = Gutter),
                         )
                     }
                     item(key = "actions") {
@@ -252,14 +263,25 @@ fun HealthScreen() {
                             },
                             onAccess = { manageAccess(context) },
                             onPrivacy = { openPrivacy(context) },
-                            modifier = Modifier.animateItem().staggerIn(stagger, "actions", 1),
+                            modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "actions", 1),
                         )
                     }
                     item(key = "today") {
-                        TodayCard(today, Modifier.animateItem().staggerIn(stagger, "today", 2))
+                        TodayCard(
+                            today,
+                            hubAnimateItem(fadeIn = false).staggerIn(stagger, "today", 2),
+                            onOpenHealth = { manageAccess(context) },
+                        )
                     }
                     item(key = "week") {
-                        WeekSection(history, today, goal, Modifier.animateItem().staggerIn(stagger, "week", 3))
+                        WeekSection(
+                            history,
+                            today,
+                            goal,
+                            hubAnimateItem(fadeIn = false).staggerIn(stagger, "week", 3),
+                            onRetry = { historyTry++ },
+                            onOpenHealth = { manageAccess(context) },
+                        )
                     }
                     item(key = "nudges") {
                         NudgesCard(
@@ -269,7 +291,7 @@ fun HealthScreen() {
                             onEdit = { editingId = it.id },
                             onAdd = { creating = true },
                             onManage = { manageAccess(context) },
-                            modifier = Modifier.animateItem().staggerIn(stagger, "nudges", 4),
+                            modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "nudges", 4),
                         )
                     }
                     item(key = "source") {
@@ -277,8 +299,7 @@ fun HealthScreen() {
                             "Activity comes from Health Connect. Fitbit and Google Fit only show up here with Health Connect sync turned on in their settings.",
                             style = HubType.small,
                             color = colors.inkMuted,
-                            modifier = Modifier
-                                .animateItem()
+                            modifier = hubAnimateItem(fadeIn = false)
                                 .staggerIn(stagger, "source", 5)
                                 .padding(horizontal = Gutter + 4.dp)
                                 .padding(top = 20.dp),
@@ -336,6 +357,7 @@ private fun ConnectHero(
     modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
+    val reduced = LocalReducedMotion.current
     val (title, body, button) = when (status) {
         HealthStatus.AVAILABLE -> Triple(
             "Your day in three rings",
@@ -391,8 +413,8 @@ private fun ConnectHero(
         )
         AnimatedVisibility(
             visible = denied && status == HealthStatus.AVAILABLE,
-            enter = expandVertically(tween(320, easing = Motion.EaseOut)) + fadeIn(tween(240)),
-            exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
+            enter = revealEnter(reduced),
+            exit = revealExit(reduced),
         ) {
             Column(
                 Modifier
@@ -533,11 +555,23 @@ private fun StepsHero(activity: DailyActivity?, goal: Long, onGoal: (Long) -> Un
     val c = Hub.colors
     val context = LocalContext.current
     val readFailed by context.container.health.readFailed.collectAsStateWithLifecycle()
+    val reduced = LocalReducedMotion.current
+    val haptics = LocalHapticFeedback.current
     val on = c.onSun
-    val soft = on.copy(alpha = 0.72f)
+    // Small type on the sun card: near-full ink by day, full at night.
+    val soft = on.copy(alpha = if (c.isDark) 1f else 0.9f)
     val steps = activity?.steps ?: 0L
-    val reached = activity != null && steps >= goal
+    val loaded = activity != null
+    val reached = loaded && steps >= goal
     val pct = if (goal > 0L) (steps * 100 / goal) else 0L
+    // One confirm when the goal is crossed while the page is open; never for the first reading.
+    var lastReached by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(reached, loaded) {
+        if (!loaded) return@LaunchedEffect
+        val before = lastReached
+        lastReached = reached
+        if (before == false && reached) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+    }
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
             delay(20_000)
@@ -562,13 +596,21 @@ private fun StepsHero(activity: DailyActivity?, goal: Long, onGoal: (Long) -> Un
                 Text("Walked", style = HubType.small, color = soft, maxLines = 1)
                 RollingText(grouped(steps), style = HubType.clockLarge, color = on)
             }
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 12.dp, bottom = 6.dp)) {
-                Text(if (reached) "Goal" else "To go", style = RowMeta, color = soft, maxLines = 1)
-                RollingText(
-                    if (reached) "Reached" else grouped((goal - steps).coerceAtLeast(0L)),
-                    style = HubType.clockSmall,
-                    color = on,
-                )
+            AnimatedContent(
+                targetState = reached,
+                transitionSpec = { labelSwap(reduced) },
+                contentAlignment = Alignment.BottomEnd,
+                label = "goalState",
+                modifier = Modifier.padding(start = 12.dp, bottom = 6.dp),
+            ) { r ->
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(if (r) "Goal" else "To go", style = RowMeta, color = soft, maxLines = 1)
+                    if (r) {
+                        Text("Reached", style = HubType.clockSmall, color = on, maxLines = 1)
+                    } else {
+                        RollingText(grouped((goal - steps).coerceAtLeast(0L)), style = HubType.clockSmall, color = on)
+                    }
+                }
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -576,6 +618,7 @@ private fun StepsHero(activity: DailyActivity?, goal: Long, onGoal: (Long) -> Un
             fraction = steps / goal.coerceAtLeast(1L).toFloat(),
             color = on,
             track = on.copy(alpha = 0.14f),
+            drawKey = "health-steps",
         )
         Spacer(Modifier.height(10.dp))
         Column(Modifier.padding(end = GoalPillWidth)) {
@@ -607,7 +650,13 @@ private fun RowScope.GoalPill(goal: Long, onChange: (Long) -> Unit) {
         Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = "Daily goal ${grouped(goal)} steps" },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        RollingText(grouped(goal), style = HubType.button.copy(fontFeatureSettings = "tnum"), color = c.onChrome)
+        // Holding a disc steps every 80ms, so the roll has to finish fast or the digits smear.
+        RollingText(
+            grouped(goal),
+            style = HubType.button.copy(fontFeatureSettings = "tnum"),
+            color = c.onChrome,
+            durationMillis = 120,
+        )
         Text("goal", style = RowMeta, color = c.onChrome.copy(alpha = 0.75f), maxLines = 1)
     }
     PillDisc(
@@ -648,8 +697,9 @@ private fun HealthActions(
 
 /** Exercise, energy and distance as list rows, each in its own coloured well. */
 @Composable
-private fun TodayCard(activity: DailyActivity?, modifier: Modifier = Modifier) {
+private fun TodayCard(activity: DailyActivity?, modifier: Modifier = Modifier, onOpenHealth: () -> Unit = {}) {
     val c = Hub.colors
+    val reduced = LocalReducedMotion.current
     val minutes = activity?.exerciseMinutes ?: 0L
     val energy = activity?.let { kcal(it) } ?: 0L
     val allZero = activity != null && activity.steps == 0L && minutes == 0L && energy == 0L
@@ -691,8 +741,8 @@ private fun TodayCard(activity: DailyActivity?, modifier: Modifier = Modifier) {
         )
         AnimatedVisibility(
             visible = allZero,
-            enter = expandVertically(tween(260, easing = Motion.EaseOut)) + fadeIn(tween(200, delayMillis = 60)),
-            exit = shrinkVertically(tween(200)) + fadeOut(tween(140)),
+            enter = revealEnter(reduced),
+            exit = revealExit(reduced),
         ) {
             Row(
                 Modifier
@@ -712,6 +762,8 @@ private fun TodayCard(activity: DailyActivity?, modifier: Modifier = Modifier) {
                         style = HubType.small,
                         color = c.inkMuted,
                     )
+                    Spacer(Modifier.height(4.dp))
+                    QuietButton("Open Health Connect", onClick = onOpenHealth, icon = Icons.AutoMirrored.Outlined.OpenInNew)
                 }
             }
         }
@@ -730,7 +782,14 @@ private fun updatedText(context: Context, asOf: Instant, now: Long): String {
 /* ------------------------------------------ The week -------------------------------------- */
 
 @Composable
-private fun WeekSection(history: List<DayActivity>?, today: DailyActivity?, goal: Long, modifier: Modifier = Modifier) {
+private fun WeekSection(
+    history: List<DayActivity>?,
+    today: DailyActivity?,
+    goal: Long,
+    modifier: Modifier = Modifier,
+    onRetry: () -> Unit = {},
+    onOpenHealth: () -> Unit = {},
+) {
     val c = Hub.colors
     Column(
         modifier
@@ -744,11 +803,15 @@ private fun WeekSection(history: List<DayActivity>?, today: DailyActivity?, goal
         Spacer(Modifier.height(8.dp))
         when {
             history == null -> Spacer(Modifier.fillMaxWidth().height(300.dp))
-            history.isEmpty() -> Text(
-                "Couldn't read the last week from Health Connect.",
-                style = HubType.body,
-                color = c.inkMuted,
-            )
+            history.isEmpty() -> {
+                Text(
+                    "Couldn't read the last week from Health Connect.",
+                    style = HubType.body,
+                    color = c.inkMuted,
+                )
+                Spacer(Modifier.height(4.dp))
+                QuietButton("Try again", onClick = onRetry, icon = Icons.Outlined.Sync)
+            }
             else -> {
                 // Today's bar follows the live reading, which can be newer than the history query.
                 val todayDate = LocalDate.now()
@@ -803,6 +866,7 @@ private fun WeekSection(history: List<DayActivity>?, today: DailyActivity?, goal
                         color = c.inkMuted,
                         modifier = Modifier.padding(top = 10.dp),
                     )
+                    QuietButton("Open Health Connect", onClick = onOpenHealth, icon = Icons.AutoMirrored.Outlined.OpenInNew)
                 }
             }
         }
@@ -810,8 +874,8 @@ private fun WeekSection(history: List<DayActivity>?, today: DailyActivity?, goal
 }
 
 /**
- * Seven rounded bars that rise from the baseline one after another on a spring. The goal is
- * a soft band behind them. Tapping a bar (or its day) slides the label over it and rolls the
+ * Seven rounded bars that rise from the baseline one after another, once per process. The goal
+ * is a soft band behind them. Tapping a bar (or its day) slides the label over it and fades the
  * figures to that day; the chosen bar widens a touch.
  */
 @Composable
@@ -830,20 +894,14 @@ private fun WeekChart(days: List<DayActivity>, goal: Long) {
         }
     }
 
-    val rises = remember(n) { List(n) { Animatable(if (reduced) 1f else 0f) } }
-    LaunchedEffect(rises) {
-        if (reduced) return@LaunchedEffect
-        rises.forEachIndexed { i, a ->
-            launch {
-                delay(120L + i * 40L)
-                a.animateTo(1f, tween(280, easing = Motion.EaseOut))
-            }
-        }
+    // The bars rise once per process; later visits and scroll-backs show them in place.
+    val rises = List(n) { i ->
+        rememberDrawIn("health-week-$i", 1f, tween(280, delayMillis = 120 + i * 40, easing = Motion.EaseOut))
     }
     val peak = maxOf(goal * 1.2f, (days.maxOfOrNull { it.steps } ?: 0L) * 1.1f, 1f)
     val top by animateFloatAsState(peak, Motion.gentle(), label = "chartTop")
     val alphas = List(n) { i ->
-        animateFloatAsState(if (i == sel || i == todayIndex) 1f else 0.45f, tween(240), label = "barAlpha")
+        animateFloatAsState(if (i == sel || i == todayIndex) 1f else 0.55f, tween(240), label = "barAlpha")
     }
     val widths = List(n) { i ->
         animateFloatAsState(if (i == sel && !reduced) 1.16f else 1f, Motion.snappy(), label = "barWidth")
@@ -916,7 +974,7 @@ private fun WeekChart(days: List<DayActivity>, goal: Long) {
                 Box(
                     Modifier
                         .weight(1f)
-                        .height(36.dp)
+                        .height(48.dp)
                         .clip(CircleShape)
                         .pressable(
                             onClick = { select(i) },
@@ -958,10 +1016,13 @@ private fun AnchoredAt(fraction: Float, modifier: Modifier = Modifier, content: 
     }
 }
 
+/** A day's figures swapped in place: the label's slide to the bar is the motion, so this only fades. */
+private fun <S> AnimatedContentTransitionScope<S>.barFade(): ContentTransform =
+    fadeIn(tween(120)) togetherWith fadeOut(tween(80)) using SizeTransform(clip = false)
+
 @Composable
 private fun BarLabel(day: DayActivity, isToday: Boolean) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
     val name = if (isToday) "Today" else day.date.dayOfWeek.getDisplayName(JTextStyle.FULL, Locale.getDefault())
     Column(
         Modifier
@@ -970,29 +1031,22 @@ private fun BarLabel(day: DayActivity, isToday: Boolean) {
             .padding(horizontal = 14.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        AnimatedContent(
-            targetState = name,
-            transitionSpec = {
-                if (reduced) {
-                    fadeIn(tween(120)) togetherWith fadeOut(tween(80)) using SizeTransform(clip = false)
-                } else {
-                    (fadeIn(tween(200, delayMillis = 40)) + slideInVertically(tween(260, easing = Motion.EaseOut)) { it / 2 }) togetherWith
-                        (fadeOut(tween(100)) + slideOutVertically(tween(160)) { -it / 2 }) using SizeTransform(clip = false)
-                }
-            },
-            label = "barDay",
-        ) { t ->
+        AnimatedContent(targetState = name, transitionSpec = { barFade() }, label = "barDay") { t ->
             Text(t, style = HubType.small, color = c.inkMuted)
         }
         Row(verticalAlignment = Alignment.Bottom) {
-            RollingText(grouped(day.steps), style = HubType.clockSmall, color = c.ink)
+            AnimatedContent(targetState = grouped(day.steps), transitionSpec = { barFade() }, label = "barSteps") { t ->
+                Text(t, style = HubType.clockSmall, color = c.ink, maxLines = 1)
+            }
             Text(" steps", style = HubType.small, color = c.inkMuted, modifier = Modifier.padding(bottom = 2.dp))
         }
-        RollingText(
-            "${day.exerciseMinutes} min, ${grouped(day.activeKcal.roundToLong())} kcal",
-            style = HubType.small.copy(fontFeatureSettings = "tnum"),
-            color = c.inkMuted,
-        )
+        AnimatedContent(
+            targetState = "${day.exerciseMinutes} min, ${grouped(day.activeKcal.roundToLong())} kcal",
+            transitionSpec = { barFade() },
+            label = "barFigures",
+        ) { t ->
+            Text(t, style = HubType.small.copy(fontFeatureSettings = "tnum"), color = c.inkMuted, maxLines = 1)
+        }
     }
 }
 
@@ -1034,12 +1088,15 @@ private fun NudgesCard(
     modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
+    val reduced = LocalReducedMotion.current
     val list = nudges.orEmpty()
     Column(
         modifier
             .fillMaxWidth()
             .padding(horizontal = Gutter)
             .padding(top = 16.dp)
+            // Saving or deleting a nudge, or the notice arriving, resizes the card calmly.
+            .animateContentSize(sizeSpec(reduced))
             .hubCard(c.raised)
             .padding(top = 10.dp, bottom = 8.dp),
     ) {
@@ -1062,7 +1119,11 @@ private fun NudgesCard(
             color = c.inkMuted,
             modifier = Modifier.padding(horizontal = 18.dp).padding(bottom = 6.dp),
         )
-        if (list.isNotEmpty() && backgroundDenied) {
+        AnimatedVisibility(
+            visible = list.isNotEmpty() && backgroundDenied,
+            enter = revealEnter(reduced),
+            exit = revealExit(reduced),
+        ) {
             BackgroundNotice(onManage = onManage, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
         }
         list.forEach { n ->
@@ -1174,30 +1235,36 @@ private fun NudgeEditor(
     val context = LocalContext.current
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
-    val stagger = rememberStagger()
     var metric by rememberSaveable { mutableStateOf(initial.metric) }
     var goalText by rememberSaveable { mutableStateOf(initial.goal.toString()) }
     var goalTouched by rememberSaveable { mutableStateOf(!isNew) }
     var time by rememberSaveable { mutableStateOf(LocalTime.of(initial.hour, initial.minute)) }
     var mask by rememberSaveable { mutableIntStateOf(initial.daysMask and Days.ALL) }
     var picking by rememberSaveable { mutableStateOf(false) }
-    val goal = goalText.toLongOrNull()?.takeIf { it > 0 }
+    // A goal no day could reach would fire the nudge every time (a day has 1,440 minutes).
+    val maxGoal = when (metric) {
+        NudgeMetric.STEPS -> 100_000L
+        NudgeMetric.EXERCISE_MINUTES -> 600L
+        NudgeMetric.ACTIVE_CALORIES -> 5_000L
+    }
+    val goal = goalText.toLongOrNull()?.takeIf { it in 1..maxGoal }
+    val tooBig = (goalText.toLongOrNull() ?: 0L) > maxGoal
     val timeText = Fmt.time(context, time)
+    val dirty = metric != initial.metric || goalText != initial.goal.toString() ||
+        time != LocalTime.of(initial.hour, initial.minute) || mask != (initial.daysMask and Days.ALL)
 
-    HubSheet(onDismiss = onDismiss) {
+    HubSheet(onDismiss = onDismiss, dirty = dirty) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             Text(
                 if (isNew) "New nudge" else "Edit nudge",
                 style = HubType.section,
                 color = c.ink,
-                modifier = Modifier.staggerIn(stagger, "title", 0),
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 "PixelHub checks at this time and notifies you only if you're behind.",
                 style = HubType.body,
                 color = c.inkMuted,
-                modifier = Modifier.staggerIn(stagger, "intro", 1),
             )
             Spacer(Modifier.height(20.dp))
             MetricChoices(
@@ -1206,7 +1273,6 @@ private fun NudgeEditor(
                     metric = m
                     if (!goalTouched) goalText = defaultGoal(m).toString()
                 },
-                modifier = Modifier.staggerIn(stagger, "metric", 2),
             )
             Spacer(Modifier.height(16.dp))
             HubTextField(
@@ -1216,15 +1282,14 @@ private fun NudgeEditor(
                     goalTouched = true
                 },
                 label = "Notify if under",
-                supportingText = NudgeMath.unit(metric).replaceFirstChar { it.uppercase() },
+                supportingText = if (tooBig) "Up to ${grouped(maxGoal)} ${NudgeMath.unit(metric)}"
+                else NudgeMath.unit(metric).replaceFirstChar { it.uppercase() },
                 isError = goalText.isNotEmpty() && goal == null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                modifier = Modifier.staggerIn(stagger, "goal", 3),
             )
             Spacer(Modifier.height(12.dp))
             Row(
                 Modifier
-                    .staggerIn(stagger, "time", 4)
                     .fillMaxWidth()
                     .pressable(onClick = { picking = true }, pressedScale = 0.97f, onClickLabel = "Change time", showRipple = false)
                     .clip(RoundedCornerShape(24.dp))
@@ -1238,7 +1303,7 @@ private fun NudgeEditor(
                 }
                 RollingText(timeText, style = HubType.clockMedium, color = c.ok)
             }
-            Column(Modifier.padding(top = 24.dp).staggerIn(stagger, "days", 5)) {
+            Column(Modifier.padding(top = 24.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Days", style = HubType.bodyStrong, color = c.ink, modifier = Modifier.weight(1f))
                     AnimatedContent(
@@ -1270,7 +1335,6 @@ private fun NudgeEditor(
             Row(
                 Modifier
                     .padding(top = 24.dp)
-                    .staggerIn(stagger, "preview", 6)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(24.dp))
                     .background(c.okSoft)
@@ -1297,7 +1361,7 @@ private fun NudgeEditor(
                 }
             }
 
-            Column(Modifier.padding(top = 28.dp).staggerIn(stagger, "actions", 7)) {
+            Column(Modifier.padding(top = 28.dp)) {
                 PrimaryButton(
                     text = "Save nudge",
                     enabled = goal != null,

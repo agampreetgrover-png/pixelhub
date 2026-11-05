@@ -63,7 +63,8 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -71,6 +72,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -88,6 +90,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -126,6 +129,10 @@ import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
+import com.agam.pixelhub.ui.motion.hubAnimateItem
+import com.agam.pixelhub.ui.motion.labelSwap
+import com.agam.pixelhub.ui.motion.popEnter
+import com.agam.pixelhub.ui.motion.popExit
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
@@ -140,26 +147,32 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/** A request to open the editor; a fresh object each time so the sheet always starts clean. */
-private class EditorRequest(val initial: Expense?)
+/**
+ * A request to open the editor. Each new request gets a fresh [token] so the sheet starts clean;
+ * the token is saved with it, so after rotation the sheet keys on the same value and its fields
+ * (all rememberSaveable) come back instead of resetting.
+ */
+private class EditorRequest(val initial: Expense?, val token: Long = System.nanoTime())
 
 /** Keeps an open editor (and the entry it started from, with its kind) through rotation and theme changes. */
 private val EditorRequestSaver: Saver<EditorRequest?, ArrayList<Any>> = Saver(
     save = { r ->
         r?.let {
             val e = it.initial
-            if (e == null) arrayListOf(false)
-            else arrayListOf(true, e.id, e.amountPaise, e.category.name, e.note, e.spentAt, e.kind.name)
+            if (e == null) arrayListOf(it.token, false)
+            else arrayListOf(it.token, true, e.id, e.amountPaise, e.category.name, e.note, e.spentAt, e.kind.name)
         }
     },
     restore = { l ->
-        if (l[0] == false) EditorRequest(null)
+        val token = l[0] as Long
+        if (l[1] == false) EditorRequest(null, token)
         else EditorRequest(
             Expense(
-                id = l[1] as Long, amountPaise = l[2] as Long, category = ExpenseCategory.valueOf(l[3] as String),
-                note = l[4] as String, spentAt = l[5] as Long,
-                kind = (l.getOrNull(6) as? String)?.let { ExpenseKind.valueOf(it) } ?: ExpenseKind.EXPENSE,
+                id = l[2] as Long, amountPaise = l[3] as Long, category = ExpenseCategory.valueOf(l[4] as String),
+                note = l[5] as String, spentAt = l[6] as Long,
+                kind = (l.getOrNull(7) as? String)?.let { ExpenseKind.valueOf(it) } ?: ExpenseKind.EXPENSE,
             ),
+            token,
         )
     },
 )
@@ -289,7 +302,7 @@ fun ExpensesScreen() {
                     onMonth = { month = it },
                     filter = filter,
                     onFilter = { showCategory(it) },
-                    modifier = Modifier.animateItem().staggerIn(stagger, "hero", 0).padding(horizontal = Gutter),
+                    modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "hero", 0).padding(horizontal = Gutter),
                 )
             }
             item(key = "actions") {
@@ -302,7 +315,7 @@ fun ExpensesScreen() {
                     onRepeatIncome = { repeatLast(ExpenseKind.INCOME) },
                     onFilter = { picking = true },
                     onBudgets = { budgetsOpen = true },
-                    modifier = Modifier.animateItem().staggerIn(stagger, "actions", 1),
+                    modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "actions", 1),
                 )
             }
             if (s == null) return@LazyColumn
@@ -310,8 +323,7 @@ fun ExpensesScreen() {
             if (s.entries.isEmpty()) {
                 item(key = "empty") {
                     Column(
-                        Modifier
-                            .animateItem()
+                        hubAnimateItem(fadeIn = false)
                             .staggerIn(stagger, "empty", 2)
                             .fillMaxWidth()
                             .padding(horizontal = Gutter)
@@ -347,7 +359,7 @@ fun ExpensesScreen() {
                         filter = filter,
                         onFilter = { showCategory(it) },
                         onBudgets = { budgetsOpen = true },
-                        modifier = Modifier.animateItem().staggerIn(stagger, "cats", 2),
+                        modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "cats", 2),
                     )
                 }
             }
@@ -355,26 +367,33 @@ fun ExpensesScreen() {
                 TransactionsHeader(
                     title = if (incomeOnly) "Income" else filter?.label,
                     onClear = { showCategory(null) },
-                    modifier = Modifier.animateItem().staggerIn(stagger, "txHead", 3),
+                    modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "txHead", 3),
                 )
             }
             if (days.isEmpty()) {
                 item(key = "txEmpty") {
-                    Text(
+                    Column(hubAnimateItem().padding(horizontal = Gutter, vertical = 8.dp)) {
+                        Text(
+                            if (incomeOnly) {
+                                "Nothing received in ${monthName(s.month, thisMonth)}."
+                            } else {
+                                "Nothing on ${filter?.label?.lowercase() ?: "this"} in ${monthName(s.month, thisMonth)}."
+                            },
+                            style = HubType.body,
+                            color = c.inkMuted,
+                        )
                         if (incomeOnly) {
-                            "Nothing received in ${monthName(s.month, thisMonth)}."
-                        } else {
-                            "Nothing on ${filter?.label?.lowercase() ?: "this"} in ${monthName(s.month, thisMonth)}."
-                        },
-                        style = HubType.body,
-                        color = c.inkMuted,
-                        modifier = Modifier.animateItem().padding(horizontal = Gutter, vertical = 8.dp),
-                    )
+                            QuietButton(
+                                "Add income",
+                                onClick = { add(ExpenseKind.INCOME) },
+                                icon = Icons.Outlined.AddCard,
+                                modifier = Modifier.padding(top = 12.dp),
+                            )
+                        }
+                    }
                 }
             }
-            var n = 4
             days.forEach { (date, dayList) ->
-                val dayIndex = n++
                 val lastId = dayList.last().id
                 item(key = "day-$date") {
                     DayTop(
@@ -382,11 +401,9 @@ fun ExpensesScreen() {
                         today = today,
                         spentPaise = dayList.filterNot { it.isIncome }.sumOf { it.amountPaise },
                         incomePaise = dayList.filter { it.isIncome }.sumOf { it.amountPaise },
-                        modifier = Modifier.animateItem().staggerIn(stagger, "day-$date", dayIndex),
+                        modifier = hubAnimateItem(),
                     )
                 }
-                val base = n
-                n += dayList.size
                 items(dayList, key = { it.id }) { e ->
                     val at = Instant.ofEpochMilli(e.spentAt).atZone(zone)
                     TransactionRow(
@@ -395,7 +412,7 @@ fun ExpensesScreen() {
                         last = e.id == lastId,
                         onEdit = { editor = EditorRequest(e) },
                         onDelete = { delete(e) },
-                        modifier = Modifier.animateItem().staggerIn(stagger, e.id, base + dayList.indexOf(e)),
+                        modifier = hubAnimateItem(),
                     )
                 }
             }
@@ -403,7 +420,7 @@ fun ExpensesScreen() {
     }
 
     editor?.let { req ->
-        key(req) {
+        key(req.token) {
             ExpenseEditorSheet(
                 initial = req.initial,
                 onDismiss = { editor = null },
@@ -498,6 +515,7 @@ private fun ExpenseHero(
     modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
+    val reduced = LocalReducedMotion.current
     val on = c.onDawn
     // Small labels need full white on the brighter night violet to stay legible.
     val soft = on.copy(alpha = if (c.isDark) 1f else 0.9f)
@@ -506,7 +524,7 @@ private fun ExpenseHero(
     val over = budget != null && total > budget
     val top = s?.byCategory?.firstOrNull { it.spentPaise > 0L }
     val name = monthName(s?.month ?: month, thisMonth)
-    val totalText = rememberRolledIn(s?.let { Money.format(it.totalPaise) }, delayMs = 200)
+    val totalText = rememberRolledIn(s?.let { Money.format(it.totalPaise) }, delayMs = 200, key = "expenses-total")
     val count = s?.expenses?.size ?: 0
     val corner = when {
         s == null -> ""
@@ -568,7 +586,14 @@ private fun ExpenseHero(
             }
             if (budget != null) {
                 Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 12.dp, bottom = 6.dp)) {
-                    Text(if (over) "Over by" else "Left", style = RowMeta, color = soft, maxLines = 1)
+                    AnimatedContent(
+                        targetState = over,
+                        transitionSpec = { labelSwap(reduced) },
+                        contentAlignment = Alignment.CenterEnd,
+                        label = "heroLeft",
+                    ) { o ->
+                        Text(if (o) "Over by" else "Left", style = RowMeta, color = soft, maxLines = 1)
+                    }
                     RollingText(
                         Money.format(if (over) total - budget else budget - total),
                         style = HubType.clockSmall,
@@ -834,16 +859,19 @@ private fun CategoriesCard(
             )
         }
         Spacer(Modifier.height(6.dp))
-        CategoryBar(s, Modifier.padding(horizontal = 18.dp), track = c.well, highlight = filter)
+        CategoryBar(s, Modifier.padding(horizontal = 18.dp), track = c.well, highlight = filter, drawKey = "expenses-bar")
         Spacer(Modifier.height(10.dp))
         s.byCategory.forEach { t ->
-            CategoryRow(
-                t = t,
-                total = s.totalPaise,
-                selected = filter == t.category,
-                dimmed = filter != null && filter != t.category,
-                onClick = { onFilter(if (filter == t.category) null else t.category) },
-            )
+            // Keyed, so each row's bar and colours stay with its category when the rows re-sort.
+            key(t.category) {
+                CategoryRow(
+                    t = t,
+                    total = s.totalPaise,
+                    selected = filter == t.category,
+                    dimmed = filter != null && filter != t.category,
+                    onClick = { onFilter(if (filter == t.category) null else t.category) },
+                )
+            }
         }
     }
 }
@@ -915,6 +943,7 @@ private fun CategoryRow(
                     fraction = t.spentPaise.toFloat() / budget,
                     color = if (over) c.danger else t.category.color(c),
                     track = if (selected) c.raised else c.well,
+                    drawKey = "budget-${t.category}",
                 )
             }
         }
@@ -964,11 +993,12 @@ private fun TransactionsHeader(title: String?, onClear: () -> Unit, modifier: Mo
         }
         AnimatedVisibility(
             visible = title != null,
-            enter = fadeIn(tween(160)) + scaleIn(if (reduced) tween(0) else Motion.snappy(), initialScale = 0.85f),
-            exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.9f),
+            enter = popEnter(reduced),
+            exit = popExit(),
         ) {
             Row(
                 Modifier
+                    .minimumInteractiveComponentSize()
                     .pressable(onClick = onClear, pressedScale = 0.93f, showRipple = false, onClickLabel = "Show all transactions")
                     .heightIn(min = 40.dp)
                     .clip(CircleShape)
@@ -1044,7 +1074,12 @@ private fun TransactionRow(
 ) {
     val c = Hub.colors
     val haptics = LocalHapticFeedback.current
-    val dismiss = rememberSwipeToDismissBoxState(positionalThreshold = { it * 0.45f })
+    // Not saved state: a deleted row brought back by Undo reuses its key, and saved state would
+    // come back already swiped and delete it again. A row always starts settled.
+    val density = LocalDensity.current
+    val dismiss = remember(density) {
+        SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, density, positionalThreshold = { it * 0.45f })
+    }
     val latestDelete by rememberUpdatedState(onDelete)
     LaunchedEffect(dismiss.currentValue) {
         if (dismiss.currentValue == SwipeToDismissBoxValue.EndToStart) latestDelete()
@@ -1141,17 +1176,15 @@ private fun FilterSheet(
     onDismiss: () -> Unit,
 ) {
     val c = Hub.colors
-    val stagger = rememberStagger()
     val all = selected == null && !incomeOnly
     HubSheet(onDismiss = onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Text("Show transactions", style = SheetTitle, color = c.ink, modifier = Modifier.staggerIn(stagger, "title", 0))
+            Text("Show transactions", style = SheetTitle, color = c.ink)
             Spacer(Modifier.height(16.dp))
             FilterPill(
                 text = "Everything",
                 selected = all,
                 onClick = { onPick(null) },
-                modifier = Modifier.staggerIn(stagger, "all", 1),
             )
             Spacer(Modifier.height(8.dp))
             FilterPill(
@@ -1161,17 +1194,16 @@ private fun FilterSheet(
                 icon = Icons.Outlined.Savings,
                 iconTint = c.ok,
                 amount = incomeText(incomePaise),
-                modifier = Modifier.staggerIn(stagger, "income", 2),
             )
             Spacer(Modifier.height(16.dp))
             Text(
                 "Spending",
                 style = HubType.section,
                 color = c.ink,
-                modifier = Modifier.padding(bottom = 4.dp).staggerIn(stagger, "spendHead", 3),
+                modifier = Modifier.padding(bottom = 4.dp),
             )
-            ExpenseCategory.forKind(ExpenseKind.EXPENSE).chunked(3).forEachIndexed { r, row ->
-                Row(Modifier.fillMaxWidth().padding(bottom = 6.dp).staggerIn(stagger, "row$r", 4 + r)) {
+            ExpenseCategory.forKind(ExpenseKind.EXPENSE).chunked(3).forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
                     row.forEach { cat ->
                         val isSelected = cat == selected
                         Column(
@@ -1271,7 +1303,6 @@ private fun BudgetsSheet(
     onSave: (List<Pair<ExpenseCategory?, Long?>>) -> Unit,
 ) {
     val c = Hub.colors
-    val stagger = rememberStagger()
     val initialTotal = remember { summary.budgetPaise?.takeIf { it > 0L }?.let { budgetText(it) }.orEmpty() }
     val initialCats = remember {
         summary.byCategory
@@ -1279,7 +1310,10 @@ private fun BudgetsSheet(
             .toMap()
     }
     var total by rememberSaveable { mutableStateOf(initialTotal) }
-    val cats = remember { mutableStateMapOf<ExpenseCategory, String>().apply { putAll(initialCats) } }
+    // Saveable, so typed per-category limits survive rotation like the total does.
+    val cats = rememberSaveable(saver = CategoryTextSaver) {
+        mutableStateMapOf<ExpenseCategory, String>().apply { putAll(initialCats) }
+    }
 
     fun bad(text: String) = text.isNotBlank() && Money.parse(text) == null
     val anyBad = bad(total) || cats.values.any { bad(it) }
@@ -1287,16 +1321,18 @@ private fun BudgetsSheet(
     val totalLimit = Money.parse(total)
     val sumOver = totalLimit != null && catSum > totalLimit
     val sumColor by animateColorAsState(if (sumOver) c.danger else c.inkMuted, tween(200), label = "sumColor")
+    // Any limit typed but not saved (the same test Save uses to pick what changed): dismissing asks first.
+    val dirty = total.trim() != initialTotal ||
+        SpendingCategories.any { cats[it].orEmpty().trim() != initialCats[it].orEmpty() }
 
-    HubSheet(onDismiss = onDismiss) {
+    HubSheet(onDismiss = onDismiss, dirty = dirty) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Text("Monthly budgets", style = SheetTitle, color = c.ink, modifier = Modifier.staggerIn(stagger, "title", 0))
+            Text("Monthly budgets", style = SheetTitle, color = c.ink)
             Spacer(Modifier.height(4.dp))
             Text(
                 "You'll get a notification at 80% and at 100%. Leave a field empty for no limit.",
                 style = HubType.small,
                 color = c.inkMuted,
-                modifier = Modifier.staggerIn(stagger, "intro", 1),
             )
             Spacer(Modifier.height(18.dp))
             BudgetField(
@@ -1309,10 +1345,9 @@ private fun BudgetsSheet(
                         Icon(Icons.Outlined.AccountBalanceWallet, contentDescription = null, tint = c.onDawn, modifier = Modifier.size(16.dp))
                     }
                 },
-                modifier = Modifier.staggerIn(stagger, "total", 2),
             )
             FlowRow(
-                Modifier.fillMaxWidth().padding(top = 10.dp).staggerIn(stagger, "presets", 3),
+                Modifier.fillMaxWidth().padding(top = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -1325,7 +1360,7 @@ private fun BudgetsSheet(
                 }
             }
             Row(
-                Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp).staggerIn(stagger, "perCat", 4),
+                Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Per category", style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
@@ -1336,7 +1371,7 @@ private fun BudgetsSheet(
                     }
                 }
             }
-            SpendingCategories.forEachIndexed { i, cat ->
+            SpendingCategories.forEach { cat ->
                 val value = cats[cat].orEmpty()
                 BudgetField(
                     value = value,
@@ -1344,7 +1379,7 @@ private fun BudgetsSheet(
                     label = cat.label,
                     isError = bad(value),
                     leading = { CategoryWell(cat, size = 32.dp) },
-                    modifier = Modifier.padding(bottom = 10.dp).staggerIn(stagger, cat, 5 + i),
+                    modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
             PrimaryButton(
@@ -1374,6 +1409,7 @@ private fun PresetChip(text: String, selected: Boolean, onClick: () -> Unit) {
     val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(180), label = "presetFg")
     Box(
         Modifier
+            .minimumInteractiveComponentSize()
             .pressable(onClick = onClick, pressedScale = 0.93f, showRipple = false, role = Role.RadioButton)
             .semantics { this.selected = selected }
             .heightIn(min = 40.dp)
@@ -1407,3 +1443,16 @@ private fun BudgetField(
         modifier = modifier,
     )
 }
+
+/** Saves the budgets sheet's per-category text as "NAME=text" strings. */
+private val CategoryTextSaver: Saver<SnapshotStateMap<ExpenseCategory, String>, ArrayList<String>> = Saver(
+    save = { m -> ArrayList(m.map { (k, v) -> "${k.name}=$v" }) },
+    restore = { l ->
+        mutableStateMapOf<ExpenseCategory, String>().apply {
+            l.forEach { s ->
+                val i = s.indexOf('=')
+                runCatching { ExpenseCategory.valueOf(s.substring(0, i)) }.getOrNull()?.let { put(it, s.substring(i + 1)) }
+            }
+        }
+    },
+)

@@ -4,12 +4,11 @@ package com.agam.pixelhub.ui.reminders
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -55,7 +54,7 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,6 +67,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,6 +80,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -90,7 +91,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -109,6 +110,8 @@ import com.agam.pixelhub.ui.SectionHeader
 import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
+import com.agam.pixelhub.ui.motion.animatedRadius
+import com.agam.pixelhub.ui.motion.hubAnimateItem
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
@@ -129,13 +132,20 @@ import java.util.Locale
 /** Which group a reminder sits in. Each lane is one card. */
 private enum class Lane { Overdue, Upcoming, Repeating, Done }
 
-/** Rounds only the outer corners, so the rows of a lane read as one card. */
-private fun segment(first: Boolean, last: Boolean) = RoundedCornerShape(
-    topStart = if (first) CardRadius else 0.dp,
-    topEnd = if (first) CardRadius else 0.dp,
-    bottomStart = if (last) CardRadius else 0.dp,
-    bottomEnd = if (last) CardRadius else 0.dp,
+/**
+ * Rounds only the outer corners, so the rows of a lane read as one card. Takes the radii so a
+ * row can ease its corners when it becomes, or stops being, the first or last of its lane.
+ */
+private fun segment(top: Dp, bottom: Dp) = RoundedCornerShape(
+    topStart = top,
+    topEnd = top,
+    bottomStart = bottom,
+    bottomEnd = bottom,
 )
+
+/** [animatedRadius], never below zero (the spring overshoots a little on the way down). */
+@Composable
+private fun animatedEdge(target: Dp): Dp = animatedRadius(target).coerceAtLeast(0.dp)
 
 @Composable
 fun RemindersScreen() {
@@ -169,6 +179,11 @@ fun RemindersScreen() {
     val oneOff = active.filterNot { it.recurrence.isRepeating }
     val overdue = oneOff.filter { it.triggerAt < now }
     val upcoming = oneOff.filter { it.triggerAt >= now && it.id != next?.id }
+    // Everything ticked off: a small note takes the hero's place instead of nothing.
+    val caughtUp = all != null && active.isEmpty() && done.isNotEmpty()
+    // Whether this visit has seen something still to do, so finishing the last one can pop the note.
+    val sawActive = remember { BooleanArray(1) }
+    if (active.isNotEmpty()) sawActive[0] = true
 
     val snackbar = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
@@ -177,7 +192,7 @@ fun RemindersScreen() {
         c.appScope.launch { c.reminders.delete(r) }
         uiScope.launch {
             snackbar.currentSnackbarData?.dismiss()
-            val undo = snackbar.showSnackbar("Deleted 201c${r.title}201d", actionLabel = "Undo", duration = SnackbarDuration.Short)
+            val undo = snackbar.showSnackbar("Deleted “${r.title}”", actionLabel = "Undo", duration = SnackbarDuration.Short)
             if (undo == SnackbarResult.ActionPerformed) c.appScope.launch { c.reminders.restore(r) }
         }
     }
@@ -206,7 +221,11 @@ fun RemindersScreen() {
         floatingActionButton = {
             AnimatedVisibility(
                 visibleState = fabIn,
-                enter = scaleIn(initialScale = 0.8f, animationSpec = Motion.snappy()) + fadeIn(tween(180)),
+                enter = if (reduced) {
+                    fadeIn(tween(150))
+                } else {
+                    scaleIn(initialScale = 0.8f, animationSpec = Motion.snappy()) + fadeIn(tween(180))
+                },
             ) {
                 HubFab(
                     icon = Icons.Outlined.Add,
@@ -220,12 +239,6 @@ fun RemindersScreen() {
             Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(top = 4.dp, bottom = 104.dp),
         ) {
-            val placement = if (reduced) null else spring(
-                dampingRatio = 0.86f,
-                stiffness = Spring.StiffnessMediumLow,
-                visibilityThreshold = IntOffset.VisibilityThreshold,
-            )
-
             if (next != null) {
                 item(key = "hero", contentType = "hero") {
                     NextHero(
@@ -237,10 +250,24 @@ fun RemindersScreen() {
                             setDone(next, true, letTickDraw = false)
                         }.takeIf { !next.recurrence.isRepeating },
                         onOpen = { editingId = next.id },
-                        modifier = Modifier
-                            .animateItem(placementSpec = placement)
+                        modifier = hubAnimateItem(fadeIn = false)
                             .padding(horizontal = Gutter)
                             .staggerIn(stagger, "hero", 0),
+                    )
+                }
+            }
+
+            if (caughtUp) {
+                item(key = "caughtUp", contentType = "hero") {
+                    // Pops only when you finish the last one here; opening the screen to it just rises in.
+                    val justFinished = remember { sawActive[0] }
+                    CaughtUp(
+                        pop = justFinished,
+                        modifier = if (justFinished) {
+                            hubAnimateItem().padding(horizontal = Gutter)
+                        } else {
+                            hubAnimateItem(fadeIn = false).staggerIn(stagger, "caughtUp", 0).padding(horizontal = Gutter)
+                        },
                     )
                 }
             }
@@ -248,10 +275,9 @@ fun RemindersScreen() {
             item(key = "quick", contentType = "quick") {
                 QuickAdd(
                     onPick = { creating = it },
-                    modifier = Modifier
-                        .animateItem(placementSpec = placement)
+                    modifier = hubAnimateItem(fadeIn = false)
                         .padding(horizontal = Gutter)
-                        .padding(top = if (next != null) 12.dp else 0.dp)
+                        .padding(top = if (next != null || caughtUp) 12.dp else 0.dp)
                         .staggerIn(stagger, "quick", 1),
                 )
             }
@@ -262,7 +288,7 @@ fun RemindersScreen() {
                         title = "Nothing to remember yet",
                         body = "Pick a quick time above or tap New reminder. You can also ask the assistant.",
                         accent = colors.sky,
-                        modifier = Modifier.animateItem(placementSpec = placement).staggerIn(stagger, "empty", 2),
+                        modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "empty", 2),
                     )
                 }
             }
@@ -276,7 +302,12 @@ fun RemindersScreen() {
                 item(key = headerKey, contentType = "header") {
                     SectionHeader(
                         title,
-                        Modifier.animateItem(placementSpec = placement).staggerIn(stagger, headerKey, headerIndex),
+                        // Only the first screenful takes part in the entrance; the rest are just there.
+                        if (headerIndex <= 5) {
+                            hubAnimateItem(fadeIn = false).staggerIn(stagger, headerKey, headerIndex)
+                        } else {
+                            hubAnimateItem()
+                        },
                         color = headerColor,
                         action = if (!collapsible) null else if (showDone) "Hide" else "Show ${rows.size}",
                         onAction = if (!collapsible) null else ({ showDone = !showDone }),
@@ -296,10 +327,11 @@ fun RemindersScreen() {
                             onToggle = { d: Boolean -> setDone(r, d) }.takeIf { lane != Lane.Repeating },
                             onOpen = { editingId = r.id },
                             onDelete = { delete(r) },
-                            modifier = Modifier
-                                .animateItem(placementSpec = placement)
-                                .padding(horizontal = Gutter)
-                                .staggerIn(stagger, r.id, index),
+                            modifier = if (index <= 5) {
+                                hubAnimateItem(fadeIn = false).padding(horizontal = Gutter).staggerIn(stagger, r.id, index)
+                            } else {
+                                hubAnimateItem().padding(horizontal = Gutter)
+                            },
                         )
                     }
                 }
@@ -365,8 +397,9 @@ private fun NextHero(
     Box(
         modifier
             .fillMaxWidth()
-            .hubCard(c.sun)
-            .pressable(onClick = onOpen, pressedScale = 0.985f, onClickLabel = "Edit reminder"),
+            // Press first so the whole card gives, not just what is on it.
+            .pressable(onClick = onOpen, pressedScale = 0.985f, onClickLabel = "Edit reminder", showRipple = false)
+            .hubCard(c.sun),
     ) {
         AnimatedContent(
             targetState = r,
@@ -462,6 +495,38 @@ private fun NextHero(
     }
 }
 
+/**
+ * In the hero's place when every reminder is done. A rare moment, so it pops once when you
+ * have just ticked off the last one; otherwise it simply rises in with the screen.
+ */
+@Composable
+private fun CaughtUp(pop: Boolean, modifier: Modifier = Modifier) {
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    val scale = remember { Animatable(if (pop && !reduced) 0.92f else 1f) }
+    LaunchedEffect(Unit) { if (scale.value < 1f) scale.animateTo(1f, Motion.bouncy()) }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+            .hubCard(c.sun)
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(40.dp).clip(CircleShape).background(c.onSun.copy(alpha = 0.10f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Outlined.TaskAlt, contentDescription = null, tint = c.onSun, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("All caught up", style = HubType.section, color = c.onSun, maxLines = 1)
+            Text("Everything here is done.", style = HubType.small, color = c.onSun.copy(alpha = 0.72f))
+        }
+    }
+}
+
 /** A pill on the yellow card: an icon in a round disc, then the action's name. */
 @Composable
 private fun HeroPill(
@@ -475,9 +540,9 @@ private fun HeroPill(
     Row(
         Modifier
             .heightIn(min = 48.dp)
+            .pressable(onClick = onClick, pressedScale = 0.94f, onClickLabel = description, showRipple = false)
             .clip(CircleShape)
             .background(container)
-            .pressable(onClick = onClick, pressedScale = 0.94f, onClickLabel = description)
             .semantics { contentDescription = description }
             .padding(start = 6.dp, end = 18.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -496,7 +561,13 @@ private fun HeroPill(
 /** One-tap starting points. Each opens the editor already set to that time. */
 @Composable
 private fun QuickAdd(onPick: (ReminderDraft) -> Unit, modifier: Modifier = Modifier) {
-    val nowTime = LocalDateTime.now()
+    // Re-read on resume (a skipped composable never re-reads the clock), so "In 1 hour" and
+    // "Tonight" are right after the app sat in the background.
+    var nowTime by remember { mutableStateOf(LocalDateTime.now()) }
+    LifecycleResumeEffect(Unit) {
+        nowTime = LocalDateTime.now()
+        onPauseOrDispose { }
+    }
     val today = nowTime.toLocalDate()
     val inAnHour = nowTime.plusHours(1).truncatedTo(ChronoUnit.MINUTES)
     val tonight = LocalDateTime.of(today, LocalTime.of(20, 0))
@@ -524,7 +595,12 @@ private fun QuickAdd(onPick: (ReminderDraft) -> Unit, modifier: Modifier = Modif
             QuickAction(
                 icon = icon,
                 label = label,
-                onClick = { onPick(if (at == null) ReminderDraft() else ReminderDraft(at = at)) },
+                onClick = {
+                    // A time that has slipped into the past since it was offered moves to an hour from now.
+                    val fresh = at?.takeIf { it.isAfter(LocalDateTime.now()) }
+                        ?: at?.let { LocalDateTime.now().plusHours(1).truncatedTo(ChronoUnit.MINUTES) }
+                    onPick(if (fresh == null) ReminderDraft() else ReminderDraft(at = fresh))
+                },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -550,12 +626,22 @@ private fun ReminderRow(
     val context = LocalContext.current
     val c = Hub.colors
     val haptics = LocalHapticFeedback.current
-    val shape = segment(first, last)
+    val shape = segment(
+        top = animatedEdge(if (first) CardRadius else 0.dp),
+        bottom = animatedEdge(if (last) CardRadius else 0.dp),
+    )
+    val topPad = animatedEdge(if (first) 8.dp else 0.dp)
+    val bottomPad = animatedEdge(if (last) 8.dp else 0.dp)
 
     // Checked locally first so the tick and strike start the instant you tap.
     var checked by remember(r.done) { mutableStateOf(r.done) }
 
-    val dismiss = rememberSwipeToDismissBoxState(positionalThreshold = { it * 0.45f })
+    // Not saved state: a deleted row brought back by Undo reuses its key, and saved state would
+    // come back already swiped and delete it again. A row always starts settled.
+    val density = LocalDensity.current
+    val dismiss = remember(density) {
+        SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, density, positionalThreshold = { it * 0.45f })
+    }
     val latestDelete by rememberUpdatedState(onDelete)
     LaunchedEffect(dismiss.currentValue) {
         if (dismiss.currentValue == SwipeToDismissBoxValue.EndToStart) latestDelete()
@@ -636,8 +722,8 @@ private fun ReminderRow(
                 .padding(
                     start = 6.dp,
                     end = 6.dp,
-                    top = if (first) 8.dp else 0.dp,
-                    bottom = if (last) 8.dp else 0.dp,
+                    top = topPad,
+                    bottom = bottomPad,
                 ),
         ) {
             Row(
@@ -649,7 +735,9 @@ private fun ReminderRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.size(42.dp).clip(CircleShape).background(wellTone), contentAlignment = Alignment.Center) {
-                    Icon(wellIcon, contentDescription = null, tint = wellTint, modifier = Modifier.size(20.dp))
+                    Crossfade(wellIcon, animationSpec = tween(150), label = "wellIcon") { icon ->
+                        Icon(icon, contentDescription = null, tint = wellTint, modifier = Modifier.size(20.dp))
+                    }
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f).padding(vertical = 4.dp)) {

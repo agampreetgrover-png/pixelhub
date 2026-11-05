@@ -1,5 +1,7 @@
 package com.agam.pixelhub.ui.home
 
+import com.agam.pixelhub.ui.notchWidthFor
+import com.agam.pixelhub.ui.heroHeight
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -32,7 +35,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -50,6 +52,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -88,9 +91,11 @@ data class CardFace(
 )
 
 private val Peek = 54.dp
-private val CardHeight = 204.dp
-// Wide enough for "New alarm" in Poppins at the default font size (it was cut to "New al…" at 150dp).
-private val NotchWidth = 166.dp
+private val CardHeight: Dp @Composable get() = heroHeight()
+// The narrowest the notch gets; it widens to fit the longest action label at the phone's font size.
+private val MinNotchWidth = 150.dp
+// Inside the action pill: start padding, the round + well, the gap, end padding.
+private val NotchChrome = 8.dp + 40.dp + 10.dp + 14.dp
 private val NotchHeight = 64.dp
 private val NotchGap = 6.dp
 
@@ -115,29 +120,38 @@ fun CardDeck(faces: List<CardFace>, modifier: Modifier = Modifier) {
     var dragOwner by remember { mutableIntStateOf(front) }
     val swipeAway = with(density) { 90.dp.toPx() }
 
-    fun flip() {
+    /** [velocity] is the fling speed when a swipe let go, so the card carries its momentum home. */
+    fun flip(velocity: Float = 0f) {
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         front = 1 - front
         scope.launch {
             if (reduced) swap.snapTo(front.toFloat())
             else swap.animateTo(front.toFloat(), spring(dampingRatio = 0.78f, stiffness = 380f))
         }
-        scope.launch { drag.animateTo(0f, Motion.snappy()) }
+        scope.launch { drag.animateTo(0f, Motion.snappy(), initialVelocity = velocity) }
     }
+    // Changes once per flip, so composition doesn't re-read the swap (and recompose) every frame;
+    // the swap itself is read only in the layout and draw lambdas below.
+    val settled by remember { derivedStateOf { abs(swap.value - front) < 0.5f } }
+
+    // Measured, not guessed: a fixed width cut "New alarm" off once the phone's font was scaled up.
+    val notchWidth = notchWidthFor(faces.map { it.actionLabel }, chrome = NotchChrome + NotchGap, min = MinNotchWidth)
 
     BoxWithConstraints(modifier.fillMaxWidth().height(Peek + CardHeight)) {
-        val notch = remember { NotchShape(28.dp, 18.dp, NotchWidth, NotchHeight) }
+        val notch = remember(notchWidth) { NotchShape(28.dp, 18.dp, notchWidth, NotchHeight) }
         faces.forEachIndexed { i, face ->
-            // 1 when this card is in front, 0 at the back.
-            val frontness = if (i == 0) 1f - swap.value else swap.value
+            // 1 when this card is in front, 0 at the back. Read inside the layout and draw lambdas.
+            fun frontness() = if (i == 0) 1f - swap.value else swap.value
             val isFront = i == front
-            // The card passing to the back dips a little mid-flight.
-            val dip = sin(PI * swap.value).toFloat()
+            // Only flips once per swap, so composition reads a boolean instead of every frame.
+            val ahead by remember(i) { derivedStateOf { frontness() > 0.5f } }
             Box(
                 Modifier
-                    .zIndex(if (frontness > 0.5f) 1f else 0f)
-                    .offset { androidx.compose.ui.unit.IntOffset(0, (Peek.toPx() * frontness).toInt()) }
+                    .zIndex(if (ahead) 1f else 0f)
+                    .offset { androidx.compose.ui.unit.IntOffset(0, (Peek.toPx() * frontness()).toInt()) }
                     .graphicsLayer {
+                        // The card passing to the back dips a little mid-flight.
+                        val dip = sin(PI * swap.value).toFloat()
                         val s = 1f - 0.04f * dip
                         scaleX = s; scaleY = s
                         if (i == dragOwner && !reduced) {
@@ -157,8 +171,8 @@ fun CardDeck(faces: List<CardFace>, modifier: Modifier = Modifier) {
                                     onDragStarted = { dragOwner = i },
                                     state = rememberDraggableState { d -> scope.launch { drag.snapTo(drag.value + d) } },
                                     onDragStopped = { v ->
-                                        if (abs(drag.value) > swipeAway || abs(v) > 1400f) flip()
-                                        else drag.animateTo(0f, Motion.snappy())
+                                        if (abs(drag.value) > swipeAway || abs(v) > 1400f) flip(v)
+                                        else drag.animateTo(0f, Motion.snappy(), initialVelocity = v)
                                     },
                                 )
                                 .pressable(onClick = face.onOpen, pressedScale = 0.985f, showRipple = false, onClickLabel = "Open ${face.name}")
@@ -171,7 +185,7 @@ fun CardDeck(faces: List<CardFace>, modifier: Modifier = Modifier) {
                         },
                     ),
             ) {
-                CardBody(face)
+                CardBody(face, notchWidth)
             }
             // The back card's visible strip trades places when tapped.
             if (!isFront) {
@@ -190,13 +204,14 @@ fun CardDeck(faces: List<CardFace>, modifier: Modifier = Modifier) {
             Modifier
                 .zIndex(3f)
                 .align(Alignment.BottomEnd)
-                .alpha(1f - abs(swap.value - front))
-                .width(NotchWidth - NotchGap)
+                .graphicsLayer { alpha = (1f - abs(swap.value - front)).coerceIn(0f, 1f) }
+                .width(notchWidth - NotchGap)
                 .height(NotchHeight - NotchGap)
+                // Only once the deck has settled, so a tap mid-flip can't hit the card that is leaving.
+                // Press first, so the whole pill shrinks, not just its contents.
+                .pressable(onClick = f.onAction, enabled = settled, pressedScale = 0.95f, onClickLabel = f.actionLabel, showRipple = false)
                 .clip(CircleShape)
                 .background(Hub.colors.chrome)
-                // Only once the deck has settled, so a tap mid-flip can't hit the card that is leaving.
-                .pressable(onClick = f.onAction, enabled = abs(swap.value - front) < 0.5f, pressedScale = 0.95f, onClickLabel = f.actionLabel)
                 .padding(start = 8.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Start,
@@ -211,9 +226,10 @@ fun CardDeck(faces: List<CardFace>, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CardBody(face: CardFace) {
+private fun CardBody(face: CardFace, notchWidth: Dp) {
     val on = face.onColor
-    val soft = on.copy(alpha = 0.78f)
+    // 0.9, not lower: the 11sp labels must stay readable on the dawn card in dark mode.
+    val soft = on.copy(alpha = 0.9f)
     Column(Modifier.padding(horizontal = 20.dp)) {
         Row(Modifier.fillMaxWidth().height(Peek), verticalAlignment = Alignment.CenterVertically) {
             Icon(face.icon, contentDescription = null, tint = on, modifier = Modifier.size(22.dp))
@@ -235,7 +251,7 @@ private fun CardBody(face: CardFace) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        Column(Modifier.padding(end = NotchWidth)) {
+        Column(Modifier.padding(end = notchWidth)) {
             Text(face.footLabel, style = HubType.small.copy(fontSize = 11.sp), color = soft, maxLines = 1)
             Text(face.foot, style = HubType.bodyStrong, color = on, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }

@@ -1,10 +1,10 @@
 package com.agam.pixelhub.ui.expenses
 
+import com.agam.pixelhub.ui.heroHeight
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -53,6 +53,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.currentCompositeKeyHash
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -101,6 +102,7 @@ import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
 import com.agam.pixelhub.ui.motion.pressable
+import com.agam.pixelhub.ui.motion.rememberDrawIn
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubColors
 import com.agam.pixelhub.ui.theme.HubType
@@ -219,16 +221,22 @@ internal fun CategoryWell(
     }
 }
 
+/** Keys whose figure has already rolled in during this process. */
+private val rolledIn = mutableSetOf<Any>()
+
 /**
  * The first time a figure appears its digits read as zeros and then roll up to the real
  * value, like an odometer settling. Later changes roll normally inside [RollingText].
+ * With a [key], the roll-in plays once per process: coming back to the screen shows the
+ * figure as it is.
  */
 @Composable
-internal fun rememberRolledIn(text: String?, delayMs: Long = 140, enabled: Boolean = true): String {
-    val reduced = LocalReducedMotion.current || !enabled
+internal fun rememberRolledIn(text: String?, delayMs: Long = 140, enabled: Boolean = true, key: Any? = null): String {
+    val reduced = LocalReducedMotion.current || !enabled || (key != null && key in rolledIn)
     var shown by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(text) {
         if (text == null) return@LaunchedEffect
+        if (key != null) rolledIn += key
         if (shown == null && !reduced) {
             shown = zeroed(text)
             delay(delayMs)
@@ -244,7 +252,11 @@ private fun zeroed(s: String) = s.map { if (it.isDigit()) '0' else it }.joinToSt
 // Bars
 // ---------------------------------------------------------------------------------------------
 
-/** A rounded progress bar on a track. Grows in from nothing, then follows changes (280ms). */
+/**
+ * A rounded progress bar on a track. Grows in from nothing the first time [drawKey] is shown
+ * in this process, then only follows changes (never regrowing when scrolled back into view or
+ * revisited). Without a [drawKey] the call site's position stands in for one.
+ */
 @Composable
 internal fun ProgressTrack(
     fraction: Float,
@@ -252,13 +264,11 @@ internal fun ProgressTrack(
     track: Color,
     modifier: Modifier = Modifier,
     height: Dp = 6.dp,
+    drawKey: Any? = null,
 ) {
-    val reduced = LocalReducedMotion.current
     val target = fraction.coerceIn(0f, 1f)
-    val progress = remember { Animatable(if (reduced) target else 0f) }
-    LaunchedEffect(target, reduced) {
-        if (reduced) progress.snapTo(target) else progress.animateTo(target, tween(280, easing = Motion.EaseOut))
-    }
+    val site = currentCompositeKeyHash
+    val progress = rememberDrawIn(drawKey ?: "track-$site", target)
     val fill by animateColorAsState(color, tween(200), label = "trackFill")
     Canvas(modifier.fillMaxWidth().height(height).clearAndSetSemantics { }) {
         val h = size.height
@@ -270,7 +280,8 @@ internal fun ProgressTrack(
 
 /**
  * The month's spending as one bar shared out by category, on a track that stands for the
- * budget (or the total, without one). [highlight] dims the other categories.
+ * budget (or the total, without one). [highlight] dims the other categories. It grows in
+ * once per process per [drawKey] (the call site's position when none is given).
  */
 @Composable
 internal fun CategoryBar(
@@ -279,15 +290,15 @@ internal fun CategoryBar(
     track: Color = Hub.colors.well,
     highlight: ExpenseCategory? = null,
     height: Dp = 10.dp,
+    drawKey: Any? = null,
 ) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
     val parts = summary.byCategory.filter { it.spentPaise > 0L }
     val total = summary.totalPaise.coerceAtLeast(0L)
     val budget = summary.budgetPaise?.takeIf { it > 0L }
     val span = maxOf(total, budget ?: total, 1L).toFloat()
-    val grow = remember { Animatable(if (reduced) 1f else 0f) }
-    LaunchedEffect(Unit) { grow.animateTo(1f, tween(if (reduced) 0 else 300, easing = Motion.EaseOut)) }
+    val site = currentCompositeKeyHash
+    val grow = rememberDrawIn(drawKey ?: "bar-$site", 1f)
     val alphas = ExpenseCategory.entries.map { cat ->
         animateFloatAsState(if (highlight == null || highlight == cat) 1f else 0.28f, tween(200), label = "barAlpha").value
     }
@@ -317,7 +328,8 @@ internal fun CategoryBar(
 // and optionally a second card peeking out behind it, like the reference wallet.
 // ---------------------------------------------------------------------------------------------
 
-internal val HeroHeight = 204.dp
+/** Grows with the phone's font size so the card's lines are never clipped. */
+internal val HeroHeight: Dp @Composable get() = heroHeight()
 internal val HeroPeek = 54.dp
 internal val HeroNotchHeight = 64.dp
 private val HeroNotchGap = 6.dp
@@ -572,7 +584,7 @@ fun ExpenseHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.Bottom) {
             RollingText(
-                rememberRolledIn(s?.let { Money.format(it.totalPaise) }),
+                rememberRolledIn(s?.let { Money.format(it.totalPaise) }, key = "home-spend"),
                 style = HubType.clockMedium,
                 color = c.ink,
                 modifier = Modifier.weight(1f, fill = false),
@@ -590,7 +602,7 @@ fun ExpenseHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(12.dp))
         if (s != null) {
-            CategoryBar(s, track = c.well, height = 8.dp)
+            CategoryBar(s, track = c.well, height = 8.dp, drawKey = "home-spend")
         } else {
             Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(c.well))
         }

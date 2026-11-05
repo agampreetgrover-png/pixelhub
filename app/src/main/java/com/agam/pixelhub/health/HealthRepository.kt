@@ -2,6 +2,7 @@ package com.agam.pixelhub.health
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.health.connect.HealthConnectManager
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContract
@@ -65,16 +66,36 @@ class HealthRepository(private val context: Context) {
     fun permissionContract(): ActivityResultContract<Set<String>, Set<String>> =
         PermissionController.createRequestPermissionResultContract()
 
-    /** Health Connect's page for PixelHub's permissions (to review or revoke). */
-    fun managePermissionsIntent(): Intent =
-        Intent(HealthConnectManager.ACTION_MANAGE_HEALTH_PERMISSIONS)
+    /**
+     * Where to review or revoke PixelHub's health access. Health Connect's per-app permission
+     * page (ACTION_MANAGE_HEALTH_PERMISSIONS) is guarded by a system-only permission on current
+     * Android, so starting it throws SecurityException; then open Health Connect's own
+     * "manage data" screen instead (App permissions → PixelHub is one tap from there).
+     */
+    fun managePermissionsIntent(): Intent {
+        val perAppPage = Intent(HealthConnectManager.ACTION_MANAGE_HEALTH_PERMISSIONS)
             .putExtra(Intent.EXTRA_PACKAGE_NAME, context.packageName)
+        return if (canStart(perAppPage)) perAppPage else HealthConnectClient.getHealthConnectManageDataIntent(context)
+    }
 
+    /** True if some exported activity handles [intent] and we hold whatever permission it requires. */
+    private fun canStart(intent: Intent): Boolean {
+        val info = context.packageManager.resolveActivity(intent, 0)?.activityInfo ?: return false
+        if (!info.exported) return false
+        val required = info.permission ?: return true
+        return context.checkSelfPermission(required) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * What the user has allowed. Throws if Health Connect can't be asked right now (its process
+     * was killed, a binder error...), so callers can tell "unknown" from "revoked" and keep
+     * showing the last good state instead of flipping to "not connected".
+     */
     suspend fun grantedPermissions(): Set<String> =
         if (status() != HealthStatus.AVAILABLE) emptySet()
-        else runCatching { client.permissionController.getGrantedPermissions() }.getOrDefault(emptySet())
+        else client.permissionController.getGrantedPermissions()
 
-    /** True once every data type in [readPermissions] is allowed. */
+    /** True once every data type in [readPermissions] is allowed. Throws like [grantedPermissions]. */
     suspend fun isConnected(): Boolean = grantedPermissions().containsAll(readPermissions)
 
     fun supportsBackgroundReads(): Boolean =
@@ -141,9 +162,12 @@ class HealthRepository(private val context: Context) {
         }
     }
 
-    /** Re-reads today's totals every [periodMillis] while collected. Emits null when not connected. */
+    /**
+     * Re-reads today's totals every [periodMillis] while collected. Emits null only once access
+     * is confirmed gone; a failed read (including a failed permission check) keeps the last good
+     * figures on screen and sets [readFailed].
+     */
     fun todayFlow(periodMillis: Long = 60_000): Flow<DailyActivity?> = flow {
-        // A failed read keeps the last good figures on screen instead of dropping them to zero.
         var last: DailyActivity? = null
         while (true) {
             try {
@@ -166,11 +190,24 @@ class HealthRepository(private val context: Context) {
 
     /** Background check for a nudge (called from the alarm receiver). */
     suspend fun check(nudge: HealthNudge): NudgeCheck {
-        if (!canReadInBackground()) return NudgeCheck.NoAccess
+        val canRead = try {
+            canReadInBackground()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            // Health Connect is briefly unreachable: skip this nudge quietly rather than
+            // telling the user access is gone. It fires again at its next time.
+            Log.w("PixelHub", "Health Connect permission check failed; skipping nudge", e)
+            return NudgeCheck.OnTrack
+        }
+        if (!canRead) return NudgeCheck.NoAccess
         val activity = try {
             today()
         } catch (e: SecurityException) {
             null
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w("PixelHub", "Health Connect read failed; skipping nudge", e)
+            return NudgeCheck.OnTrack
         } ?: return NudgeCheck.NoAccess
         return NudgeMath.evaluate(nudge, activity)
     }

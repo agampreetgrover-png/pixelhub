@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +54,8 @@ import com.agam.pixelhub.calendar.CalendarInfo
 import com.agam.pixelhub.container
 import com.agam.pixelhub.ui.PrimaryButton
 import com.agam.pixelhub.ui.motion.Motion
+import com.agam.pixelhub.ui.motion.StatusSwap
+import com.agam.pixelhub.ui.motion.toggleSpec
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.launch
@@ -89,69 +92,79 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
     val activity = LocalActivity.current
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         hasPermission = result.values.all { it }
-        if (!hasPermission) {
-            enableAfterGrant = false
-            // Denied twice: Android no longer asks, so the button would do nothing. Open the app's
-            // settings page, where calendar access can be turned on.
-            val blocked = c.calendar.permissions.none { activity?.shouldShowRequestPermissionRationale(it) == true }
-            if (blocked) {
-                Toast.makeText(context, "Turn on Calendar under Permissions", Toast.LENGTH_LONG).show()
-                openSafely(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
-            }
+        if (!hasPermission) enableAfterGrant = false
+    }
+    // Decided before launching: once asked and Android no longer shows the prompt (denied twice),
+    // the request would do nothing, so open the app's settings page, where access can be turned on.
+    val allow: () -> Unit = {
+        enableAfterGrant = true
+        val blocked = PermissionAsks.askedBefore(context, CALENDAR_ASKED) &&
+            c.calendar.permissions.none { activity?.shouldShowRequestPermissionRationale(it) == true }
+        if (blocked) {
+            Toast.makeText(context, "Turn on Calendar under Permissions", Toast.LENGTH_LONG).show()
+            openSafely(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
+        } else {
+            PermissionAsks.markAsked(context, CALENDAR_ASKED)
+            ask.launch(c.calendar.permissions)
         }
     }
 
+    // The calendar list opens under the row; it starts closed so the card is one line.
+    var open by rememberSaveable { mutableStateOf(false) }
+    val current = calendars.firstOrNull { it.id == selected }
+
+    // One row either way: when access is granted only its line and its end control change.
+    val tint by animateColorAsState(if (hasPermission && selected != null) colors.ok else colors.ink, Motion.toggleSpec(), label = "syncTint")
     SettingsCard(modifier) {
         SettingRow(
             icon = Icons.Outlined.CalendarMonth,
-            title = "Copy reminders to a calendar",
-            meta = "Pick a Google calendar and they show up in Google Calendar too.",
-        )
-        if (!hasPermission) {
-            SettingRow(
-                icon = Icons.Outlined.Lock,
-                title = "Calendar access is off",
-                meta = "PixelHub only adds and updates its own events.",
-            )
-            PrimaryButton(
-                "Allow calendar access",
-                onClick = { enableAfterGrant = true; ask.launch(c.calendar.permissions) },
-                modifier = Modifier.fillMaxWidth().padding(6.dp),
-            )
-        } else {
-            Column(Modifier.fillMaxWidth().selectableGroup()) {
-                CalendarOption(
-                    title = "Off",
-                    subtitle = "Reminders stay in PixelHub only",
-                    dot = null,
-                    selected = selected == null,
-                    onSelect = { c.appScope.launch { c.reminders.setCalendar(null) } },
-                )
-                calendars.forEach { cal ->
-                    CalendarOption(
-                        title = cal.name,
-                        subtitle = cal.accountName,
-                        dot = Color(cal.color),
-                        selected = selected == cal.id,
-                        onSelect = { c.appScope.launch { c.reminders.setCalendar(cal.id) } },
-                    )
+            title = "Calendar sync",
+            meta = when {
+                !hasPermission -> "Copy reminders into Google Calendar"
+                selected == null -> "Off"
+                current != null -> listOf(current.name, current.accountName).filter { it.isNotBlank() }.distinct().joinToString(" · ")
+                else -> "On"
+            },
+            iconTint = tint,
+            onClick = if (hasPermission) ({ open = !open }) else allow,
+            onClickLabel = when {
+                !hasPermission -> "Allow calendar access"
+                open -> "Hide calendars"
+                else -> "Choose a calendar"
+            },
+            trailing = {
+                StatusSwap(hasPermission) { granted ->
+                    if (granted) ExpandChevron(open) else RowAction("Allow", onClick = allow, onClickLabel = "Allow calendar access")
                 }
-            }
-            AnimatedVisibility(
-                visible = selected != null,
-                enter = expandVertically(tween(240, easing = Motion.EaseOut)) + fadeIn(tween(160)),
-                exit = shrinkVertically(tween(200)) + fadeOut(tween(120)),
-            ) {
-                Text(
-                    "Turning sync off keeps the events already copied.",
-                    style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp),
-                    color = colors.inkMuted,
-                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 10.dp),
-                )
+            },
+        )
+        if (hasPermission) {
+            Expandable(open) {
+                Column(Modifier.fillMaxWidth().selectableGroup()) {
+                    CalendarOption(
+                        title = "Off",
+                        // Said here, where it matters: switching off doesn't delete what was copied.
+                        subtitle = if (selected != null) "Events already copied stay" else "Reminders stay in PixelHub",
+                        dot = null,
+                        selected = selected == null,
+                        onSelect = { c.appScope.launch { c.reminders.setCalendar(null) } },
+                    )
+                    calendars.forEach { cal ->
+                        CalendarOption(
+                            title = cal.name,
+                            subtitle = cal.accountName,
+                            dot = Color(cal.color),
+                            selected = selected == cal.id,
+                            onSelect = { c.appScope.launch { c.reminders.setCalendar(cal.id) } },
+                        )
+                    }
+                }
             }
         }
     }
 }
+
+private const val CALENDAR_ASKED = "calendar"
 
 /** A calendar as a row: its colour in the well, the account under the name, a radio at the end. */
 @Composable
@@ -172,8 +185,8 @@ private fun CalendarOption(title: String, subtitle: String, dot: Color?, selecte
             { Box(Modifier.size(14.dp).clip(CircleShape).background(dot)) }
         } else null,
         trailing = {
-            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.size(22.dp)) {
+            Box(Modifier.padding(end = 4.dp).size(40.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.size(20.dp)) {
                     val s = 2.dp.toPx()
                     drawCircle(ring, radius = size.minDimension / 2 - s / 2, style = Stroke(s))
                     if (fill > 0f) drawCircle(colors.sky, radius = (size.minDimension / 2 - 5.dp.toPx()) * fill)

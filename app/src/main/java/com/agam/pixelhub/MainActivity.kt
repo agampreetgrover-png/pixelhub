@@ -10,6 +10,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import com.agam.pixelhub.alarm.AlarmRingActivity
+import com.agam.pixelhub.alarm.AlarmRingService
 import com.agam.pixelhub.ui.PixelHubRoot
 import com.agam.pixelhub.ui.Tab
 import com.agam.pixelhub.ui.theme.PixelHubTheme
@@ -32,6 +34,15 @@ class MainActivity : ComponentActivity() {
             tabNamed(savedInstanceState.getString(EXTRA_TAB))?.let { tab.value = it }
         }
         setContent { PixelHubTheme { PixelHubRoot(tab) } }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // An alarm still ringing whose notification was dismissed (or never shown, if notifications
+        // are off) would otherwise have no Stop button anywhere: bring its ring screen up.
+        if (AlarmRingService.state.value != null) {
+            startActivity(Intent(this, AlarmRingActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

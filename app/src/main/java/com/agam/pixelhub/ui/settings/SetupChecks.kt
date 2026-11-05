@@ -74,6 +74,23 @@ object SetupChecks {
     }
 }
 
+/**
+ * Remembers which runtime permissions PixelHub has already asked for. Android stops showing its
+ * prompt after repeated denials, and shouldShowRequestPermissionRationale is also false before
+ * the first ask, so "asked before and no rationale" is the only safe sign that a tap should open
+ * system settings instead of asking. Decided before launching, never from the result.
+ */
+internal object PermissionAsks {
+    private const val PREFS = "permission_asks"
+
+    fun askedBefore(context: Context, key: String): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(key, false)
+
+    fun markAsked(context: Context, key: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(key, true).apply()
+    }
+}
+
 /** Re-evaluated every time the screen resumes, e.g. after coming back from system settings. */
 @Composable
 fun rememberSetupChecks(): List<SetupCheck> {

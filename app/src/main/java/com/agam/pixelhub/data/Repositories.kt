@@ -19,20 +19,36 @@ class ReminderRepository(
 
     suspend fun get(id: Long): Reminder? = dao.get(id)
 
-    /** Inserts (id = 0) or updates a reminder, (re)schedules it and copies it to the calendar. */
-    suspend fun save(id: Long, title: String, notes: String, anchor: LocalDateTime, recurrence: Recurrence): Reminder {
+    /**
+     * Inserts (id = 0) or updates a reminder, (re)schedules it and copies it to the calendar.
+     * [done] null keeps the reminder's current state, so fixing a typo in a completed reminder
+     * doesn't reopen it; pass false to reopen.
+     */
+    suspend fun save(
+        id: Long,
+        title: String,
+        notes: String,
+        anchor: LocalDateTime,
+        recurrence: Recurrence,
+        done: Boolean? = null,
+    ): Reminder {
         val now = ZonedDateTime.now()
         val next = RecurrenceCalc.nextTrigger(recurrence, anchor, now)
         val trigger = (next ?: anchor.atZone(now.zone)).millis()
         val existing = if (id == 0L) null else dao.get(id)
+        val isDone = done ?: existing?.done ?: false
         val draft = Reminder(
             id = id, title = title.trim(), notes = notes.trim(),
             anchor = anchor, triggerAt = trigger, recurrence = recurrence,
             calendarEventId = existing?.calendarEventId,
+            done = isDone,
+            // Upcoming: not fired yet. Already past (an undo, an un-tick): count it as shown, or a
+            // reboot would pop it up as "missed while the phone was off".
+            notifiedAt = if (next != null) 0L else existing?.notifiedAt?.takeIf { it > 0L } ?: now.millis(),
         )
         val savedId = if (id == 0L) dao.insert(draft) else id.also { dao.update(draft) }
         scheduler.cancelReminder(savedId)
-        if (next != null) scheduler.scheduleReminder(savedId, trigger)
+        if (next != null && !isDone) scheduler.scheduleReminder(savedId, trigger)
         return syncToCalendar(draft.copy(id = savedId))
     }
 
@@ -56,15 +72,13 @@ class ReminderRepository(
             scheduler.cancelReminder(reminder.id)
             dao.update(reminder.copy(done = true))
         } else {
-            save(reminder.id, reminder.title, reminder.notes, reminder.anchor, reminder.recurrence)
+            save(reminder.id, reminder.title, reminder.notes, reminder.anchor, reminder.recurrence, done = false)
         }
     }
 
     /** Puts back a reminder that was just deleted (Undo). It gets a new id and calendar event. */
     suspend fun restore(r: Reminder): Reminder {
-        val saved = save(0, r.title, r.notes, r.anchor, r.recurrence)
-        if (r.done) setDone(saved, true)
-        return saved
+        return save(0, r.title, r.notes, r.anchor, r.recurrence, done = r.done)
     }
 
     suspend fun delete(reminder: Reminder) {
@@ -150,12 +164,13 @@ class AlarmRepository(private val dao: AlarmDao, private val scheduler: Schedule
         return a
     }
 
+    /** After boot or a clock change. Keeps a snooze in progress (the scheduler restores it). */
     suspend fun rescheduleAll() {
-        dao.enabled().forEach { apply(it) }
+        dao.enabled().forEach { apply(it, keepSnooze = true) }
     }
 
-    private fun apply(a: Alarm) {
-        scheduler.cancelAlarm(a.id)
+    private fun apply(a: Alarm, keepSnooze: Boolean = false) {
+        if (keepSnooze) scheduler.cancelAlarmTrigger(a.id) else scheduler.cancelAlarm(a.id)
         if (a.enabled) scheduler.scheduleAlarm(a.id, nextTrigger(a).millis())
     }
 

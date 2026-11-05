@@ -12,11 +12,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -31,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -105,8 +104,9 @@ import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
 import com.agam.pixelhub.ui.motion.pressable
-import com.agam.pixelhub.ui.motion.rememberStagger
-import com.agam.pixelhub.ui.motion.staggerIn
+import com.agam.pixelhub.ui.motion.revealEnter
+import com.agam.pixelhub.ui.motion.revealExit
+import com.agam.pixelhub.ui.motion.toggleSpec
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
@@ -166,7 +166,6 @@ internal fun ReminderEditorSheet(
     val reduced = LocalReducedMotion.current
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
-    val stagger = rememberStagger()
 
     var title by rememberSaveable { mutableStateOf(initial.title) }
     var notes by rememberSaveable { mutableStateOf(initial.notes) }
@@ -240,10 +239,16 @@ internal fun ReminderEditorSheet(
             ?.toInstant()?.toEpochMilli()
     }
 
-    HubSheet(onDismiss = onDismiss) {
+    val custom = type == RepeatType.EVERY_N_DAYS || type == RepeatType.EVERY_N_WEEKS
+    val dirty = title != initial.title || notes != initial.notes ||
+        LocalDateTime.of(date, time) != initial.at || type != initial.recurrence.type ||
+        (type == RepeatType.WEEKLY && mask != initial.recurrence.daysMask) ||
+        (custom && interval != initial.recurrence.interval)
+
+    HubSheet(onDismiss = onDismiss, dirty = dirty) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp).staggerIn(stagger, "head", 0),
+                Modifier.fillMaxWidth().padding(top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -263,7 +268,7 @@ internal fun ReminderEditorSheet(
             }
 
             Spacer(Modifier.height(20.dp))
-            Column(Modifier.staggerIn(stagger, "fields", 1), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 HubTextField(
                     value = title,
                     onValueChange = { title = it },
@@ -287,10 +292,10 @@ internal fun ReminderEditorSheet(
             }
 
             Spacer(Modifier.height(22.dp))
-            Text("When", style = HubType.section, color = c.ink, modifier = Modifier.staggerIn(stagger, "whenLabel", 2))
+            Text("When", style = HubType.section, color = c.ink)
             Spacer(Modifier.height(10.dp))
             Row(
-                Modifier.fillMaxWidth().staggerIn(stagger, "when", 2),
+                Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 val word = relativeWord(date, today)
@@ -346,11 +351,10 @@ internal fun ReminderEditorSheet(
                 date = date,
                 today = today,
                 onPick = { date = it },
-                modifier = Modifier.staggerIn(stagger, "quick", 3),
             )
 
             Spacer(Modifier.height(26.dp))
-            Column(Modifier.staggerIn(stagger, "repeat", 4)) {
+            Column {
                 Text("Repeat", style = HubType.section, color = c.ink)
                 Spacer(Modifier.height(10.dp))
                 FlowRow(
@@ -367,8 +371,8 @@ internal fun ReminderEditorSheet(
                 }
                 AnimatedVisibility(
                     visible = type == RepeatType.WEEKLY,
-                    enter = expandVertically(Motion.snappy()) + fadeIn(tween(200, delayMillis = 60)),
-                    exit = shrinkVertically(Motion.snappy()) + fadeOut(tween(120)),
+                    enter = revealEnter(reduced),
+                    exit = revealExit(reduced),
                 ) {
                     Column {
                         Spacer(Modifier.height(14.dp))
@@ -377,8 +381,8 @@ internal fun ReminderEditorSheet(
                 }
                 AnimatedVisibility(
                     visible = type == RepeatType.EVERY_N_DAYS || type == RepeatType.EVERY_N_WEEKS,
-                    enter = expandVertically(Motion.snappy()) + fadeIn(tween(200, delayMillis = 60)),
-                    exit = shrinkVertically(Motion.snappy()) + fadeOut(tween(120)),
+                    enter = revealEnter(reduced),
+                    exit = revealExit(reduced),
                 ) {
                     Column {
                         Spacer(Modifier.height(14.dp))
@@ -394,13 +398,12 @@ internal fun ReminderEditorSheet(
             Spacer(Modifier.height(24.dp))
             Summary(
                 text = summaryText(context, date, time, today, type, mask, interval),
-                modifier = Modifier.staggerIn(stagger, "summary", 5),
             )
 
             AnimatedVisibility(
                 visible = error != null,
-                enter = expandVertically(Motion.snappy()) + fadeIn(tween(160)),
-                exit = shrinkVertically(Motion.snappy()) + fadeOut(tween(120)),
+                enter = revealEnter(reduced),
+                exit = revealExit(reduced),
             ) {
                 Text(
                     error ?: lastError[0],
@@ -412,7 +415,7 @@ internal fun ReminderEditorSheet(
 
             Spacer(Modifier.height(18.dp))
             Row(
-                Modifier.fillMaxWidth().staggerIn(stagger, "actions", 6),
+                Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -519,9 +522,9 @@ private fun ValueChip(
     val c = Hub.colors
     Column(
         modifier
+            .pressable(onClick = onClick, pressedScale = 0.97f, onClickLabel = "Change ${description.lowercase()}", showRipple = false)
             .clip(RoundedCornerShape(CardRadius))
             .background(c.raised2)
-            .pressable(onClick = onClick, pressedScale = 0.97f, onClickLabel = "Change ${description.lowercase()}")
             .padding(horizontal = 14.dp, vertical = 14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -610,14 +613,14 @@ private fun QuickDates(date: LocalDate, today: LocalDate, onPick: (LocalDate) ->
 @Composable
 private fun RepeatPill(label: String, selected: Boolean, onClick: () -> Unit) {
     val c = Hub.colors
-    val bg by animateColorAsState(if (selected) c.sky else c.raised2, tween(200), label = "pillBg")
-    val fg by animateColorAsState(if (selected) c.onSky else c.ink, tween(200), label = "pillFg")
+    val bg by animateColorAsState(if (selected) c.sky else c.raised2, Motion.toggleSpec(), label = "pillBg")
+    val fg by animateColorAsState(if (selected) c.onSky else c.ink, Motion.toggleSpec(), label = "pillFg")
     Box(
         Modifier
-            .height(42.dp)
+            .heightIn(min = 48.dp)
+            .pressable(onClick = onClick, pressedScale = 0.94f, role = Role.RadioButton, showRipple = false)
             .clip(CircleShape)
             .background(bg)
-            .pressable(onClick = onClick, pressedScale = 0.94f, role = Role.RadioButton)
             .semantics { this.selected = selected }
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center,
@@ -672,11 +675,11 @@ private fun StepButton(icon: ImageVector, description: String, enabled: Boolean,
     val alpha by animateFloatAsState(if (enabled) 1f else 0.35f, tween(160), label = "stepAlpha")
     Box(
         Modifier
-            .size(44.dp)
+            .size(48.dp)
             .graphicsLayer { this.alpha = alpha }
+            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.88f, onClickLabel = description, showRipple = false)
             .clip(CircleShape)
             .background(c.raised)
-            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.88f, onClickLabel = description)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
@@ -727,13 +730,11 @@ private fun DeleteButton(onDelete: () -> Unit) {
             armed = false
         }
     }
-    val bg by animateColorAsState(if (armed) c.danger else c.dangerSoft, tween(180), label = "delBg")
-    val fg by animateColorAsState(if (armed) c.onDanger else c.danger, tween(180), label = "delFg")
+    val bg by animateColorAsState(if (armed) c.danger else c.dangerSoft, Motion.toggleSpec(), label = "delBg")
+    val fg by animateColorAsState(if (armed) c.onDanger else c.danger, Motion.toggleSpec(), label = "delFg")
     Row(
         Modifier
             .height(48.dp)
-            .clip(CircleShape)
-            .background(bg)
             .pressable(
                 onClick = {
                     if (armed) {
@@ -744,7 +745,10 @@ private fun DeleteButton(onDelete: () -> Unit) {
                     }
                 },
                 onClickLabel = if (armed) "Delete reminder" else "Delete",
+                showRipple = false,
             )
+            .clip(CircleShape)
+            .background(bg)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

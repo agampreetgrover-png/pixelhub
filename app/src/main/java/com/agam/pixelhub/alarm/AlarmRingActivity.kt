@@ -161,7 +161,7 @@ private fun RingScreen(ringing: AlarmRingService.Ringing, onSnooze: () -> Unit, 
                     RingingBell(disc = on, tint = c.dawnCard)
                     Spacer(Modifier.width(12.dp))
                     Text("Alarm", style = HubType.bodyStrong.copy(fontSize = 14.sp), color = on, modifier = Modifier.weight(1f))
-                    Text("Ringing now", style = HubType.small, color = soft, maxLines = 1)
+                    Text(if (ringing.snoozed) "Snoozed" else "Ringing now", style = HubType.small, color = soft, maxLines = 1)
                 }
                 Spacer(Modifier.height(18.dp))
                 Row(verticalAlignment = Alignment.Bottom) {

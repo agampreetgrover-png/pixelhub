@@ -2,16 +2,13 @@
 
 package com.agam.pixelhub.ui.expenses
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +45,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -96,8 +94,10 @@ import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
 import com.agam.pixelhub.ui.motion.pressable
-import com.agam.pixelhub.ui.motion.rememberStagger
-import com.agam.pixelhub.ui.motion.staggerIn
+import com.agam.pixelhub.ui.motion.popEnter
+import com.agam.pixelhub.ui.motion.popExit
+import com.agam.pixelhub.ui.motion.popOnSelect
+import com.agam.pixelhub.ui.motion.quickFade
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
@@ -138,7 +138,6 @@ fun ExpenseEditorSheet(
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
-    val stagger = rememberStagger()
     val zone = remember { ZoneId.systemDefault() }
     val isNew = initial == null || initial.id == 0L
 
@@ -204,9 +203,23 @@ fun ExpenseEditorSheet(
         catScroll.scrollTo(if (i > 3) with(density) { ((i - 1) * 76).dp.roundToPx() } else 0)
     }
 
-    HubSheet(onDismiss = onDismiss) {
+    // Unsaved edits: a swipe down, a tap outside or Back asks before throwing them away. A new
+    // entry counts once anything is typed; an existing one once a field differs from what it was.
+    val dirty = if (isNew) {
+        amount.isNotEmpty() || note.isNotEmpty()
+    } else {
+        val start = initial!!
+        val startKind = start.kind
+        val startCategory = start.category.takeIf { it in ExpenseCategory.forKind(startKind) }
+            ?: ExpenseCategory.forKind(startKind).first()
+        (paise ?: 0L) != start.amountPaise || category != startCategory || note != start.note ||
+            kind != startKind || useNow ||
+            date != initialAt?.toLocalDate() || time != initialAt?.toLocalTime()?.withSecond(0)?.withNano(0)
+    }
+
+    HubSheet(onDismiss = onDismiss, dirty = dirty) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Row(Modifier.fillMaxWidth().staggerIn(stagger, "title", 0), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     when {
                         isNew && income -> "Add income"
@@ -225,7 +238,7 @@ fun ExpenseEditorSheet(
                         onClick = onDelete,
                         tone = c.dangerSoft,
                         tint = c.danger,
-                        size = 44.dp,
+                        size = 48.dp,
                         iconSize = 20.dp,
                     )
                 }
@@ -234,7 +247,7 @@ fun ExpenseEditorSheet(
             KindToggle(
                 kind = kind,
                 onKind = { switchKind(it) },
-                modifier = Modifier.padding(top = 14.dp).staggerIn(stagger, "kind", 1),
+                modifier = Modifier.padding(top = 14.dp),
             )
 
             // The display.
@@ -242,7 +255,6 @@ fun ExpenseEditorSheet(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(min = 92.dp)
-                    .staggerIn(stagger, "amount", 2)
                     .semantics(mergeDescendants = true) {
                         val what = if (income) "Income amount" else "Amount"
                         contentDescription = if (amount.isEmpty()) "$what, empty" else "$what ₹${groupedAmount(amount)}"
@@ -259,16 +271,23 @@ fun ExpenseEditorSheet(
             }
 
             // Category, as a row of wells: spending categories, or where the money came from.
+            // Switching Expense | Income crossfades one set of wells into the other.
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(catScroll)
-                    .staggerIn(stagger, "cats", 3),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .horizontalScroll(catScroll),
             ) {
-                categories.forEach { cat ->
-                    key(cat) {
-                        CategoryChip(cat, selected = cat == category, onClick = { category = cat })
+                AnimatedContent(
+                    targetState = kind,
+                    transitionSpec = { quickFade() },
+                    label = "kindCategories",
+                ) { k ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        ExpenseCategory.forKind(k).forEach { cat ->
+                            key(cat) {
+                                CategoryChip(cat, selected = cat == category, onClick = { category = cat })
+                            }
+                        }
                     }
                 }
             }
@@ -277,7 +296,7 @@ fun ExpenseEditorSheet(
                 onType = { type(it) },
                 onBack = { if (amount.isNotEmpty()) amount = amount.dropLast(1) else reject() },
                 onClear = { amount = "" },
-                modifier = Modifier.padding(top = 14.dp).staggerIn(stagger, "keys", 4),
+                modifier = Modifier.padding(top = 14.dp),
             )
 
             HubTextField(
@@ -287,11 +306,11 @@ fun ExpenseEditorSheet(
                 placeholder = if (income) "November salary, client invoice, gift" else "Lunch, cab home, phone bill",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                modifier = Modifier.padding(top = 18.dp).staggerIn(stagger, "note", 5),
+                modifier = Modifier.padding(top = 18.dp),
             )
 
             FlowRow(
-                Modifier.fillMaxWidth().padding(top = 14.dp).staggerIn(stagger, "when", 6),
+                Modifier.fillMaxWidth().padding(top = 14.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -315,8 +334,8 @@ fun ExpenseEditorSheet(
                 )
                 AnimatedVisibility(
                     visible = !useNow,
-                    enter = fadeIn(tween(160)) + scaleIn(if (reduced) tween(0) else Motion.snappy(), initialScale = 0.85f),
-                    exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.9f),
+                    enter = popEnter(reduced),
+                    exit = popExit(),
                 ) {
                     ValuePill(
                         text = Fmt.time(context, time),
@@ -343,7 +362,8 @@ fun ExpenseEditorSheet(
                     val at = if (useNow) {
                         System.currentTimeMillis()
                     } else {
-                        LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli()
+                        // Never in the future, whichever way the date and time were picked.
+                        minOf(LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli(), System.currentTimeMillis())
                     }
                     onSave(
                         Expense(
@@ -356,7 +376,7 @@ fun ExpenseEditorSheet(
                         ),
                     )
                 },
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp).staggerIn(stagger, "save", 7),
+                modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
             )
         }
     }
@@ -380,6 +400,9 @@ fun ExpenseEditorSheet(
                 QuietButton("Set date", color = c.ink, onClick = {
                     state.selectedDateMillis?.let {
                         date = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate()
+                        // Moving an entry to today keeps its time only if that time has already passed.
+                        val nowTime = LocalTime.now().withSecond(0).withNano(0)
+                        if (date == LocalDate.now() && time.isAfter(nowTime)) time = nowTime
                         useNow = false
                     }
                     showDate = false
@@ -410,9 +433,9 @@ fun ExpenseEditorSheet(
 }
 
 /**
- * ₹ in the category colour, then the figures rolling digit by digit. The numerals shrink on
- * a spring as the amount grows so it always fits on one line. Income reads "+₹" with its
- * figures in the ok green.
+ * ₹ in the category colour, then the figures. Typing is keyboard-driven, so the figures
+ * change in place with no roll; they step down a size as the amount grows so it always fits
+ * on one line. Income reads "+₹" with its figures in the ok green.
  */
 @Composable
 private fun AmountDisplay(
@@ -423,18 +446,13 @@ private fun AmountDisplay(
     modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
     val empty = text.isEmpty()
     val shown = if (empty) "0" else groupedAmount(text)
-    val size by animateFloatAsState(
-        when {
-            shown.length <= 6 -> 64f
-            shown.length <= 9 -> 52f
-            else -> 42f
-        },
-        if (reduced) tween(0) else Motion.snappy(),
-        label = "amountSize",
-    )
+    val size = when {
+        shown.length <= 6 -> 64f
+        shown.length <= 9 -> 52f
+        else -> 42f
+    }
     val digits by animateColorAsState(
         when {
             flash -> c.danger
@@ -455,7 +473,7 @@ private fun AmountDisplay(
             color = rupee,
             modifier = Modifier.padding(end = 6.dp),
         )
-        RollingText(shown, style = style, color = digits)
+        Text(shown, style = style, color = digits, maxLines = 1)
     }
 }
 
@@ -513,19 +531,11 @@ private fun KindToggle(kind: ExpenseKind, onKind: (ExpenseKind) -> Unit, modifie
 @Composable
 private fun CategoryChip(category: ExpenseCategory, selected: Boolean, onClick: () -> Unit) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val pop = remember { Animatable(1f) }
-    LaunchedEffect(selected) {
-        if (selected && !reduced) {
-            pop.animateTo(1.08f, spring(dampingRatio = 1f, stiffness = 1600f))
-            pop.animateTo(1f, Motion.snappy())
-        }
-    }
     val label by animateColorAsState(if (selected) c.ink else c.inkMuted, tween(180), label = "chipLabel")
     Column(
         Modifier
             .width(72.dp)
-            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+            .popOnSelect(selected, peak = 1.08f)
             .pressable(onClick = onClick, pressedScale = 0.92f, role = Role.RadioButton, showRipple = false, onClickLabel = category.label)
             .semantics { this.selected = selected }
             .padding(vertical = 6.dp),
@@ -607,19 +617,12 @@ private fun RowScope.Key(
 @Composable
 private fun WhenPill(text: String, selected: Boolean, onClick: () -> Unit, icon: ImageVector? = null) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
     val bg by animateColorAsState(if (selected) c.ink else c.raised2, tween(180), label = "whenBg")
     val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(180), label = "whenFg")
-    val pop = remember { Animatable(1f) }
-    LaunchedEffect(selected) {
-        if (selected && !reduced) {
-            pop.animateTo(1.06f, spring(dampingRatio = 1f, stiffness = 1600f))
-            pop.animateTo(1f, Motion.snappy())
-        }
-    }
     Row(
         Modifier
-            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+            .popOnSelect(selected)
+            .minimumInteractiveComponentSize()
             .pressable(onClick = onClick, pressedScale = 0.93f, role = Role.RadioButton, showRipple = false)
             .semantics { this.selected = selected }
             .heightIn(min = 44.dp)
@@ -642,6 +645,7 @@ private fun ValuePill(text: String, icon: ImageVector, description: String, onCl
     val c = Hub.colors
     Row(
         Modifier
+            .minimumInteractiveComponentSize()
             .pressable(onClick = onClick, pressedScale = 0.93f, showRipple = false, onClickLabel = description)
             .heightIn(min = 44.dp)
             .clip(CircleShape)

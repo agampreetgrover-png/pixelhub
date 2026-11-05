@@ -1,10 +1,32 @@
 package com.agam.pixelhub.ui.home
 
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.slideInVertically
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
@@ -20,6 +42,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,8 +50,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsTopHeight
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,11 +60,10 @@ import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AddAlarm
 import androidx.compose.material.icons.outlined.AddAlert
 import androidx.compose.material.icons.outlined.Alarm
-import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Payments
@@ -58,6 +78,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -82,17 +104,14 @@ import com.agam.pixelhub.data.AlarmRepository
 import com.agam.pixelhub.data.Reminder
 import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.expenses.MonthSummary
-import com.agam.pixelhub.launcher.ShortcutLauncher
 import com.agam.pixelhub.notify.ReminderNotifier
 import com.agam.pixelhub.scheduling.Days
-import com.agam.pixelhub.ui.AppIcon
 import com.agam.pixelhub.ui.CheckDot
 import com.agam.pixelhub.ui.CircleIconButton
 import com.agam.pixelhub.ui.CountBadge
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.Gutter
 import com.agam.pixelhub.ui.HubListRow
-import com.agam.pixelhub.ui.HubSheet
 import com.agam.pixelhub.ui.LocalNavInset
 import com.agam.pixelhub.ui.QuickAction
 import com.agam.pixelhub.ui.QuietButton
@@ -107,8 +126,11 @@ import com.agam.pixelhub.ui.expenses.soft
 import com.agam.pixelhub.ui.health.HealthHomeCard
 import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.Motion
+import com.agam.pixelhub.ui.motion.RollingText
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
+import com.agam.pixelhub.ui.motion.revealEnter
+import com.agam.pixelhub.ui.motion.revealExit
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.reminders.ReminderDraft
 import com.agam.pixelhub.ui.reminders.ReminderEditorDialog
@@ -116,6 +138,7 @@ import com.agam.pixelhub.ui.settings.rememberSetupChecks
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -176,25 +199,31 @@ private val HomeEditorSaver: Saver<HomeEditor?, String> = Saver(
 
 @Suppress("UNUSED_PARAMETER")
 @Composable
-fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
+fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenMenu: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.container
     val colors = Hub.colors
     val reminders by app.reminders.all.collectAsStateWithLifecycle(emptyList())
     val alarms by app.alarms.all.collectAsStateWithLifecycle(emptyList())
-    val shortcuts by app.shortcuts.all.collectAsStateWithLifecycle(emptyList())
     val checks = rememberSetupChecks()
     val pendingSetup = checks.count { !it.ok }
     val stagger = rememberStagger()
+    val reduced = LocalReducedMotion.current
     var editor by rememberSaveable(stateSaver = HomeEditorSaver) { mutableStateOf<HomeEditor?>(null) }
-    var menuOpen by rememberSaveable { mutableStateOf(false) }
+    val scroll = rememberScrollState()
 
-    // Ticks on the minute so countdowns and the greeting stay current.
-    val now by produceState(ZonedDateTime.now()) {
+    // Ticks on the minute so countdowns and the greeting stay current, and re-reads the clock on
+    // every resume: the minute delay runs on uptime, which stops while the phone sleeps, so
+    // coming back in the morning showed last night's greeting and countdowns for up to a minute.
+    var now by remember { mutableStateOf(ZonedDateTime.now()) }
+    LifecycleResumeEffect(Unit) {
+        now = ZonedDateTime.now()
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(Unit) {
         while (true) {
-            val n = ZonedDateTime.now()
-            value = n
-            delay((60 - n.second) * 1000L + 50)
+            delay((60 - ZonedDateTime.now().second) * 1000L + 50)
+            now = ZonedDateTime.now()
         }
     }
     val nowMillis = now.toInstant().toEpochMilli()
@@ -267,27 +296,26 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .statusBarsPadding(),
+                .verticalScroll(scroll)
+                .statusBarsPadding()
+                // Landscape: keep clear of the camera cutout and a side navigation bar.
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
         ) {
-            // Menu, bell and you.
+            // The menu button, top left; it opens the navigation drawer.
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = Gutter).padding(top = 12.dp).staggerIn(stagger, "bar", 0),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CircleIconButton(Icons.Outlined.Menu, "Menu", onClick = { menuOpen = true })
-                Spacer(Modifier.weight(1f))
                 Box {
-                    CircleIconButton(Icons.Outlined.Notifications, "Reminders", onClick = { onNavigate(Tab.REMINDERS) })
-                    CountBadge(overdue, colors.danger, Modifier.align(Alignment.TopEnd))
-                }
-                Spacer(Modifier.width(8.dp))
-                Box {
+                    val attention = overdue + pendingSetup
                     CircleIconButton(
-                        Icons.Outlined.Person, "Settings", onClick = { onNavigate(Tab.SETTINGS) },
-                        tone = colors.chrome, tint = colors.onChrome,
+                        Icons.Outlined.Menu,
+                        if (attention > 0) "Open menu, $attention need attention" else "Open menu",
+                        onClick = onOpenMenu,
                     )
-                    CountBadge(pendingSetup, colors.dawn, Modifier.align(Alignment.TopEnd))
+                    // One dot for anything that needs you: overdue reminders or unfinished setup.
+                    // The drawer shows which (counts on Reminders and Settings).
+                    CountBadge(attention, colors.danger, Modifier.align(Alignment.TopEnd).clearAndSetSemantics { })
                 }
             }
 
@@ -320,14 +348,14 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
                 QuickAction(Icons.Outlined.AddAlarm, "Alarm", onClick = { editor = HomeEditor.NewAlarm(7, 0) })
                 QuickAction(Icons.Outlined.AddAlert, "Reminder", onClick = { editor = HomeEditor.NewReminder })
                 QuickAction(Icons.Outlined.Payments, "Expense", onClick = { editor = HomeEditor.NewExpense })
-                QuickAction(Icons.Outlined.MoreHoriz, "More", onClick = { menuOpen = true })
+                QuickAction(Icons.Outlined.MoreHoriz, "More", onClick = onOpenMenu)
             }
 
             // Setup nudge: a small progress ring and one sentence.
             AnimatedVisibility(
                 visible = pendingSetup > 0,
-                enter = expandVertically(tween(280, easing = Motion.EaseOut)) + fadeIn(),
-                exit = shrinkVertically(tween(200)) + fadeOut(),
+                enter = revealEnter(reduced),
+                exit = revealExit(reduced),
             ) {
                 SetupNudge(done = checks.size - pendingSetup, total = checks.size, pending = pendingSetup, onClick = { onNavigate(Tab.SETTINGS) })
             }
@@ -340,16 +368,23 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
                     .fillMaxWidth()
                     .hubCard(colors.raised)
                     .padding(bottom = 8.dp)
-                    .animateContentSize(tween(220, easing = Motion.EaseOut))
+                    .animateContentSize(if (reduced) snap() else tween(220, easing = Motion.EaseOut))
                     .staggerIn(stagger, "today", 4),
             ) {
                 CardHeader("Today", "View all") { onNavigate(Tab.REMINDERS) }
                 if (today.isEmpty()) {
-                    Text(
-                        "Nothing in the next 24 hours.",
-                        style = HubType.body, color = colors.inkMuted,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Nothing in the next 24 hours.",
+                            style = HubType.body, color = colors.inkMuted,
+                            modifier = Modifier.weight(1f),
+                        )
+                        QuietButton(
+                            "Add",
+                            onClick = { editor = HomeEditor.NewReminder },
+                            modifier = Modifier.semantics { contentDescription = "Add reminder" },
+                        )
+                    }
                 }
                 today.take(6).forEach { item -> key(item.key) {
                     when (item) {
@@ -370,8 +405,8 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
                             // Ticking a repeating reminder would end the whole series; it shows when it fires next instead.
                             onDone = if (item.reminder.recurrence.isRepeating) null else {
                                 {
+                                    // The row has already drawn its tick and folded away.
                                     app.appScope.launch {
-                                        delay(380)
                                         ReminderNotifier.cancel(context, item.reminder.id)
                                         app.reminders.setDone(item.reminder, true)
                                     }
@@ -401,57 +436,14 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
                 summary = month,
                 onViewAll = { onNavigate(Tab.EXPENSES) },
                 onAdd = { editor = HomeEditor.NewExpense },
-                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "money", 5),
+                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "money", 6),
             )
 
             // Today's body.
             HealthHomeCard(
                 onOpen = { onNavigate(Tab.HEALTH) },
-                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "health", 6),
+                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "health", 7),
             )
-
-            // Shortcuts.
-            if (shortcuts.isNotEmpty()) {
-                Column(
-                    Modifier
-                        .padding(horizontal = Gutter)
-                        .padding(top = 14.dp)
-                        .fillMaxWidth()
-                        .hubCard(colors.raised)
-                        .padding(bottom = 14.dp)
-                        .staggerIn(stagger, "shortcuts", 7),
-                ) {
-                    CardHeader("Shortcuts", "Edit") { onNavigate(Tab.APPS) }
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        itemsIndexed(shortcuts, key = { _, s -> s.id }) { _, s ->
-                            Column(
-                                Modifier
-                                    .width(70.dp)
-                                    .clip(RoundedCornerShape(18.dp))
-                                    .pressable(onClick = {
-                                        if (!ShortcutLauncher.launch(context, s)) {
-                                            Toast.makeText(context, "Couldn't open ${s.label}", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }, pressedScale = 0.92f, showRipple = false, onClickLabel = "Open ${s.label}")
-                                    .padding(vertical = 6.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Box(Modifier.size(54.dp).clip(CircleShape).background(colors.well), contentAlignment = Alignment.Center) {
-                                    AppIcon(s.packageName, size = 36.dp)
-                                }
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    s.label, style = HubType.small, color = colors.ink,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
 
             // Clear the floating tab bar and the system navigation bar.
             Spacer(Modifier.height(LocalNavInset.current + 8.dp))
@@ -459,13 +451,6 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
         }
         // Ground under the status bar so scrolled content never sits behind the clock and icons.
         Spacer(Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).background(colors.ground))
-    }
-
-    if (menuOpen) {
-        MoreSheet(
-            onDismiss = { menuOpen = false },
-            onPick = { menuOpen = false; onNavigate(it) },
-        )
     }
 
     when (val e = editor) {
@@ -556,13 +541,45 @@ private fun ReminderRow(
     trailing: String?,
 ) {
     val c = Hub.colors
-    var ticked by remember(r.id) { mutableStateOf(false) }
+    val reduced = LocalReducedMotion.current
+    // Keyed on the whole reminder: if it comes back changed (edited, or the tick didn't stick),
+    // the row starts over visible instead of staying folded away.
+    var ticked by remember(r) { mutableStateOf(false) }
+    val shown = remember(r) { MutableTransitionState(true) }
+    val done by rememberUpdatedState(onDone)
+    // Ticked: let the tick draw, then fold the row away so the ones below glide up.
+    LaunchedEffect(shown, ticked) {
+        if (ticked) {
+            delay(if (reduced) 150L else 300L)
+            shown.targetState = false
+        }
+    }
+    // Only once it has fully folded away; fires once per tick. Normally the reminder then leaves
+    // the list and this row with it; if it is still here a while later, the tick didn't stick,
+    // so the row comes back instead of staying invisible.
+    LaunchedEffect(shown) {
+        while (true) {
+            snapshotFlow { shown.isIdle && !shown.currentState }.first { it }
+            done?.invoke()
+            delay(2_000)
+            ticked = false
+            shown.targetState = true
+        }
+    }
+    AnimatedVisibility(
+        visibleState = shown,
+        enter = fadeIn(tween(150)),
+        exit = if (reduced) fadeOut(tween(150))
+        else shrinkVertically(tween(200, easing = Motion.EaseOut)) + fadeOut(tween(120)),
+    ) {
     Row(
         Modifier
             .padding(horizontal = 4.dp)
             .fillMaxWidth()
+            // As tall as a HubListRow, so alarms and reminders line up in the Today card.
+            .heightIn(min = 60.dp)
             .clip(RoundedCornerShape(18.dp))
-            .pressable(onClick = onOpen, pressedScale = 0.98f)
+            .pressable(onClick = onOpen, pressedScale = 0.98f, showRipple = false)
             .padding(start = 12.dp, end = 0.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -577,7 +594,8 @@ private fun ReminderRow(
         if (onDone != null) {
             CheckDot(
                 checked = ticked,
-                onCheckedChange = { if (it) { ticked = true; onDone() } },
+                // Once only: a second tap while the row folds away does nothing.
+                onCheckedChange = { if (it && !ticked) ticked = true },
                 accent = c.ok,
                 size = 24.dp,
                 contentDescription = "Mark ${r.title} done",
@@ -588,6 +606,7 @@ private fun ReminderRow(
                 modifier = Modifier.padding(start = 8.dp, end = 12.dp),
             )
         }
+    }
     }
 }
 
@@ -601,7 +620,8 @@ private fun SpendingCard(summary: MonthSummary?, onViewAll: () -> Unit, onAdd: (
         CardHeader("Money", "View all", onViewAll)
         if (summary != null) {
             Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 6.dp), verticalAlignment = Alignment.Bottom) {
-                Text(Money.format(summary.totalPaise), style = HubType.clockMedium.copy(fontSize = HubType.clockMedium.fontSize * 0.82f), color = c.ink)
+                // Rolls to the new total after an expense is added, instead of snapping.
+                RollingText(Money.format(summary.totalPaise), HubType.clockMedium.copy(fontSize = HubType.clockMedium.fontSize * 0.82f), color = c.ink)
                 Spacer(Modifier.width(8.dp))
                 val budget = summary.budgetPaise?.takeIf { it > 0 }
                 val over = budget != null && summary.totalPaise > budget
@@ -653,13 +673,21 @@ private fun signed(paise: Long): String = if (paise >= 0) "+${Money.format(paise
 @Composable
 private fun SetupNudge(done: Int, total: Int, pending: Int, onClick: () -> Unit) {
     val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    // The ring fills to the new share when a step is finished, instead of jumping.
+    val progress by animateFloatAsState(
+        done.toFloat() / total.coerceAtLeast(1),
+        if (reduced) snap() else tween(400, easing = Motion.EaseOut),
+        label = "setupProgress",
+    )
     Row(
         Modifier
             .padding(horizontal = Gutter)
             .padding(top = 14.dp)
             .fillMaxWidth()
+            // Press first, so the whole card shrinks, not just its contents.
+            .pressable(onClick = onClick, pressedScale = 0.98f, showRipple = false)
             .hubCard(c.raised)
-            .pressable(onClick = onClick, pressedScale = 0.98f)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -667,7 +695,7 @@ private fun SetupNudge(done: Int, total: Int, pending: Int, onClick: () -> Unit)
             val s = 4.dp.toPx()
             drawCircle(c.well, radius = size.minDimension / 2 - s / 2, style = Stroke(s))
             drawArc(
-                c.dawn, -90f, 360f * done / total.coerceAtLeast(1), false,
+                c.dawn, -90f, 360f * progress, false,
                 topLeft = Offset(s / 2, s / 2), size = Size(size.width - s, size.height - s),
                 style = Stroke(s, cap = StrokeCap.Round),
             )
@@ -681,23 +709,6 @@ private fun SetupNudge(done: Int, total: Int, pending: Int, onClick: () -> Unit)
             )
         }
         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = c.ink)
-    }
-}
-
-/** The menu: everything that isn't a tab. */
-@Composable
-private fun MoreSheet(onDismiss: () -> Unit, onPick: (Tab) -> Unit) {
-    val c = Hub.colors
-    HubSheet(onDismiss = onDismiss) {
-        Text("More", style = HubType.title, color = c.ink, modifier = Modifier.padding(bottom = 12.dp))
-        Column(Modifier.fillMaxWidth().hubCard(c.raised2.takeIf { !c.isDark } ?: c.ground).padding(vertical = 6.dp)) {
-            HubListRow(Icons.Outlined.Apps, "Apps and shortcuts", "Open apps, pin your favourites", onClick = { onPick(Tab.APPS) }, iconTone = c.raised)
-            HubListRow(Icons.Outlined.CalendarMonth, "Calendar", "Your Google Calendar events", onClick = { onPick(Tab.CALENDAR) }, iconTone = c.raised)
-            HubListRow(Icons.Outlined.AccountBalanceWallet, "Money", "Spending, income and budgets", onClick = { onPick(Tab.EXPENSES) }, iconTone = c.raised)
-            HubListRow(Icons.Outlined.AutoAwesome, "Assistant", "Type or say what you need", onClick = { onPick(Tab.ASSISTANT) }, iconTone = c.raised)
-            HubListRow(Icons.Outlined.Settings, "Settings", "Themes, permissions, calendar, AI keys", onClick = { onPick(Tab.SETTINGS) }, iconTone = c.raised)
-        }
-        Spacer(Modifier.height(8.dp))
     }
 }
 

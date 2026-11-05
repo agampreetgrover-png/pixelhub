@@ -22,6 +22,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -68,8 +70,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -88,15 +92,14 @@ import com.agam.pixelhub.ui.HubSheet
 import com.agam.pixelhub.ui.HubSwitch
 import com.agam.pixelhub.ui.HubTextField
 import com.agam.pixelhub.ui.PrimaryButton
-import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.hubTimePickerColors
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
 import com.agam.pixelhub.ui.motion.pressable
-import com.agam.pixelhub.ui.motion.rememberStagger
-import com.agam.pixelhub.ui.motion.staggerIn
+import com.agam.pixelhub.ui.motion.quickFade
+import com.agam.pixelhub.ui.motion.toggleSpec
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
@@ -126,7 +129,6 @@ fun AlarmEditorDialog(
 ) {
     val context = LocalContext.current
     val c = Hub.colors
-    val stagger = rememberStagger()
     val timeState = rememberTimePickerState(initial.hour, initial.minute, DateFormat.is24HourFormat(context))
     var label by rememberSaveable { mutableStateOf(initial.label) }
     var mask by rememberSaveable { mutableStateOf(initial.daysMask) }
@@ -148,13 +150,16 @@ fun AlarmEditorDialog(
         }.getOrNull() ?: "Default alarm sound"
     }
 
-    HubSheet(onDismiss = onDismiss) {
+    val dirty = label != initial.label || mask != initial.daysMask || vibrate != initial.vibrate ||
+        snooze != initial.snoozeMinutes || ringtone != initial.ringtoneUri ||
+        timeState.hour != initial.hour || timeState.minute != initial.minute
+
+    HubSheet(onDismiss = onDismiss, dirty = dirty) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             Text(
                 if (isNew) "New alarm" else "Edit alarm",
                 style = HubType.title.copy(fontSize = 22.sp, lineHeight = 30.sp),
                 color = c.ink,
-                modifier = Modifier.staggerIn(stagger, "title", 0),
             )
             Spacer(Modifier.height(14.dp))
             TimeHero(
@@ -162,11 +167,10 @@ fun AlarmEditorDialog(
                 minute = timeState.minute,
                 mask = mask,
                 label = label,
-                modifier = Modifier.staggerIn(stagger, "hero", 1),
             )
             Spacer(Modifier.height(16.dp))
             Box(
-                Modifier.fillMaxWidth().staggerIn(stagger, "picker", 2),
+                Modifier.fillMaxWidth(),
                 contentAlignment = Alignment.Center,
             ) {
                 TimePicker(
@@ -181,10 +185,9 @@ fun AlarmEditorDialog(
                 onValueChange = { label = it },
                 label = "Label",
                 placeholder = "Wake up, gym, meds",
-                modifier = Modifier.staggerIn(stagger, "label", 3),
             )
 
-            Column(Modifier.padding(top = 18.dp).staggerIn(stagger, "repeat", 4)) {
+            Column(Modifier.padding(top = 18.dp)) {
                 SettingRow(
                     icon = Icons.Outlined.Repeat,
                     title = "Repeat",
@@ -225,7 +228,7 @@ fun AlarmEditorDialog(
                         modifier = Modifier.padding(end = 8.dp),
                     )
                 },
-                modifier = Modifier.padding(top = 18.dp).staggerIn(stagger, "sound", 5),
+                modifier = Modifier.padding(top = 18.dp),
             )
 
             SettingRow(
@@ -242,10 +245,10 @@ fun AlarmEditorDialog(
                         contentDescription = "Vibrate",
                     )
                 },
-                modifier = Modifier.padding(top = 6.dp).staggerIn(stagger, "vibrate", 6),
+                modifier = Modifier.padding(top = 6.dp),
             )
 
-            Column(Modifier.padding(top = 6.dp).staggerIn(stagger, "snooze", 7)) {
+            Column(Modifier.padding(top = 6.dp)) {
                 SettingRow(
                     icon = Icons.Outlined.Snooze,
                     title = "Snooze length",
@@ -260,7 +263,7 @@ fun AlarmEditorDialog(
                 )
             }
 
-            Column(Modifier.padding(top = 28.dp).staggerIn(stagger, "actions", 8)) {
+            Column(Modifier.padding(top = 28.dp)) {
                 PrimaryButton(
                     text = "Save alarm",
                     icon = Icons.Outlined.Check,
@@ -281,19 +284,51 @@ fun AlarmEditorDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (onDelete != null) {
-                    // Two taps, like the reminder editor: the first arms it for three seconds.
-                    var armed by remember { mutableStateOf(false) }
-                    LaunchedEffect(armed) { if (armed) { delay(3_000); armed = false } }
                     Spacer(Modifier.height(10.dp))
-                    QuietButton(
-                        text = if (armed) "Tap again to delete" else "Delete alarm",
-                        onClick = { if (armed) onDelete() else armed = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        color = c.danger,
-                        icon = Icons.Outlined.Delete,
-                    )
+                    DeleteAlarmButton(onDelete, Modifier.fillMaxWidth())
                 }
             }
+        }
+    }
+}
+
+/**
+ * Two taps, like the reminder editor: the first arms it for three seconds, turning the button
+ * red and changing its words; the second deletes. Laid out like QuietButton.
+ */
+@Composable
+private fun DeleteAlarmButton(onDelete: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Hub.colors
+    val haptics = LocalHapticFeedback.current
+    var armed by remember { mutableStateOf(false) }
+    LaunchedEffect(armed) { if (armed) { delay(3_000); armed = false } }
+    val bg by animateColorAsState(if (armed) c.danger else c.raised2, Motion.toggleSpec(), label = "delBg")
+    val fg by animateColorAsState(if (armed) c.onDanger else c.danger, Motion.toggleSpec(), label = "delFg")
+    Row(
+        modifier
+            .heightIn(min = 48.dp)
+            .pressable(
+                onClick = {
+                    if (armed) {
+                        onDelete()
+                    } else {
+                        armed = true
+                        haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                    }
+                },
+                onClickLabel = if (armed) "Delete alarm" else "Delete",
+                showRipple = false,
+            )
+            .clip(CircleShape)
+            .background(bg)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon(Icons.Outlined.Delete, contentDescription = null, tint = fg, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        AnimatedContent(targetState = armed, transitionSpec = { quickFade() }, label = "delLabel") { a ->
+            Text(if (a) "Tap again to delete" else "Delete alarm", style = HubType.button, color = fg)
         }
     }
 }
@@ -482,10 +517,12 @@ private fun SegmentedChoices(
                 }
             },
     ) {
-        Row(Modifier.fillMaxSize().padding(4.dp)) {
+        // Segments run the track's full 48dp height so each is a full-size touch target; the
+        // indicator is still drawn 4dp inside the track.
+        Row(Modifier.fillMaxSize().padding(horizontal = 4.dp)) {
             labels.forEachIndexed { i, text ->
                 val isSelected = i == selected
-                val fg by animateColorAsState(if (isSelected) c.onDawn else c.ink, tween(160), label = "segFg")
+                val fg by animateColorAsState(if (isSelected) c.onDawn else c.ink, Motion.toggleSpec(), label = "segFg")
                 Box(
                     Modifier
                         .weight(1f)

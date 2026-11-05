@@ -6,30 +6,56 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import com.agam.pixelhub.MainActivity
+import com.agam.pixelhub.notify.ReminderNotifier
 import com.agam.pixelhub.ui.Tab
 
 /** Every AlarmManager call in the app goes through here. */
 class Scheduler(private val context: Context) {
     private val alarmManager = context.getSystemService(AlarmManager::class.java)
 
+    /**
+     * Snooze times, kept on disk: AlarmManager forgets everything on reboot, and a clock or
+     * time-zone change reschedules every alarm, so without this a snooze in progress was lost.
+     * Keys are "a<id>" (alarm) and "r<id>" (reminder); values are the trigger time.
+     */
+    private val snoozes = context.getSharedPreferences("snoozes", Context.MODE_PRIVATE)
+
     fun canScheduleExact(): Boolean = alarmManager.canScheduleExactAlarms()
 
     fun scheduleReminder(id: Long, atMillis: Long) = setExact(atMillis, trigger(ACTION_REMINDER, id))
-    fun scheduleReminderSnooze(id: Long, atMillis: Long) = setExact(atMillis, trigger(ACTION_REMINDER_SNOOZE, id))
+    fun scheduleReminderSnooze(id: Long, atMillis: Long) {
+        snoozes.edit().putLong("r$id", atMillis).apply()
+        setExact(atMillis, trigger(ACTION_REMINDER_SNOOZE, id))
+    }
+
+    /**
+     * Stops a reminder: its trigger, any snooze, and a notification still showing for it (so an
+     * edited reminder can't be completed or snoozed from the notification of its old time).
+     */
     fun cancelReminder(id: Long) {
         cancel(ACTION_REMINDER, id)
-        cancel(ACTION_REMINDER_SNOOZE, id)
+        cancelReminderSnooze(id)
+        ReminderNotifier.cancel(context, id)
     }
-    fun cancelReminderSnooze(id: Long) = cancel(ACTION_REMINDER_SNOOZE, id)
+    fun cancelReminderSnooze(id: Long) {
+        cancel(ACTION_REMINDER_SNOOZE, id)
+        snoozes.edit().remove("r$id").apply()
+    }
 
     fun scheduleAlarm(id: Long, atMillis: Long) = setAlarmClock(atMillis, trigger(ACTION_ALARM, id))
-    fun scheduleAlarmSnooze(id: Long, atMillis: Long) = setAlarmClock(atMillis, trigger(ACTION_ALARM_SNOOZE, id))
+    fun scheduleAlarmSnooze(id: Long, atMillis: Long) {
+        snoozes.edit().putLong("a$id", atMillis).apply()
+        setAlarmClock(atMillis, trigger(ACTION_ALARM_SNOOZE, id))
+    }
     fun cancelAlarm(id: Long) {
-        cancel(ACTION_ALARM, id)
+        cancelAlarmTrigger(id)
         cancelAlarmSnooze(id)
     }
+    /** Only the alarm's own trigger; a snooze in progress keeps going. */
+    fun cancelAlarmTrigger(id: Long) = cancel(ACTION_ALARM, id)
     fun cancelAlarmSnooze(id: Long) {
         cancel(ACTION_ALARM_SNOOZE, id)
+        snoozes.edit().remove("a$id").apply()
         context.getSystemService(NotificationManager::class.java).cancel(snoozedNotificationId(id))
     }
 
@@ -38,6 +64,33 @@ class Scheduler(private val context: Context) {
         context, id.toInt(), intent(ACTION_ALARM_SNOOZE_CANCEL, id),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
+
+    /** A snooze went off; it no longer needs restoring. */
+    fun snoozeFired(action: String, id: Long) {
+        val key = when (action) {
+            ACTION_ALARM_SNOOZE -> "a$id"
+            ACTION_REMINDER_SNOOZE -> "r$id"
+            else -> return
+        }
+        snoozes.edit().remove(key).apply()
+    }
+
+    /** After a reboot or clock change: re-arms snoozes still ahead and forgets the rest. */
+    fun restoreSnoozes() {
+        val now = System.currentTimeMillis()
+        val edit = snoozes.edit()
+        snoozes.all.forEach { (key, value) ->
+            val at = value as? Long
+            val id = key.drop(1).toLongOrNull()
+            if (at == null || id == null || at <= now) {
+                edit.remove(key)
+            } else when (key.first()) {
+                'a' -> setAlarmClock(at, trigger(ACTION_ALARM_SNOOZE, id))
+                'r' -> setExact(at, trigger(ACTION_REMINDER_SNOOZE, id))
+            }
+        }
+        edit.apply()
+    }
 
     /** Health nudges are quiet checks, so no status-bar alarm icon: plain exact alarm. */
     fun scheduleNudge(id: Long, atMillis: Long) = setExact(atMillis, trigger(ACTION_HEALTH_NUDGE, id))

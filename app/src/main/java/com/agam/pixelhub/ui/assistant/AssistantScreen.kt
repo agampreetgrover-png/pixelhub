@@ -20,6 +20,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -56,6 +58,7 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -77,8 +80,10 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -114,9 +119,13 @@ import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.Stagger
+import com.agam.pixelhub.ui.motion.StatusSwap
 import com.agam.pixelhub.ui.motion.ThinkingIndicator
+import com.agam.pixelhub.ui.motion.hubAnimateItem
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
+import com.agam.pixelhub.ui.motion.revealEnter
+import com.agam.pixelhub.ui.motion.revealExit
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.reminders.ReminderDraft
 import com.agam.pixelhub.ui.reminders.ReminderEditorDialog
@@ -179,8 +188,8 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
-    // Messages already in the conversation when the screen opens rise in with the stagger;
-    // anything new slides in from its speaker's side. Nothing animates twice.
+    // Messages already in the conversation when the screen opens are simply there; only messages
+    // that arrive during this visit slide in from their speaker's side. Nothing animates twice.
     val stagger = rememberStagger()
     val initialIds = remember { items.mapTo(HashSet()) { it.id } }
     val seen = remember { mutableSetOf<Any>() }
@@ -188,6 +197,8 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
     // The newest row, counted from the data: the list's layout info still describes the previous
     // frame when this runs, so it would scroll to the old last row (or nowhere on first open).
     LaunchedEffect(items.size, busy, hasKey) {
+        // An empty chat is the intro (and, without a key, the notice above it): nothing to follow.
+        if (items.isEmpty() && !busy) return@LaunchedEffect
         val last = (if (!hasKey) 1 else 0) + (if (items.isEmpty()) 1 else 0) + items.size + (if (busy) 1 else 0) - 1
         if (last > 0) listState.animateScrollToItem(last)
     }
@@ -225,6 +236,7 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
                 busy = busy,
                 listening = listening,
                 onSend = { submit() },
+                onStop = { vm.stop() },
                 onMic = { speak() },
             )
         },
@@ -249,7 +261,7 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
                 item(key = "no-key", contentType = "notice") {
                     NoKeyNotice(
                         onOpenSettings = onOpenSettings,
-                        modifier = Modifier.animateItem().staggerIn(stagger, "no-key", 0),
+                        modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "no-key", 0),
                     )
                 }
             }
@@ -261,7 +273,7 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
                         onStarter = { prefill(it) },
                         // Without a key a sent request can only fail, so a suggestion just fills the field.
                         onSuggest = { if (hasKey) vm.send(it) else prefill(it) },
-                        modifier = Modifier.animateItem(),
+                        modifier = hubAnimateItem(fadeIn = false),
                     )
                 }
             }
@@ -275,20 +287,22 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
                         is ChatItem.Action -> "action"
                     }
                 },
-            ) { index, item ->
+            ) { _, item ->
                 val fromEnd = item is ChatItem.User
-                val enter = if (item.id in initialIds) {
-                    Modifier.staggerIn(stagger, item.id, (items.lastIndex - index).coerceAtLeast(0))
-                } else {
-                    Modifier.sideEntrance(seen, item.id, fromEnd)
-                }
+                val enter = if (item.id in initialIds) Modifier else Modifier.sideEntrance(seen, item.id, fromEnd)
                 when (item) {
-                    is ChatItem.User -> Bubble(item.text, mine = true, enter = enter, modifier = Modifier.animateItem())
-                    is ChatItem.Bot -> Column(Modifier.animateItem()) {
+                    is ChatItem.User -> Bubble(item.text, mine = true, enter = enter, modifier = hubAnimateItem(fadeIn = false))
+                    is ChatItem.Bot -> Column(hubAnimateItem(fadeIn = false)) {
                         Bubble(item.text, mine = false, isError = item.isError, enter = enter, modifier = Modifier)
                         item.via?.let { ViaNote(it) }
+                        RetryRow(
+                            visible = item.retryText != null,
+                            authError = item.authError,
+                            onRetry = { vm.retry(item.id) },
+                            onOpenSettings = onOpenSettings,
+                        )
                     }
-                    is ChatItem.Action -> Column(Modifier.animateItem()) {
+                    is ChatItem.Action -> Column(hubAnimateItem(fadeIn = false)) {
                         ActionCard(
                             item = item,
                             onConfirm = { vm.confirm(item.id) },
@@ -308,7 +322,7 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
                 // A new key per request, so the bubble slides in each time.
                 val key = "thinking-${items.lastOrNull()?.id ?: 0L}"
                 item(key = key, contentType = "thinking") {
-                    ThinkingBubble(enter = Modifier.sideEntrance(seen, key, fromEnd = false), modifier = Modifier.animateItem())
+                    ThinkingBubble(enter = Modifier.sideEntrance(seen, key, fromEnd = false), modifier = hubAnimateItem(fadeIn = false))
                 }
             }
         }
@@ -397,6 +411,7 @@ private fun InputBar(
     busy: Boolean,
     listening: Boolean,
     onSend: () -> Unit,
+    onStop: () -> Unit,
     onMic: () -> Unit,
 ) {
     val c = Hub.colors
@@ -444,7 +459,10 @@ private fun InputBar(
             Spacer(Modifier.width(6.dp))
             MicButton(enabled = !busy, listening = listening, onClick = onMic)
             Spacer(Modifier.width(6.dp))
-            SendButton(enabled = value.text.isNotBlank() && !busy, onClick = onSend)
+            // While a request is out, Send becomes Stop.
+            StatusSwap(busy, alignment = Alignment.Center) { b ->
+                if (b) StopButton(onClick = onStop) else SendButton(enabled = value.text.isNotBlank(), onClick = onSend)
+            }
         }
     }
 }
@@ -466,9 +484,9 @@ private fun MicButton(enabled: Boolean, listening: Boolean, onClick: () -> Unit)
     Box(
         Modifier
             .size(44.dp)
+            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Speak", showRipple = false)
             .clip(CircleShape)
             .background(bg)
-            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Speak")
             .semantics { contentDescription = "Speak" },
         contentAlignment = Alignment.Center,
     ) {
@@ -490,13 +508,30 @@ private fun SendButton(enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .size(44.dp)
+            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Send", showRipple = false)
             .clip(CircleShape)
             .background(bg)
-            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Send")
             .semantics { contentDescription = "Send" },
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, tint = fg, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** Stop: replaces Send while a request is out, in Send's own tones, and cancels it. */
+@Composable
+private fun StopButton(onClick: () -> Unit) {
+    val c = Hub.colors
+    Box(
+        Modifier
+            .size(44.dp)
+            .pressable(onClick = onClick, pressedScale = 0.9f, onClickLabel = "Stop", showRipple = false)
+            .clip(CircleShape)
+            .background(if (c.isDark) c.ink else c.chrome)
+            .semantics { contentDescription = "Stop" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Rounded.Stop, contentDescription = null, tint = if (c.isDark) c.ground else c.onChrome, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -603,7 +638,7 @@ private fun NoKeyNotice(onOpenSettings: () -> Unit, modifier: Modifier = Modifie
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "Add a Gemini or Grok API key in Settings to use the assistant. The shortcuts below still fill in a request for you.",
+            "Add a Gemini or Groq API key in Settings to use the assistant. The shortcuts below still fill in a request for you.",
             style = HubType.body.copy(fontSize = 14.sp, lineHeight = 21.sp),
             color = c.inkMuted,
         )
@@ -651,6 +686,19 @@ private fun Bubble(text: String, mine: Boolean, enter: Modifier, modifier: Modif
                 .background(bg)
                 .padding(horizontal = 16.dp, vertical = 11.dp),
         )
+    }
+}
+
+/** Under a failed or stopped turn: Retry, plus Open Settings when the key looks wrong. */
+@Composable
+private fun RetryRow(visible: Boolean, authError: Boolean, onRetry: () -> Unit, onOpenSettings: () -> Unit) {
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    AnimatedVisibility(visible = visible, enter = revealEnter(reduced), exit = revealExit(reduced)) {
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CardButton("Retry", bg = c.raised, fg = c.ink, onClick = onRetry)
+            if (authError) CardButton("Open Settings", bg = c.raised, fg = c.ink, onClick = onOpenSettings)
+        }
     }
 }
 
@@ -808,6 +856,7 @@ private fun lookOf(item: ChatItem.Action): ActionLook {
  * then Cancel / Edit / Confirm. Confirming collapses the buttons and swaps the icon for a check;
  * cancelling dims the whole card.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ActionCard(
     item: ChatItem.Action,
@@ -874,10 +923,11 @@ private fun ActionCard(
             enter = fadeIn(tween(160)) + expandVertically(tween(220, easing = Motion.EaseOut)),
             exit = fadeOut(tween(120)) + shrinkVertically(tween(200, easing = Motion.EaseOut)),
         ) {
-            Row(
+            // Wraps at large font sizes: Confirm then takes a full-width row of its own.
+            FlowRow(
                 Modifier.fillMaxWidth().padding(top = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 CardButton("Cancel", bg = p.quietBg, fg = p.quietFg, onClick = onCancel)
                 if (onEdit != null) CardButton("Edit", bg = p.quietBg, fg = p.quietFg, onClick = onEdit)
@@ -901,9 +951,9 @@ private fun CardButton(text: String, bg: Color, fg: Color, onClick: () -> Unit, 
     Box(
         modifier
             .heightIn(min = 48.dp)
+            .pressable(onClick = onClick, pressedScale = 0.95f, onClickLabel = text, showRipple = false)
             .clip(CircleShape)
             .background(bg)
-            .pressable(onClick = onClick, pressedScale = 0.95f, onClickLabel = text)
             .padding(horizontal = 20.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -913,7 +963,8 @@ private fun CardButton(text: String, bg: Color, fg: Color, onClick: () -> Unit, 
 
 /**
  * The card's icon in a round well. When the action is done the icon gives way to a check on
- * an inverted disc (the card's text colour), which scales up from 0.7 in 220ms.
+ * an inverted disc (the card's text colour), which scales up from 0.85 in 220ms, with one
+ * confirm haptic. Cards already done when the screen opens stay silent.
  */
 @Composable
 private fun StatusMark(look: ActionLook, done: Boolean) {
@@ -924,6 +975,12 @@ private fun StatusMark(look: ActionLook, done: Boolean) {
         tween(if (reduced) 150 else 220, easing = Motion.EaseOut),
         label = "statusPop",
     )
+    val haptics = LocalHapticFeedback.current
+    val wasDone = remember { booleanArrayOf(done) }
+    LaunchedEffect(done) {
+        if (done && !wasDone[0]) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        wasDone[0] = done
+    }
     Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier
@@ -946,7 +1003,7 @@ private fun StatusMark(look: ActionLook, done: Boolean) {
                     .graphicsLayer {
                         alpha = pop
                         if (!reduced) {
-                            val s = 0.7f + 0.3f * pop
+                            val s = 0.85f + 0.15f * pop
                             scaleX = s
                             scaleY = s
                         }
