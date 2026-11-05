@@ -105,7 +105,7 @@ private fun PrivacyPage(onClose: () -> Unit) {
             Part(
                 stagger, 3,
                 "What it never does",
-                "PixelHub never writes health data. Nothing is uploaded or shared, and health data is never sent to the Gemini assistant.",
+                "PixelHub never writes health data. Nothing is uploaded or shared, and PixelHub has no internet access.",
             )
 
             Column(

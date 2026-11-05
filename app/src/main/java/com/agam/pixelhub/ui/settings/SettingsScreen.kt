@@ -162,7 +162,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpen: (Tab) -> Unit = {}) {
             }
 
             item(key = "ai_header") { GroupLabel("Assistant") }
-            item(key = "ai") { AssistantAiSection() }
+            item(key = "ai") { AssistantLogSection() }
 
             item(key = "about_header") { GroupLabel("About") }
             item(key = "about") {

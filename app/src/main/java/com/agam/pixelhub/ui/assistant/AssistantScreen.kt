@@ -151,6 +151,7 @@ private data class Suggestion(val text: String, val kind: Kind)
 
 private val SUGGESTIONS = listOf(
     Suggestion("Remind me to call mom at 6pm", Kind.REMINDER),
+    Suggestion("Kal subah 7 baje dawai yaad dilana", Kind.REMINDER),
     Suggestion("Wake me up at 6:30 on weekdays", Kind.ALARM),
     Suggestion("Spent 250 on lunch", Kind.EXPENSE),
     Suggestion("Open Spotify", Kind.APP),
@@ -176,11 +177,9 @@ private val MetaStyle = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp)
 private val LabelStyle = HubType.small.copy(fontWeight = FontWeight.Medium)
 
 @Composable
-fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: () -> Unit) {
+fun AssistantScreen(vm: AssistantViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val items by vm.items.collectAsStateWithLifecycle()
-    val busy by vm.busy.collectAsStateWithLifecycle()
-    val hasKey by vm.hasApiKey.collectAsStateWithLifecycle()
     var input by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var editing by remember { mutableStateOf<ChatItem.Action?>(null) }
     var listening by remember { mutableStateOf(false) }
@@ -196,10 +195,10 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
 
     // The newest row, counted from the data: the list's layout info still describes the previous
     // frame when this runs, so it would scroll to the old last row (or nowhere on first open).
-    LaunchedEffect(items.size, busy, hasKey) {
-        // An empty chat is the intro (and, without a key, the notice above it): nothing to follow.
-        if (items.isEmpty() && !busy) return@LaunchedEffect
-        val last = (if (!hasKey) 1 else 0) + (if (items.isEmpty()) 1 else 0) + items.size + (if (busy) 1 else 0) - 1
+    LaunchedEffect(items.size) {
+        // An empty chat is the intro: nothing to follow.
+        if (items.isEmpty()) return@LaunchedEffect
+        val last = items.size - 1
         if (last > 0) listState.animateScrollToItem(last)
     }
 
@@ -209,7 +208,7 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
     }
 
     fun submit() {
-        if (input.text.isBlank() || busy) return
+        if (input.text.isBlank()) return
         vm.send(input.text)
         input = TextFieldValue("")
     }
@@ -233,10 +232,8 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
                 value = input,
                 onValueChange = { input = it },
                 focus = focus,
-                busy = busy,
                 listening = listening,
                 onSend = { submit() },
-                onStop = { vm.stop() },
                 onMic = { speak() },
             )
         },
@@ -257,22 +254,13 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
             contentPadding = PaddingValues(start = Gutter, end = Gutter, top = 4.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (!hasKey) {
-                item(key = "no-key", contentType = "notice") {
-                    NoKeyNotice(
-                        onOpenSettings = onOpenSettings,
-                        modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "no-key", 0),
-                    )
-                }
-            }
             if (items.isEmpty()) {
                 item(key = "intro", contentType = "intro") {
                     Intro(
                         stagger = stagger,
                         onSpeak = { speak() },
                         onStarter = { prefill(it) },
-                        // Without a key a sent request can only fail, so a suggestion just fills the field.
-                        onSuggest = { if (hasKey) vm.send(it) else prefill(it) },
+                        onSuggest = { vm.send(it) },
                         modifier = hubAnimateItem(fadeIn = false),
                     )
                 }
@@ -292,37 +280,19 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: 
                 val enter = if (item.id in initialIds) Modifier else Modifier.sideEntrance(seen, item.id, fromEnd)
                 when (item) {
                     is ChatItem.User -> Bubble(item.text, mine = true, enter = enter, modifier = hubAnimateItem(fadeIn = false))
-                    is ChatItem.Bot -> Column(hubAnimateItem(fadeIn = false)) {
-                        Bubble(item.text, mine = false, isError = item.isError, enter = enter, modifier = Modifier)
-                        item.via?.let { ViaNote(it) }
-                        RetryRow(
-                            visible = item.retryText != null,
-                            authError = item.authError,
-                            onRetry = { vm.retry(item.id) },
-                            onOpenSettings = onOpenSettings,
-                        )
-                    }
-                    is ChatItem.Action -> Column(hubAnimateItem(fadeIn = false)) {
-                        ActionCard(
-                            item = item,
-                            onConfirm = { vm.confirm(item.id) },
-                            onEdit = when (item.command) {
-                                is ParsedCommand.CreateReminder, is ParsedCommand.CreateAlarm -> ({ editing = item })
-                                else -> null
-                            },
-                            onCancel = { vm.cancel(item.id) },
-                            enter = enter,
-                            modifier = Modifier,
-                        )
-                        item.via?.let { ViaNote(it) }
-                    }
-                }
-            }
-            if (busy) {
-                // A new key per request, so the bubble slides in each time.
-                val key = "thinking-${items.lastOrNull()?.id ?: 0L}"
-                item(key = key, contentType = "thinking") {
-                    ThinkingBubble(enter = Modifier.sideEntrance(seen, key, fromEnd = false), modifier = hubAnimateItem(fadeIn = false))
+                    is ChatItem.Bot ->
+                        Bubble(item.text, mine = false, isError = item.isError, enter = enter, modifier = hubAnimateItem(fadeIn = false))
+                    is ChatItem.Action -> ActionCard(
+                        item = item,
+                        onConfirm = { vm.confirm(item.id) },
+                        onEdit = when (item.command) {
+                            is ParsedCommand.CreateReminder, is ParsedCommand.CreateAlarm -> ({ editing = item })
+                            else -> null
+                        },
+                        onCancel = { vm.cancel(item.id) },
+                        enter = enter,
+                        modifier = hubAnimateItem(fadeIn = false),
+                    )
                 }
             }
         }
@@ -408,10 +378,8 @@ private fun InputBar(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     focus: FocusRequester,
-    busy: Boolean,
     listening: Boolean,
     onSend: () -> Unit,
-    onStop: () -> Unit,
     onMic: () -> Unit,
 ) {
     val c = Hub.colors
@@ -457,12 +425,9 @@ private fun InputBar(
                 },
             )
             Spacer(Modifier.width(6.dp))
-            MicButton(enabled = !busy, listening = listening, onClick = onMic)
+            MicButton(enabled = true, listening = listening, onClick = onMic)
             Spacer(Modifier.width(6.dp))
-            // While a request is out, Send becomes Stop.
-            StatusSwap(busy, alignment = Alignment.Center) { b ->
-                if (b) StopButton(onClick = onStop) else SendButton(enabled = value.text.isNotBlank(), onClick = onSend)
-            }
+            SendButton(enabled = value.text.isNotBlank(), onClick = onSend)
         }
     }
 }
@@ -515,23 +480,6 @@ private fun SendButton(enabled: Boolean, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, tint = fg, modifier = Modifier.size(20.dp))
-    }
-}
-
-/** Stop: replaces Send while a request is out, in Send's own tones, and cancels it. */
-@Composable
-private fun StopButton(onClick: () -> Unit) {
-    val c = Hub.colors
-    Box(
-        Modifier
-            .size(44.dp)
-            .pressable(onClick = onClick, pressedScale = 0.9f, onClickLabel = "Stop", showRipple = false)
-            .clip(CircleShape)
-            .background(if (c.isDark) c.ink else c.chrome)
-            .semantics { contentDescription = "Stop" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(Icons.Rounded.Stop, contentDescription = null, tint = if (c.isDark) c.ground else c.onChrome, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -620,47 +568,9 @@ private fun Intro(
     }
 }
 
-@Composable
-private fun NoKeyNotice(onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    Column(
-        modifier
-            .fillMaxWidth()
-            .hubCard(c.raised)
-            .padding(20.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(44.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
-                Icon(Icons.Outlined.Key, contentDescription = null, tint = c.ink, modifier = Modifier.size(22.dp))
-            }
-            Spacer(Modifier.width(14.dp))
-            Text("AI key needed", style = HubType.section, color = c.ink)
-        }
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "Add a Gemini or Groq API key in Settings to use the assistant. The shortcuts below still fill in a request for you.",
-            style = HubType.body.copy(fontSize = 14.sp, lineHeight = 21.sp),
-            color = c.inkMuted,
-        )
-        Spacer(Modifier.height(16.dp))
-        PrimaryButton("Open Settings", onClick = onOpenSettings, modifier = Modifier.fillMaxWidth())
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------------------------
-
-/** Small caption under a turn the backup AI answered. */
-@Composable
-private fun ViaNote(text: String) {
-    Text(
-        text,
-        style = MetaStyle,
-        color = Hub.colors.inkMuted,
-        modifier = Modifier.padding(start = 12.dp, top = 4.dp),
-    )
-}
 
 /**
  * A message. The user's sit in the black chrome tone (a step lighter in the dark theme, where
@@ -686,37 +596,6 @@ private fun Bubble(text: String, mine: Boolean, enter: Modifier, modifier: Modif
                 .background(bg)
                 .padding(horizontal = 16.dp, vertical = 11.dp),
         )
-    }
-}
-
-/** Under a failed or stopped turn: Retry, plus Open Settings when the key looks wrong. */
-@Composable
-private fun RetryRow(visible: Boolean, authError: Boolean, onRetry: () -> Unit, onOpenSettings: () -> Unit) {
-    val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    AnimatedVisibility(visible = visible, enter = revealEnter(reduced), exit = revealExit(reduced)) {
-        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CardButton("Retry", bg = c.raised, fg = c.ink, onClick = onRetry)
-            if (authError) CardButton("Open Settings", bg = c.raised, fg = c.ink, onClick = onOpenSettings)
-        }
-    }
-}
-
-@Composable
-private fun ThinkingBubble(enter: Modifier, modifier: Modifier) {
-    val c = Hub.colors
-    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-        Row(
-            enter
-                .clip(TheirsShape)
-                .background(c.raised)
-                .padding(start = 12.dp, end = 18.dp, top = 9.dp, bottom = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ThinkingIndicator(c.ink, size = 24.dp)
-            Spacer(Modifier.width(10.dp))
-            Text("Thinking", style = HubType.body, color = c.inkMuted)
-        }
     }
 }
 

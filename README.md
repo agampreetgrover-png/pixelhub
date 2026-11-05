@@ -7,7 +7,7 @@ A personal all-in-one Android app for a Google Pixel 9a. Everything works by han
 - **Money**: log expenses and income, set a monthly budget and per-category budgets, filter by category, and see where the money went each month. Hold **Add** (or **Income**) to repeat the last entry.
 - **Health**: reads steps, distance, active calories and exercise from Health Connect, shows today and the past week against a daily step goal, and can send nudges, e.g. a reminder to walk when you're behind.
 - **Calendar**: shows your upcoming Google Calendar events, read from the calendars synced to the phone, so no sign-in is needed. It can also write your reminders and alarms into a calendar you pick.
-- **Assistant**: type or speak "remind me to call mom at 6pm" or "got paid 5000 salary". The request becomes a draft card that you confirm before anything is created. It also opens installed apps ("open spotify"). It works with Gemini, Groq or xAI Grok, using your own API key.
+- **Assistant**: type or speak "remind me to call mom at 6pm", "spent 250 on lunch", "add 30 to food" or Hinglish like "kal subah 7 baje dawai yaad dilana". Keyword rules on the phone turn it into a draft card that you confirm before anything is created, in well under a millisecond and with no internet or AI service. It also opens apps ("open spotify", "whatsapp kholo"), dials numbers, navigates and searches. If a request isn't understood, it says so straight away. Every request is logged under **Settings → Assistant log**.
 
 **Home** gathers it all:
 - a swipeable alarm and reminder card deck;
@@ -17,7 +17,7 @@ A personal all-in-one Android app for a Google Pixel 9a. Everything works by han
 
 There are 10 themes (System, Light, Dark, Black, Midnight, Forest, Plum, Ocean, Rose, Sand). Switching between them crossfades.
 
-It is built with Kotlin, Jetpack Compose, Material 3, Room, DataStore, OkHttp and Health Connect. There are no Google Play services and no account sign-in.
+It is built with Kotlin, Jetpack Compose, Material 3, Room, DataStore and Health Connect. There are no Google Play services, no account sign-in and no internet permission: nothing leaves the phone.
 
 ## Build and install
 
@@ -47,17 +47,14 @@ gradlew installDebug   # build and install on the connected phone
    - The Alarms notification category is on
 3. **Calendar**: allow calendar access to see your events on Home and the Calendar page. Under **Calendar sync** you can pick a calendar for PixelHub to write to.
 4. **Health**: tap **Connect** and allow Health Connect access. Turn on **Background reading** if you want nudges while the app is closed.
-5. **Assistant** (optional): add a key under **Settings → Assistant**. Keys are stored only on the phone.
-   - Gemini: <https://aistudio.google.com/apikey>. The default model is `gemini-flash-latest`.
-   - Groq: <https://console.groq.com/keys>. Tap a model chip to pick one.
-6. Pick a theme under **Appearance**.
+5. Pick a theme under **Appearance**.
 
 ## Checking that it works
 
 - **Alarm**: set an alarm 1–2 minutes ahead, lock the phone and switch to silent. It should light the screen and ring. Snooze should ring again after the chosen number of minutes.
 - **Doze**: with USB connected, run `adb shell dumpsys deviceidle force-idle`. A reminder should still fire on time.
 - **Reboot**: restart the phone. `adb shell dumpsys alarm | findstr pixelhub` should still list the scheduled items.
-- **Assistant**: try "wake me up at 6:30 on weekdays", "spent 250 on lunch" and "open spotify". Each should show a confirmation card. Long requests can be stopped, and failed ones retried.
+- **Assistant**: try "wake me up at 6:30 on weekdays", "spent 250 on lunch", "kal subah 7 baje dawai yaad dilana" and "open spotify". Each should show a confirmation card at once. "what is the weather" should get an immediate "I didn't understand that". Both show up under **Settings → Assistant log**, with the rule that matched and how long it took. Type "help" for everything it understands.
 - **Open a tab directly**:
 
   ```
@@ -84,7 +81,7 @@ gradlew installDebug   # build and install on the connected phone
 | `.../health/` | Health Connect reads, nudge rules, and the privacy-policy activity Health Connect requires. |
 | `.../calendar/` | Reading upcoming events (`CalendarEvents.kt`) and writing reminders and alarms to a calendar (`CalendarSync.kt`). |
 | `.../launcher/` | The installed-app list and launching apps for the assistant. |
-| `.../ai/` | The Gemini client, the Groq/xAI client, the prompt, and the command parser. |
+| `.../ai/` | The rule-based assistant. `Lexicon.kt` holds every English and Hinglish keyword (add new words there). `DateTimeRules.kt` reads times, dates and repeats. `CommandParser.kt` picks the action. `AssistantLog.kt` keeps the request log. |
 | `.../ui/` | Compose screens: Home, Reminders, Alarms, Money, Health, Calendar, Assistant and Settings. |
 | `.../ui/theme/` | Colour tokens (`HubColors`), the 10 themes, and Poppins type. |
 | `.../ui/motion/` | One shared motion vocabulary: press feedback, springs, entrance stagger, rolling numbers, shape morphs and the small helpers in `Micro.kt`. |

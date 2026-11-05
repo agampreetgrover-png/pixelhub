@@ -1,9 +1,7 @@
 package com.agam.pixelhub
 
 import android.content.Context
-import com.agam.pixelhub.ai.AssistantAi
-import com.agam.pixelhub.ai.GeminiClient
-import com.agam.pixelhub.ai.GrokClient
+import com.agam.pixelhub.ai.AssistantLog
 import com.agam.pixelhub.calendar.CalendarSync
 import com.agam.pixelhub.data.AlarmRepository
 import com.agam.pixelhub.data.AppDatabase
@@ -19,8 +17,8 @@ import com.agam.pixelhub.scheduling.Scheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import okhttp3.OkHttpClient
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
+import java.io.File
 
 /** Hand-wired dependencies, one instance per process. */
 class AppContainer(context: Context) {
@@ -43,16 +41,12 @@ class AppContainer(context: Context) {
         onBudgetAlert = { BudgetNotifier.show(appContext, it) },
     )
     val installedApps = InstalledApps(appContext)
-    // OkHttp's default 10 s read timeout is shorter than a busy model takes to start answering.
-    private val http by lazy {
-        OkHttpClient.Builder()
-            .callTimeout(60, TimeUnit.SECONDS)
-            .readTimeout(45, TimeUnit.SECONDS)
-            .build()
-    }
-    val gemini: GeminiClient by lazy { GeminiClient(http) }
-    val grok: GrokClient by lazy { GrokClient(http) }
 
-    /** What the Assistant should call: picks Gemini or Grok from Settings. */
-    val ai = AssistantAi(settings, { gemini }, { grok })
+    /** Every assistant request and how the rules handled it, shown in Settings. */
+    val assistantLog = AssistantLog(File(appContext.filesDir, "assistant_log.json"), appScope)
+
+    init {
+        // The assistant no longer uses Gemini or Groq: delete any API keys saved by older versions.
+        appScope.launch { settings.forgetCloudAi() }
+    }
 }

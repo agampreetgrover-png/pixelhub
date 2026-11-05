@@ -219,7 +219,7 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
                     )
                     Tab.REMINDERS -> RemindersScreen()
                     Tab.ALARMS -> AlarmsScreen()
-                    Tab.ASSISTANT -> AssistantScreen(assistant, onOpenSettings = { go(Tab.SETTINGS) }, onBack = { back() })
+                    Tab.ASSISTANT -> AssistantScreen(assistant, onBack = { back() })
                     Tab.SETTINGS -> SettingsScreen(onBack = { back() }, onOpen = { go(it) })
                     Tab.HEALTH -> HealthScreen()
                     Tab.EXPENSES -> ExpensesScreen()
