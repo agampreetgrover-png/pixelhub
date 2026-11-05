@@ -108,6 +108,8 @@ import com.agam.pixelhub.ui.ScreenScaffold
 import com.agam.pixelhub.ui.alarms.AlarmEditorDialog
 import com.agam.pixelhub.ui.expenses.color
 import com.agam.pixelhub.ui.expenses.icon
+import com.agam.pixelhub.ui.expenses.incomeSoft
+import com.agam.pixelhub.ui.expenses.incomeText
 import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
@@ -764,12 +766,16 @@ private fun lookOf(item: ChatItem.Action): ActionLook {
             packageName = item.target?.packageName,
         )
         is ParsedCommand.LogExpense -> {
-            val tone = cmd.category.color(c)
+            val tone = if (cmd.isIncome) c.ok else cmd.category.color(c)
             ActionLook(
-                kind = "Log expense",
+                kind = if (cmd.isIncome) "Income" else "Log expense",
                 icon = cmd.category.icon,
-                palette = plainPalette(c, well = tone.copy(alpha = 0.16f), iconTint = tone),
-                title = Money.format(cmd.amountPaise),
+                palette = if (cmd.isIncome) {
+                    plainPalette(c, well = c.incomeSoft(), iconTint = c.ok).copy(fg = c.ok)
+                } else {
+                    plainPalette(c, well = tone.copy(alpha = 0.16f), iconTint = tone)
+                },
+                title = if (cmd.isIncome) incomeText(cmd.amountPaise) else Money.format(cmd.amountPaise),
                 titleStyle = HubType.clockMedium,
                 details = listOfNotNull(
                     cmd.category.label,

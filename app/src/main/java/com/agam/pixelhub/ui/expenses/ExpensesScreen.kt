@@ -46,13 +46,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AddCard
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FilterList
-import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Savings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -81,14 +81,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.selected
@@ -103,6 +106,7 @@ import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Expense
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.agam.pixelhub.data.ExpenseCategory
+import com.agam.pixelhub.data.ExpenseKind
 import com.agam.pixelhub.expenses.CategoryTotal
 import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.expenses.MonthSummary
@@ -115,6 +119,7 @@ import com.agam.pixelhub.ui.HubListRow
 import com.agam.pixelhub.ui.HubSheet
 import com.agam.pixelhub.ui.HubTextField
 import com.agam.pixelhub.ui.PrimaryButton
+import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.QuickAction
 import com.agam.pixelhub.ui.ScreenScaffold
 import com.agam.pixelhub.ui.hubCard
@@ -138,13 +143,13 @@ import kotlin.math.roundToInt
 /** A request to open the editor; a fresh object each time so the sheet always starts clean. */
 private class EditorRequest(val initial: Expense?)
 
-/** Keeps an open editor (and the expense it started from) through rotation and theme changes. */
+/** Keeps an open editor (and the entry it started from, with its kind) through rotation and theme changes. */
 private val EditorRequestSaver: Saver<EditorRequest?, ArrayList<Any>> = Saver(
     save = { r ->
         r?.let {
             val e = it.initial
             if (e == null) arrayListOf(false)
-            else arrayListOf(true, e.id, e.amountPaise, e.category.name, e.note, e.spentAt)
+            else arrayListOf(true, e.id, e.amountPaise, e.category.name, e.note, e.spentAt, e.kind.name)
         }
     },
     restore = { l ->
@@ -153,6 +158,7 @@ private val EditorRequestSaver: Saver<EditorRequest?, ArrayList<Any>> = Saver(
             Expense(
                 id = l[1] as Long, amountPaise = l[2] as Long, category = ExpenseCategory.valueOf(l[3] as String),
                 note = l[4] as String, spentAt = l[5] as Long,
+                kind = (l.getOrNull(6) as? String)?.let { ExpenseKind.valueOf(it) } ?: ExpenseKind.EXPENSE,
             ),
         )
     },
@@ -164,10 +170,11 @@ private val RowShape = RoundedCornerShape(18.dp)
 private val MonthPillWidth = 176.dp
 
 /**
- * The Expenses page, laid out like a wallet: the month's spending on a violet card with the
- * month switcher seated in its notch and the biggest category peeking out behind, a card of
- * quick actions, the categories, then the month's transactions in one card per day.
- * Everything is a direct control; the assistant is only another way in.
+ * The Expenses page, laid out like a wallet: the month's spending (and money in) on a violet
+ * card with the month switcher seated in its notch and the biggest category peeking out
+ * behind, a card of quick actions, the categories, then the month's transactions, spending and
+ * income together, in one card per day. Everything is a direct control; the assistant is only
+ * another way in.
  */
 @Composable
 fun ExpensesScreen() {
@@ -188,7 +195,9 @@ fun ExpensesScreen() {
         today = LocalDate.now()
         onPauseOrDispose { }
     }
+    // Either one spending category, or income only (never both), or neither for everything.
     var filter by rememberSaveable { mutableStateOf<ExpenseCategory?>(null) }
+    var incomeOnly by rememberSaveable { mutableStateOf(false) }
     var editor by rememberSaveable(stateSaver = EditorRequestSaver) { mutableStateOf<EditorRequest?>(null) }
     var budgetsOpen by rememberSaveable { mutableStateOf(false) }
     var picking by rememberSaveable { mutableStateOf(false) }
@@ -206,31 +215,47 @@ fun ExpensesScreen() {
     // The floating Add appears once the quick actions have scrolled away.
     val showFab by remember { derivedStateOf { list.firstVisibleItemIndex >= 2 } }
 
-    val days = remember(s, filter) {
-        s?.expenses.orEmpty()
-            .filter { filter == null || it.category == filter }
+    val days = remember(s, filter, incomeOnly) {
+        s?.entries.orEmpty()
+            .filter {
+                when {
+                    incomeOnly -> it.isIncome
+                    filter != null -> !it.isIncome && it.category == filter
+                    else -> true
+                }
+            }
             .groupBy { Instant.ofEpochMilli(it.spentAt).atZone(zone).toLocalDate() }
             .toList()
     }
 
+    fun showCategory(cat: ExpenseCategory?) {
+        filter = cat
+        incomeOnly = false
+    }
+    fun showIncome(on: Boolean) {
+        incomeOnly = on
+        if (on) filter = null
+    }
     fun delete(e: Expense) {
         app.appScope.launch { app.expenses.delete(e) }
         uiScope.launch {
             snackbar.currentSnackbarData?.dismiss()
             val what = e.note.ifBlank { e.category.label }
-            val undo = snackbar.showSnackbar("Deleted ${Money.format(e.amountPaise)} $what", actionLabel = "Undo", duration = SnackbarDuration.Short)
+            val amount = if (e.isIncome) incomeText(e.amountPaise) else Money.format(e.amountPaise)
+            val undo = snackbar.showSnackbar("Deleted $amount $what", actionLabel = "Undo", duration = SnackbarDuration.Short)
             if (undo == SnackbarResult.ActionPerformed) app.appScope.launch { app.expenses.restore(e) }
         }
     }
-    fun add() {
-        editor = EditorRequest(draftFor(month, thisMonth))
+    fun add(kind: ExpenseKind = ExpenseKind.EXPENSE) {
+        editor = EditorRequest(draftFor(month, thisMonth, kind))
     }
-    fun repeatLast() {
-        val last = s?.expenses?.firstOrNull()
+    /** Opens the editor on a copy of the month's latest entry of [kind], dated now. */
+    fun repeatLast(kind: ExpenseKind) {
+        val last = (if (kind == ExpenseKind.INCOME) s?.incomes else s?.expenses)?.firstOrNull()
         editor = EditorRequest(
             last?.let {
-                Expense(amountPaise = it.amountPaise, category = it.category, note = it.note, spentAt = System.currentTimeMillis())
-            } ?: draftFor(month, thisMonth),
+                Expense(amountPaise = it.amountPaise, category = it.category, note = it.note, spentAt = System.currentTimeMillis(), kind = kind)
+            } ?: draftFor(month, thisMonth, kind),
         )
     }
 
@@ -263,16 +288,18 @@ fun ExpensesScreen() {
                     thisMonth = thisMonth,
                     onMonth = { month = it },
                     filter = filter,
-                    onFilter = { filter = it },
+                    onFilter = { showCategory(it) },
                     modifier = Modifier.animateItem().staggerIn(stagger, "hero", 0).padding(horizontal = Gutter),
                 )
             }
             item(key = "actions") {
                 QuickActionsCard(
                     filter = filter,
-                    hasLast = s?.expenses?.isNotEmpty() == true,
+                    incomeOnly = incomeOnly,
                     onAdd = { add() },
-                    onRepeat = { repeatLast() },
+                    onRepeat = { repeatLast(ExpenseKind.EXPENSE) },
+                    onIncome = { add(ExpenseKind.INCOME) },
+                    onRepeatIncome = { repeatLast(ExpenseKind.INCOME) },
                     onFilter = { picking = true },
                     onBudgets = { budgetsOpen = true },
                     modifier = Modifier.animateItem().staggerIn(stagger, "actions", 1),
@@ -280,7 +307,7 @@ fun ExpensesScreen() {
             }
             if (s == null) return@LazyColumn
 
-            if (s.expenses.isEmpty()) {
+            if (s.entries.isEmpty()) {
                 item(key = "empty") {
                     Column(
                         Modifier
@@ -294,36 +321,51 @@ fun ExpensesScreen() {
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         EmptyState(
-                            title = "No spending logged",
-                            body = "Tap Add to log one. You can also tell the assistant “Spent 250 on lunch”.",
+                            title = "Nothing spent or received in ${monthName(s.month, thisMonth)} yet",
+                            body = "Log spending with Add, or money that came in with Income. " +
+                                "You can also tell the assistant “Spent 250 on lunch”.",
                             accent = c.dawn,
                         )
-                        PrimaryButton("Add expense", onClick = { add() }, icon = Icons.Outlined.Add)
+                        FlowRow(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            PrimaryButton("Add expense", onClick = { add() }, icon = Icons.Outlined.Add)
+                            QuietButton("Add income", onClick = { add(ExpenseKind.INCOME) }, icon = Icons.Outlined.AddCard)
+                        }
                     }
                 }
                 return@LazyColumn
             }
 
-            item(key = "cats") {
-                CategoriesCard(
-                    s = s,
-                    filter = filter,
-                    onFilter = { filter = it },
-                    onBudgets = { budgetsOpen = true },
-                    modifier = Modifier.animateItem().staggerIn(stagger, "cats", 2),
-                )
+            // Categories and budgets are about spending, so a month of only income skips them.
+            if (s.byCategory.isNotEmpty()) {
+                item(key = "cats") {
+                    CategoriesCard(
+                        s = s,
+                        filter = filter,
+                        onFilter = { showCategory(it) },
+                        onBudgets = { budgetsOpen = true },
+                        modifier = Modifier.animateItem().staggerIn(stagger, "cats", 2),
+                    )
+                }
             }
             item(key = "txHead") {
                 TransactionsHeader(
-                    filter = filter,
-                    onClear = { filter = null },
+                    title = if (incomeOnly) "Income" else filter?.label,
+                    onClear = { showCategory(null) },
                     modifier = Modifier.animateItem().staggerIn(stagger, "txHead", 3),
                 )
             }
             if (days.isEmpty()) {
                 item(key = "txEmpty") {
                     Text(
-                        "Nothing on ${filter?.label?.lowercase() ?: "this"} in ${monthName(s.month, thisMonth)}.",
+                        if (incomeOnly) {
+                            "Nothing received in ${monthName(s.month, thisMonth)}."
+                        } else {
+                            "Nothing on ${filter?.label?.lowercase() ?: "this"} in ${monthName(s.month, thisMonth)}."
+                        },
                         style = HubType.body,
                         color = c.inkMuted,
                         modifier = Modifier.animateItem().padding(horizontal = Gutter, vertical = 8.dp),
@@ -338,7 +380,8 @@ fun ExpensesScreen() {
                     DayTop(
                         date = date,
                         today = today,
-                        totalPaise = dayList.sumOf { it.amountPaise },
+                        spentPaise = dayList.filterNot { it.isIncome }.sumOf { it.amountPaise },
+                        incomePaise = dayList.filter { it.isIncome }.sumOf { it.amountPaise },
                         modifier = Modifier.animateItem().staggerIn(stagger, "day-$date", dayIndex),
                     )
                 }
@@ -393,9 +436,15 @@ fun ExpensesScreen() {
     if (picking) {
         FilterSheet(
             selected = filter,
+            incomeOnly = incomeOnly,
             spent = s?.byCategory.orEmpty().associate { it.category to it.spentPaise },
+            incomePaise = s?.incomePaise ?: 0L,
             onPick = { cat ->
-                filter = cat
+                showCategory(cat)
+                picking = false
+            },
+            onIncome = { on ->
+                showIncome(on)
                 picking = false
             },
             onDismiss = { picking = false },
@@ -405,17 +454,24 @@ fun ExpensesScreen() {
 
 private val MetaDate: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM", Locale.getDefault())
 
-/** A new expense for a past month starts on that month's last day; this month starts "now". */
-private fun draftFor(month: YearMonth, thisMonth: YearMonth): Expense? =
-    if (month == thisMonth) {
-        null
+/**
+ * A new entry for a past month starts on that month's last day; this month starts "now".
+ * A new expense this month needs no draft; income does, to carry its kind.
+ */
+private fun draftFor(month: YearMonth, thisMonth: YearMonth, kind: ExpenseKind = ExpenseKind.EXPENSE): Expense? {
+    if (month == thisMonth && kind == ExpenseKind.EXPENSE) return null
+    val at = if (month == thisMonth) {
+        System.currentTimeMillis()
     } else {
-        Expense(
-            amountPaise = 0L,
-            category = ExpenseCategory.FOOD,
-            spentAt = month.atEndOfMonth().atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
-        )
+        month.atEndOfMonth().atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
     }
+    return Expense(
+        amountPaise = 0L,
+        category = ExpenseCategory.forKind(kind).first(),
+        spentAt = at,
+        kind = kind,
+    )
+}
 
 /** "November", or "November 2025" outside this year. */
 private fun monthName(m: YearMonth, thisMonth: YearMonth): String =
@@ -427,8 +483,9 @@ private fun monthName(m: YearMonth, thisMonth: YearMonth): String =
 
 /**
  * The month on the violet card: what was spent, what's left of the budget (or how far over),
- * and the budget itself. The month switcher sits in the notch; the sun card behind shows the
- * biggest category and filters to it when tapped.
+ * and beside the notch either the budget itself or, once money came in, what came in and the
+ * net. The month switcher sits in the notch; the sun card behind shows the biggest category
+ * and filters to it when tapped.
  */
 @Composable
 private fun ExpenseHero(
@@ -521,16 +578,45 @@ private fun ExpenseHero(
             }
         }
         Spacer(Modifier.height(12.dp))
-        Column(Modifier.padding(end = MonthPillWidth)) {
-            Text("Monthly budget", style = RowMeta, color = soft, maxLines = 1)
-            Text(
-                budget?.let { Money.format(it) } ?: "Not set",
-                style = BodyStrongFigures,
-                color = on,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        // Beside the notch: money in and the net once anything came in this month; until then,
+        // the budget as before.
+        val income = s?.incomePaise ?: 0L
+        val net = s?.netPaise ?: 0L
+        AnimatedContent(
+            targetState = income > 0L,
+            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(120)) },
+            label = "heroAside",
+        ) { showIncome ->
+            Column(Modifier.padding(end = MonthPillWidth)) {
+                if (showIncome) {
+                    HeroStat(label = "In", value = incomeText(income), soft = soft, on = on)
+                    HeroStat(label = "Net", value = signedText(net), soft = soft, on = on)
+                } else {
+                    Text("Monthly budget", style = RowMeta, color = soft, maxLines = 1)
+                    Text(
+                        budget?.let { Money.format(it) } ?: "Not set",
+                        style = BodyStrongFigures,
+                        color = on,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
+    }
+}
+
+private val HeroStatValue = BodyStrongFigures.copy(fontSize = 14.sp, lineHeight = 20.sp)
+
+/** "In  +₹12,000" on one compact line of the hero; two of these fit beside the notch. */
+@Composable
+private fun HeroStat(label: String, value: String, soft: Color, on: Color) {
+    Row(
+        Modifier.clearAndSetSemantics { contentDescription = "$label $value" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = RowMeta, color = soft, maxLines = 1, modifier = Modifier.width(34.dp))
+        RollingText(value, style = HeroStatValue, color = on)
     }
 }
 
@@ -596,20 +682,42 @@ private fun RowScope.MonthPill(month: YearMonth, thisMonth: YearMonth, onMonth: 
 // Quick actions
 // ---------------------------------------------------------------------------------------------
 
-/** Add, repeat the last expense, filter by category, budgets: each an icon in a round well. */
+/**
+ * Add an expense, add income, filter, budgets: each an icon in a round well. Holding Add or
+ * Income repeats the month's latest expense or income (dated now); TalkBack offers the same
+ * as an action. The Filter well takes on the colour of what it's showing.
+ */
 @Composable
 private fun QuickActionsCard(
     filter: ExpenseCategory?,
-    hasLast: Boolean,
+    incomeOnly: Boolean,
     onAdd: () -> Unit,
     onRepeat: () -> Unit,
+    onIncome: () -> Unit,
+    onRepeatIncome: () -> Unit,
     onFilter: () -> Unit,
     onBudgets: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
-    val filterTone by animateColorAsState(filter?.color(c) ?: c.well, tween(200), label = "filterTone")
-    val filterTint by animateColorAsState(filter?.onColor(c) ?: c.ink, tween(200), label = "filterTint")
+    val filterTone by animateColorAsState(
+        when {
+            incomeOnly -> c.ok
+            filter != null -> filter.color(c)
+            else -> c.well
+        },
+        tween(200),
+        label = "filterTone",
+    )
+    val filterTint by animateColorAsState(
+        when {
+            incomeOnly -> c.onOk()
+            filter != null -> filter.onColor(c)
+            else -> c.ink
+        },
+        tween(200),
+        label = "filterTint",
+    )
     Row(
         modifier
             .fillMaxWidth()
@@ -619,16 +727,32 @@ private fun QuickActionsCard(
             .padding(horizontal = 6.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        QuickAction(Icons.Outlined.Add, "Add", onClick = onAdd, modifier = Modifier.weight(1f))
-        QuickAction(
-            Icons.Outlined.Replay,
-            "Repeat",
-            onClick = onRepeat,
+        HoldAction(
+            Icons.Outlined.Add,
+            "Add",
+            onClick = onAdd,
+            onHold = onRepeat,
+            clickLabel = "Add expense",
+            holdLabel = "Repeat last expense",
             modifier = Modifier.weight(1f),
-            tint = if (hasLast) c.ink else c.inkMuted,
+        )
+        HoldAction(
+            Icons.Outlined.AddCard,
+            "Income",
+            onClick = onIncome,
+            onHold = onRepeatIncome,
+            clickLabel = "Add income",
+            holdLabel = "Repeat last income",
+            modifier = Modifier.weight(1f),
+            tone = c.incomeSoft(),
+            tint = c.ok,
         )
         QuickAction(
-            filter?.icon ?: Icons.Outlined.FilterList,
+            when {
+                incomeOnly -> Icons.Outlined.Savings
+                filter != null -> filter.icon
+                else -> Icons.Outlined.FilterList
+            },
             "Filter",
             onClick = onFilter,
             modifier = Modifier.weight(1f),
@@ -636,6 +760,38 @@ private fun QuickActionsCard(
             tint = filterTint,
         )
         QuickAction(Icons.Outlined.Tune, "Budgets", onClick = onBudgets, modifier = Modifier.weight(1f))
+    }
+}
+
+/**
+ * A quick action (icon in a round well, name under it) that also does something when held.
+ * The hold is offered to accessibility services as a named custom action.
+ */
+@Composable
+private fun HoldAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    onHold: () -> Unit,
+    clickLabel: String,
+    holdLabel: String,
+    modifier: Modifier = Modifier,
+    tone: Color = Hub.colors.well,
+    tint: Color = Hub.colors.ink,
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(20.dp))
+            .pressable(onClick = onClick, onLongClick = onHold, pressedScale = 0.94f, showRipple = false, onClickLabel = clickLabel)
+            .semantics { customActions = listOf(CustomAccessibilityAction(holdLabel) { onHold(); true }) }
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(54.dp).clip(CircleShape).background(tone), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(label, style = HubType.small.copy(fontWeight = FontWeight.Medium), color = Hub.colors.ink, maxLines = 1)
     }
 }
 
@@ -769,9 +925,12 @@ private fun CategoryRow(
 // Transactions
 // ---------------------------------------------------------------------------------------------
 
-/** "Transactions", or the filtered category with a "Show all" pill that pops in beside it. */
+/**
+ * "Transactions", or what the list is filtered to ([title]: a category, or "Income") with a
+ * "Show all" pill that pops in beside it.
+ */
 @Composable
-private fun TransactionsHeader(filter: ExpenseCategory?, onClear: () -> Unit, modifier: Modifier = Modifier) {
+private fun TransactionsHeader(title: String?, onClear: () -> Unit, modifier: Modifier = Modifier) {
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
     Row(
@@ -782,7 +941,7 @@ private fun TransactionsHeader(filter: ExpenseCategory?, onClear: () -> Unit, mo
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AnimatedContent(
-            targetState = filter,
+            targetState = title,
             transitionSpec = {
                 if (reduced) {
                     fadeIn(tween(150)) togetherWith fadeOut(tween(100)) using SizeTransform(clip = false)
@@ -794,9 +953,9 @@ private fun TransactionsHeader(filter: ExpenseCategory?, onClear: () -> Unit, mo
             contentAlignment = Alignment.CenterStart,
             modifier = Modifier.weight(1f),
             label = "txTitle",
-        ) { f ->
+        ) { t ->
             Text(
-                f?.label ?: "Transactions",
+                t ?: "Transactions",
                 style = HubType.section,
                 color = c.ink,
                 maxLines = 1,
@@ -804,7 +963,7 @@ private fun TransactionsHeader(filter: ExpenseCategory?, onClear: () -> Unit, mo
             )
         }
         AnimatedVisibility(
-            visible = filter != null,
+            visible = title != null,
             enter = fadeIn(tween(160)) + scaleIn(if (reduced) tween(0) else Motion.snappy(), initialScale = 0.85f),
             exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.9f),
         ) {
@@ -833,9 +992,12 @@ private fun dayLabel(d: LocalDate, today: LocalDate): String = when (d) {
     )
 }
 
-/** The top of a day's card: the day, and what it cost, rolling as expenses come and go. */
+/**
+ * The top of a day's card: the day, what it cost and (when any came in) "+₹X" received, each
+ * rolling as entries come and go.
+ */
 @Composable
-private fun DayTop(date: LocalDate, today: LocalDate, totalPaise: Long, modifier: Modifier = Modifier) {
+private fun DayTop(date: LocalDate, today: LocalDate, spentPaise: Long, incomePaise: Long, modifier: Modifier = Modifier) {
     val c = Hub.colors
     Row(
         modifier
@@ -847,16 +1009,29 @@ private fun DayTop(date: LocalDate, today: LocalDate, totalPaise: Long, modifier
             .padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(dayLabel(date, today), style = RowTitle, color = c.ink, modifier = Modifier.weight(1f), maxLines = 1)
-        RollingText(Money.format(totalPaise), style = SmallFigures, color = c.inkMuted)
+        Text(
+            dayLabel(date, today),
+            style = RowTitle,
+            color = c.ink,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (spentPaise > 0L) {
+            RollingText(Money.format(spentPaise), style = SmallFigures, color = c.inkMuted)
+        }
+        if (incomePaise > 0L) {
+            if (spentPaise > 0L) Spacer(Modifier.width(10.dp))
+            RollingText(incomeText(incomePaise), style = SmallFigures, color = c.ok)
+        }
     }
 }
 
 /**
- * One expense as a list row inside its day's card: the category in a tinted well, the note
- * (or the category), "9:41 am • 12 November", and the amount. Tap to edit. Swipe left to
- * delete: the danger ground shows through and the bin grows as you drag, with a tick of
- * haptics at the point of no return.
+ * One entry as a list row inside its day's card: the category in a tinted well, the note
+ * (or the category), "9:41 am • 12 November", and the amount. Income reads "+₹5,000" in the
+ * ok green on a green well. Tap to edit. Swipe left to delete: the danger ground shows through
+ * and the bin grows as you drag, with a tick of haptics at the point of no return.
  */
 @Composable
 private fun TransactionRow(
@@ -929,14 +1104,18 @@ private fun TransactionRow(
                 }
             },
         ) {
+            val income = e.isIncome
             HubListRow(
                 icon = e.category.icon,
-                title = e.note.ifBlank { e.category.label },
+                title = e.note.ifBlank {
+                    if (income && e.category == ExpenseCategory.OTHER) "Other income" else e.category.label
+                },
                 meta = meta,
                 modifier = Modifier.background(c.raised),
-                trailing = Money.format(e.amountPaise),
-                iconTint = e.category.color(c),
-                iconTone = e.category.soft(c),
+                trailing = if (income) incomeText(e.amountPaise) else Money.format(e.amountPaise),
+                trailingColor = if (income) c.ok else c.ink,
+                iconTint = if (income) c.ok else e.category.color(c),
+                iconTone = if (income) c.incomeSoft() else e.category.soft(c),
                 onClick = onEdit,
             )
         }
@@ -947,40 +1126,52 @@ private fun TransactionRow(
 // Filter
 // ---------------------------------------------------------------------------------------------
 
-/** Every category as a well with this month's spend under it; tap one to show only it. */
+/**
+ * Everything, income only, or one spending category (a well with this month's spend under
+ * it); tap one to show only it.
+ */
 @Composable
 private fun FilterSheet(
     selected: ExpenseCategory?,
+    incomeOnly: Boolean,
     spent: Map<ExpenseCategory, Long>,
+    incomePaise: Long,
     onPick: (ExpenseCategory?) -> Unit,
+    onIncome: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val c = Hub.colors
     val stagger = rememberStagger()
-    val allBg by animateColorAsState(if (selected == null) c.ink else c.raised2, tween(200), label = "allBg")
-    val allFg by animateColorAsState(if (selected == null) c.ground else c.ink, tween(200), label = "allFg")
+    val all = selected == null && !incomeOnly
     HubSheet(onDismiss = onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Text("Show a category", style = SheetTitle, color = c.ink, modifier = Modifier.staggerIn(stagger, "title", 0))
+            Text("Show transactions", style = SheetTitle, color = c.ink, modifier = Modifier.staggerIn(stagger, "title", 0))
             Spacer(Modifier.height(16.dp))
-            Row(
-                Modifier
-                    .staggerIn(stagger, "all", 1)
-                    .fillMaxWidth()
-                    .pressable(onClick = { onPick(null) }, pressedScale = 0.97f, showRipple = false, role = Role.RadioButton)
-                    .semantics { this.selected = selected == null }
-                    .heightIn(min = 52.dp)
-                    .clip(CircleShape)
-                    .background(allBg)
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("All categories", style = HubType.button, color = allFg, modifier = Modifier.weight(1f))
-                if (selected == null) Icon(Icons.Outlined.Check, contentDescription = null, tint = allFg, modifier = Modifier.size(20.dp))
-            }
+            FilterPill(
+                text = "Everything",
+                selected = all,
+                onClick = { onPick(null) },
+                modifier = Modifier.staggerIn(stagger, "all", 1),
+            )
+            Spacer(Modifier.height(8.dp))
+            FilterPill(
+                text = "Income only",
+                selected = incomeOnly,
+                onClick = { onIncome(!incomeOnly) },
+                icon = Icons.Outlined.Savings,
+                iconTint = c.ok,
+                amount = incomeText(incomePaise),
+                modifier = Modifier.staggerIn(stagger, "income", 2),
+            )
             Spacer(Modifier.height(16.dp))
-            ExpenseCategory.entries.chunked(3).forEachIndexed { r, row ->
-                Row(Modifier.fillMaxWidth().padding(bottom = 6.dp).staggerIn(stagger, "row$r", 2 + r)) {
+            Text(
+                "Spending",
+                style = HubType.section,
+                color = c.ink,
+                modifier = Modifier.padding(bottom = 4.dp).staggerIn(stagger, "spendHead", 3),
+            )
+            ExpenseCategory.forKind(ExpenseKind.EXPENSE).chunked(3).forEachIndexed { r, row ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 6.dp).staggerIn(stagger, "row$r", 4 + r)) {
                     row.forEach { cat ->
                         val isSelected = cat == selected
                         Column(
@@ -1015,6 +1206,49 @@ private fun FilterSheet(
     }
 }
 
+/** A whole-width choice in the filter sheet; the selected one fills with ink and shows a tick. */
+@Composable
+private fun FilterPill(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    iconTint: Color = Hub.colors.ink,
+    amount: String? = null,
+) {
+    val c = Hub.colors
+    val bg by animateColorAsState(if (selected) c.ink else c.raised2, tween(200), label = "filterPillBg")
+    val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(200), label = "filterPillFg")
+    // The ok green doesn't hold contrast on an ink fill, so a selected icon takes the label colour.
+    val tint by animateColorAsState(if (selected) c.ground else iconTint, tween(200), label = "filterPillTint")
+    Row(
+        modifier
+            .fillMaxWidth()
+            .pressable(onClick = onClick, pressedScale = 0.97f, showRipple = false, role = Role.RadioButton)
+            .semantics { this.selected = selected }
+            .heightIn(min = 52.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(text, style = HubType.button, color = fg, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (amount != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(amount, style = HubType.button.copy(fontFeatureSettings = "tnum"), color = fg, maxLines = 1)
+        }
+        if (selected) {
+            Spacer(Modifier.width(8.dp))
+            Icon(Icons.Outlined.Check, contentDescription = null, tint = fg, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Budgets
 // ---------------------------------------------------------------------------------------------
@@ -1022,6 +1256,9 @@ private fun FilterSheet(
 private fun budgetText(paise: Long) = Money.format(paise).removePrefix("₹")
 
 private val BudgetPresets = listOf(5_000_00L, 10_000_00L, 20_000_00L, 30_000_00L)
+
+/** Budgets only measure spending, so only spending categories get one. */
+private val SpendingCategories = ExpenseCategory.forKind(ExpenseKind.EXPENSE)
 
 /**
  * Monthly limits: one for everything (with a few one-tap amounts) and one per category.
@@ -1099,7 +1336,7 @@ private fun BudgetsSheet(
                     }
                 }
             }
-            ExpenseCategory.entries.forEachIndexed { i, cat ->
+            SpendingCategories.forEachIndexed { i, cat ->
                 val value = cats[cat].orEmpty()
                 BudgetField(
                     value = value,
@@ -1116,7 +1353,7 @@ private fun BudgetsSheet(
                 onClick = {
                     val changes = buildList<Pair<ExpenseCategory?, Long?>> {
                         if (total.trim() != initialTotal) add(null to Money.parse(total))
-                        ExpenseCategory.entries.forEach { cat ->
+                        SpendingCategories.forEach { cat ->
                             val now = cats[cat].orEmpty().trim()
                             if (now != initialCats[cat].orEmpty()) add(cat to Money.parse(now))
                         }

@@ -54,13 +54,24 @@ data class CategoryTotal(val category: ExpenseCategory, val spentPaise: Long, va
 
 data class MonthSummary(
     val month: YearMonth,
-    /** Newest first. */
+    /** Spending only, newest first. */
     val expenses: List<Expense>,
+    /** Total spent (income not included); what budgets measure. */
     val totalPaise: Long,
     val budgetPaise: Long?,
-    /** Categories with spending or a budget, biggest spend first. */
+    /** Spending categories with spending or a budget, biggest spend first. */
     val byCategory: List<CategoryTotal>,
+    /** Income only, newest first. */
+    val incomes: List<Expense> = emptyList(),
+    /** Total received this month. */
+    val incomePaise: Long = 0L,
 ) {
+    /** Every entry, spending and income, newest first: the month's activity. */
+    val entries: List<Expense> get() = (expenses + incomes).sortedWith(compareByDescending<Expense> { it.spentAt }.thenByDescending { it.id })
+
+    /** Received minus spent; negative when you spent more than came in. */
+    val netPaise: Long get() = incomePaise - totalPaise
+
     /** 0.0–1.0+ of the total budget, or null without a budget. */
     val budgetUsed: Double? get() = budgetPaise?.takeIf { it > 0 }?.let { totalPaise.toDouble() / it }
 }
@@ -78,13 +89,17 @@ object BudgetMath {
         return THRESHOLDS.lastOrNull { t -> before * 100 < t * limit && after * 100 >= t * limit }
     }
 
-    fun summarize(month: YearMonth, expenses: List<Expense>, budgets: List<Budget>): MonthSummary {
+    /** [entries] may mix spending and income; budgets and categories only see spending. */
+    fun summarize(month: YearMonth, entries: List<Expense>, budgets: List<Budget>): MonthSummary {
+        val (incomes, expenses) = entries.partition { it.isIncome }
         val limits = budgets.associate { it.key to it.limitPaise }
         val spent = expenses.groupBy { it.category }.mapValues { (_, list) -> list.sumOf { it.amountPaise } }
         val categories = ExpenseCategory.entries.filter { it in spent || it.name in limits }
         return MonthSummary(
             month = month,
             expenses = expenses,
+            incomes = incomes,
+            incomePaise = incomes.sumOf { it.amountPaise },
             totalPaise = expenses.sumOf { it.amountPaise },
             budgetPaise = limits[Budget.TOTAL],
             byCategory = categories
@@ -117,6 +132,12 @@ class ExpenseRepository(
 
     /** Inserts (id = 0) or updates, then alerts if this pushed a budget past 80% or 100%. */
     suspend fun save(expense: Expense): Expense {
+        if (expense.isIncome) {
+            // Income never moves a budget. (An entry switched from spending to income lowers
+            // spending, which can't cross a threshold upwards either.)
+            val id = if (expense.id == 0L) expenses.insert(expense) else expense.id.also { expenses.update(expense) }
+            return expense.copy(id = id)
+        }
         val month = YearMonth.from(java.time.Instant.ofEpochMilli(expense.spentAt).atZone(zone()))
         val (start, end) = bounds(month)
         val totalBefore = expenses.sumBetween(start, end)

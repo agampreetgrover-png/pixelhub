@@ -1,6 +1,7 @@
 package com.agam.pixelhub.ai
 
 import com.agam.pixelhub.data.ExpenseCategory
+import com.agam.pixelhub.data.ExpenseKind
 import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RepeatType
@@ -93,6 +94,29 @@ class CommandParserTest {
     @Test fun unknownExpenseCategoryFallsBackToOther() {
         val cmd = parse("""{"action":"log_expense","amount":50,"category":"PETS"}""")
         assertEquals(ExpenseCategory.OTHER, (cmd as ParsedCommand.LogExpense).category)
+    }
+
+    @Test fun logIncome() = assertEquals(
+        ParsedCommand.LogExpense(5000_00, ExpenseCategory.SALARY, "Salary", kind = ExpenseKind.INCOME),
+        parse("""{"action":"log_expense","amount":5000,"kind":"income","category":"SALARY","note":"Salary"}"""),
+    )
+
+    @Test fun incomeCategoryWithoutKindImpliesIncome() =
+        assertEquals(ExpenseKind.INCOME, (parse("""{"action":"log_expense","amount":900,"category":"REFUNDS"}""") as ParsedCommand.LogExpense).kind)
+
+    @Test fun expenseIsDefaultKind() =
+        assertEquals(ExpenseKind.EXPENSE, (parse("""{"action":"log_expense","amount":90,"category":"FOOD"}""") as ParsedCommand.LogExpense).kind)
+
+    @Test fun spendingCategoryOnIncomeBecomesOther() {
+        val cmd = parse("""{"action":"log_expense","amount":2000,"kind":"income","category":"FOOD"}""") as ParsedCommand.LogExpense
+        assertEquals(ExpenseKind.INCOME, cmd.kind)
+        assertEquals(ExpenseCategory.OTHER, cmd.category)
+    }
+
+    @Test fun incomeCategoryOnExpenseBecomesOther() {
+        val cmd = parse("""{"action":"log_expense","amount":2000,"kind":"expense","category":"SALARY"}""") as ParsedCommand.LogExpense
+        assertEquals(ExpenseKind.EXPENSE, cmd.kind)
+        assertEquals(ExpenseCategory.OTHER, cmd.category)
     }
 
     @Test fun expenseWithoutAmountIsInvalid() = assertInvalid(parse("""{"action":"log_expense","category":"FOOD"}"""))

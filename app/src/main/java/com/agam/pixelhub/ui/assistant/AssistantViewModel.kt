@@ -135,8 +135,11 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
                 is ParsedCommand.LogExpense -> {
                     val at = cmd.at?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
                         ?: System.currentTimeMillis()
-                    c.expenses.save(Expense(amountPaise = cmd.amountPaise, category = cmd.category, note = cmd.note, spentAt = at))
-                    Outcome(true, "Logged ${Money.format(cmd.amountPaise)} for ${cmd.category.label}")
+                    c.expenses.save(
+                        Expense(amountPaise = cmd.amountPaise, category = cmd.category, note = cmd.note, spentAt = at, kind = cmd.kind),
+                    )
+                    if (cmd.isIncome) Outcome(true, "Added ${Money.format(cmd.amountPaise)} income from ${cmd.category.label}")
+                    else Outcome(true, "Logged ${Money.format(cmd.amountPaise)} for ${cmd.category.label}")
                 }
                 else -> Outcome(false, "Nothing to do")
             }

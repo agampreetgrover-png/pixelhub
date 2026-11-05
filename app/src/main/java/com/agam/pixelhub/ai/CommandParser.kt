@@ -1,6 +1,7 @@
 package com.agam.pixelhub.ai
 
 import com.agam.pixelhub.data.ExpenseCategory
+import com.agam.pixelhub.data.ExpenseKind
 import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.scheduling.Recurrence
@@ -31,13 +32,16 @@ sealed interface ParsedCommand {
     ) : ParsedCommand
 
     data class CreateAlarm(val hour: Int, val minute: Int, val daysMask: Int, val label: String) : ParsedCommand
-    /** [at] null = "now" (decided when the user confirms). */
+    /** Money spent or received. [at] null = "now" (decided when the user confirms). */
     data class LogExpense(
         val amountPaise: Long,
         val category: ExpenseCategory,
         val note: String,
         val at: LocalDateTime? = null,
-    ) : ParsedCommand
+        val kind: ExpenseKind = ExpenseKind.EXPENSE,
+    ) : ParsedCommand {
+        val isIncome: Boolean get() = kind == ExpenseKind.INCOME
+    }
 
     data class OpenApp(val query: String) : ParsedCommand
     data class OpenLink(val uri: String) : ParsedCommand
@@ -52,8 +56,9 @@ object CommandParser {
     private val DAY_CODES = listOf("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
     private val PROPERTIES = listOf(
         "action", "title", "datetime", "recurrence", "days", "interval", "time", "label",
-        "amount", "category", "note", "query", "uri", "text",
+        "amount", "kind", "category", "note", "query", "uri", "text",
     )
+    private val KINDS = listOf("expense", "income")
 
     /** ₹1 crore; anything bigger is almost certainly a misheard amount. */
     private const val MAX_EXPENSE_PAISE = 1_00_00_000_00L
@@ -75,6 +80,7 @@ object CommandParser {
         val time: String? = null,
         val label: String? = null,
         val amount: Double? = null,
+        val kind: String? = null,
         val category: String? = null,
         val note: String? = null,
         val query: String? = null,
@@ -107,6 +113,7 @@ object CommandParser {
                     put("type", "NUMBER")
                     put("description", "Amount in Indian rupees")
                 }
+                putJsonObject("kind") { enumString(KINDS) }
                 putJsonObject("category") { enumString(ExpenseCategory.entries.map { it.name }) }
                 putJsonObject("note") { put("type", "STRING") }
                 putJsonObject("query") { put("type", "STRING") }
@@ -141,9 +148,13 @@ object CommandParser {
           The title is short and imperative, without the time ("Call mom").
         - create_alarm: "time" (24-hour HH:MM) is required. Optional "days" (MON..SUN) for a repeating alarm
           ("weekdays" = MON..FRI) and "label".
-        - log_expense: the user spent money. "amount" (number, Indian rupees; "1.2k" = 1200) and "category"
-          (${ExpenseCategory.entries.joinToString(", ") { it.name }}) are required. "note" = what it was for, short
-          ("Lunch at Saravana"). Include "datetime" only if the user says when ("yesterday", "on Monday").
+        - log_expense: the user spent or received money. "amount" (positive number, Indian rupees; "1.2k" = 1200),
+          "kind" and "category" are required.
+          "kind" = "expense" when they spent or paid; "income" when they got paid, earned, received or were refunded.
+          Expense categories: ${ExpenseCategory.forKind(ExpenseKind.EXPENSE).joinToString(", ") { it.name }}.
+          Income categories: ${ExpenseCategory.forKind(ExpenseKind.INCOME).joinToString(", ") { it.name }}.
+          "note" = what it was for or where it came from, short ("Lunch at Saravana", "November salary").
+          Include "datetime" only if the user says when ("yesterday", "on Monday").
         - open_app: "query" = the app or shortcut to open. Prefer an exact name from the lists below.
         - open_link: "uri" = a URL or Android URI (https:, tel:, geo:, mailto:, sms:, google.navigation:q=...)
           for calling a number, navigating somewhere, searching the web, etc.
@@ -174,9 +185,15 @@ object CommandParser {
             "log_expense" -> {
                 val paise = a.amount?.let { Money.fromRupees(it) }?.takeIf { it < MAX_EXPENSE_PAISE }
                     ?: return ParsedCommand.Invalid("missing or bad amount")
-                val category = ExpenseCategory.entries.firstOrNull { it.name.equals(a.category?.trim(), ignoreCase = true) }
-                    ?: ExpenseCategory.OTHER
-                ParsedCommand.LogExpense(paise, category, a.note?.trim().orEmpty(), parseDateTime(a.datetime, zone))
+                val named = ExpenseCategory.entries.firstOrNull { it.name.equals(a.category?.trim(), ignoreCase = true) }
+                // No (or an unknown) kind: an income-only category like SALARY still implies income.
+                val kind = when (a.kind?.trim()?.lowercase()) {
+                    "income" -> ExpenseKind.INCOME
+                    "expense" -> ExpenseKind.EXPENSE
+                    else -> if (named?.isIncome == true) ExpenseKind.INCOME else ExpenseKind.EXPENSE
+                }
+                val category = named?.takeIf { it in ExpenseCategory.forKind(kind) } ?: ExpenseCategory.OTHER
+                ParsedCommand.LogExpense(paise, category, a.note?.trim().orEmpty(), parseDateTime(a.datetime, zone), kind)
             }
             "open_app" -> a.query?.trim()?.takeIf { it.isNotEmpty() }?.let { ParsedCommand.OpenApp(it) }
                 ?: ParsedCommand.Invalid("missing app name")

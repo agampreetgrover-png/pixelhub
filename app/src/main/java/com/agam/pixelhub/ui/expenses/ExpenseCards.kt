@@ -1,14 +1,17 @@
 package com.agam.pixelhub.ui.expenses
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -29,15 +32,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.AssignmentReturn
+import androidx.compose.material.icons.automirrored.outlined.TrendingUp
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.CardGiftcard
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.DirectionsBus
 import androidx.compose.material.icons.outlined.Flight
+import androidx.compose.material.icons.outlined.Laptop
 import androidx.compose.material.icons.outlined.MedicalServices
 import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material.icons.outlined.Receipt
 import androidx.compose.material.icons.outlined.Restaurant
+import androidx.compose.material.icons.outlined.Savings
 import androidx.compose.material.icons.outlined.ShoppingBag
 import androidx.compose.material.icons.outlined.ShoppingBasket
 import androidx.compose.material3.Icon
@@ -98,11 +107,14 @@ import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.YearMonth
+import kotlin.math.abs
 
 /*
- * Money keeps ink as its accent. Each category has its own hue from a set of nine, spaced
- * round the wheel at the same muted chroma: pale and soft on the night ground, deeper on the
- * day ground, so every one holds about the same contrast against its page.
+ * Money keeps ink as its accent. Each spending category has its own hue from a set of nine,
+ * spaced round the wheel at the same muted chroma: pale and soft on the night ground, deeper on
+ * the day ground, so every one holds about the same contrast against its page. The five income
+ * categories take the gaps between them at the same chroma (each at least 4.5:1 on its card).
+ * Income itself reads as the ok green, always with a "+" so colour is never the only signal.
  */
 
 /** The category's own colour, tuned for [c]'s ground. */
@@ -117,6 +129,12 @@ fun ExpenseCategory.color(c: HubColors): Color = if (c.isDark) {
         ExpenseCategory.ENTERTAINMENT -> Color(0xFFB8A1EE) // lavender
         ExpenseCategory.SHOPPING -> Color(0xFFEA98BD)      // rose
         ExpenseCategory.OTHER -> Color(0xFFA6AFC4)         // slate
+        // Income: five more hues in the gaps, distinct from each other and from slate (Other).
+        ExpenseCategory.SALARY -> Color(0xFF8FD47E)        // leaf
+        ExpenseCategory.FREELANCE -> Color(0xFF7CC4EE)     // sky
+        ExpenseCategory.GIFTS -> Color(0xFFD69BE8)         // orchid
+        ExpenseCategory.REFUNDS -> Color(0xFFF2AE72)       // apricot
+        ExpenseCategory.INVESTMENTS -> Color(0xFF9AA5F2)   // indigo
     }
 } else {
     when (this) {
@@ -129,11 +147,28 @@ fun ExpenseCategory.color(c: HubColors): Color = if (c.isDark) {
         ExpenseCategory.ENTERTAINMENT -> Color(0xFF6C4EC0)
         ExpenseCategory.SHOPPING -> Color(0xFFAE3B70)
         ExpenseCategory.OTHER -> Color(0xFF5A647B)
+        ExpenseCategory.SALARY -> Color(0xFF3E7F2A)
+        ExpenseCategory.FREELANCE -> Color(0xFF1F6C99)
+        ExpenseCategory.GIFTS -> Color(0xFF8E3FA8)
+        ExpenseCategory.REFUNDS -> Color(0xFF9A5512)
+        ExpenseCategory.INVESTMENTS -> Color(0xFF4452B8)
     }
 }
 
 /** A quiet wash of the category colour, for wells and selected backgrounds. */
 fun ExpenseCategory.soft(c: HubColors): Color = color(c).copy(alpha = if (c.isDark) 0.18f else 0.13f)
+
+/** A quiet wash of the ok green, for the wells of money coming in. */
+internal fun HubColors.incomeSoft(): Color = ok.copy(alpha = if (isDark) 0.18f else 0.13f)
+
+/** Icon colour on a well filled with the ok green. */
+internal fun HubColors.onOk(): Color = if (isDark) Color(0xFF141414) else Color.White
+
+/** "+₹5,000": income always carries its sign. */
+internal fun incomeText(paise: Long): String = "+" + Money.format(paise)
+
+/** "+₹4,500" or "−₹4,500" (a true minus sign), for a net figure. */
+internal fun signedText(paise: Long): String = (if (paise < 0L) "−" else "+") + Money.format(abs(paise))
 
 val ExpenseCategory.icon: ImageVector
     get() = when (this) {
@@ -146,6 +181,11 @@ val ExpenseCategory.icon: ImageVector
         ExpenseCategory.ENTERTAINMENT -> Icons.Outlined.Movie
         ExpenseCategory.TRAVEL -> Icons.Outlined.Flight
         ExpenseCategory.OTHER -> Icons.Outlined.Category
+        ExpenseCategory.SALARY -> Icons.Outlined.Payments
+        ExpenseCategory.FREELANCE -> Icons.Outlined.Laptop
+        ExpenseCategory.GIFTS -> Icons.Outlined.CardGiftcard
+        ExpenseCategory.REFUNDS -> Icons.AutoMirrored.Outlined.AssignmentReturn
+        ExpenseCategory.INVESTMENTS -> Icons.AutoMirrored.Outlined.TrendingUp
     }
 
 /** Icon colour on a well filled with the category colour: dark on the pale night hues, white on the deep day ones. */
@@ -553,6 +593,20 @@ fun ExpenseHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
             CategoryBar(s, track = c.well, height = 8.dp)
         } else {
             Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(c.well))
+        }
+        // Money in, when there is any: a quiet line under the bar.
+        val income = s?.incomePaise ?: 0L
+        AnimatedVisibility(
+            visible = income > 0L,
+            enter = fadeIn(tween(200)) + expandVertically(tween(if (reduced) 0 else 240, easing = Motion.EaseOut)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(if (reduced) 0 else 200)),
+        ) {
+            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Savings, contentDescription = null, tint = c.ok, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("In ", style = SmallFigures, color = c.inkMuted, maxLines = 1)
+                RollingText(incomeText(income), style = SmallFigures, color = c.ok)
+            }
         }
     }
 }

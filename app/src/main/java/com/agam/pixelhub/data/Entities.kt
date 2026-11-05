@@ -1,6 +1,7 @@
 package com.agam.pixelhub.data
 
 import androidx.room.Embedded
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.agam.pixelhub.scheduling.Recurrence
@@ -39,7 +40,14 @@ data class Alarm(
 
 enum class ShortcutKind { APP, LINK }
 
-enum class ExpenseCategory(val label: String) {
+/** Money going out (spending) or coming in (income). */
+enum class ExpenseKind { EXPENSE, INCOME }
+
+/**
+ * Where money went, or for income, where it came from. [isIncome] categories are only
+ * offered for income; OTHER fits both.
+ */
+enum class ExpenseCategory(val label: String, val isIncome: Boolean = false) {
     FOOD("Food & dining"),
     GROCERIES("Groceries"),
     TRANSPORT("Transport"),
@@ -49,18 +57,38 @@ enum class ExpenseCategory(val label: String) {
     ENTERTAINMENT("Entertainment"),
     TRAVEL("Travel"),
     OTHER("Other"),
+    SALARY("Salary", isIncome = true),
+    FREELANCE("Freelance", isIncome = true),
+    GIFTS("Gifts", isIncome = true),
+    REFUNDS("Refunds", isIncome = true),
+    INVESTMENTS("Investments", isIncome = true),
+    ;
+
+    companion object {
+        /** The categories to offer for [kind], in display order. */
+        fun forKind(kind: ExpenseKind): List<ExpenseCategory> = when (kind) {
+            ExpenseKind.EXPENSE -> entries.filter { !it.isIncome }
+            ExpenseKind.INCOME -> entries.filter { it.isIncome } + OTHER
+        }
+    }
 }
 
-/** One expense. Money is stored in paise (₹1 = 100) to avoid floating-point errors. */
+/**
+ * One money entry: an expense, or income when [kind] is INCOME. Money is stored in paise
+ * (₹1 = 100) to avoid floating-point errors; [amountPaise] is always positive.
+ */
 @Entity(tableName = "expenses")
 data class Expense(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val amountPaise: Long,
     val category: ExpenseCategory = ExpenseCategory.OTHER,
     val note: String = "",
-    /** When the money was spent, epoch millis. */
+    /** When the money was spent or received, epoch millis. */
     val spentAt: Long,
-)
+    @ColumnInfo(defaultValue = "EXPENSE") val kind: ExpenseKind = ExpenseKind.EXPENSE,
+) {
+    val isIncome: Boolean get() = kind == ExpenseKind.INCOME
+}
 
 /** A monthly limit. [key] is [Budget.TOTAL] or an ExpenseCategory name. */
 @Entity(tableName = "budgets")

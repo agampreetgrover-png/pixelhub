@@ -89,7 +89,8 @@ data class CardFace(
 
 private val Peek = 54.dp
 private val CardHeight = 204.dp
-private val NotchWidth = 150.dp
+// Wide enough for "New alarm" in Poppins at the default font size (it was cut to "New al…" at 150dp).
+private val NotchWidth = 166.dp
 private val NotchHeight = 64.dp
 private val NotchGap = 6.dp
 

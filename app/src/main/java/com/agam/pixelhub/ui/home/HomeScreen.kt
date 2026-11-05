@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.AddAlert
 import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Notifications
@@ -98,6 +99,7 @@ import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.Tab
 import com.agam.pixelhub.ui.alarms.AlarmEditorDialog
 import com.agam.pixelhub.ui.assistant.AssistantViewModel
+import com.agam.pixelhub.ui.calendar.UpcomingEventsCard
 import com.agam.pixelhub.ui.expenses.ExpenseEditorSheet
 import com.agam.pixelhub.ui.expenses.color
 import com.agam.pixelhub.ui.expenses.icon
@@ -388,7 +390,13 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel) {
                 }
             }
 
-            // Spending this month.
+            // What's on the phone's calendars (Google Calendar included).
+            UpcomingEventsCard(
+                onOpen = { onNavigate(Tab.CALENDAR) },
+                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "calendar", 5),
+            )
+
+            // Money this month.
             SpendingCard(
                 summary = month,
                 onViewAll = { onNavigate(Tab.EXPENSES) },
@@ -583,14 +591,14 @@ private fun ReminderRow(
     }
 }
 
-/** This month's total and the latest few expenses, like a wallet's recent activity. */
+/** This month's money out and in, and the latest entries, like a wallet's recent activity. */
 @Composable
 private fun SpendingCard(summary: MonthSummary?, onViewAll: () -> Unit, onAdd: () -> Unit, modifier: Modifier = Modifier) {
     val c = Hub.colors
     val context = LocalContext.current
     val zone = remember { ZoneId.systemDefault() }
     Column(modifier.fillMaxWidth().hubCard(c.raised).padding(bottom = 8.dp)) {
-        CardHeader("Spending", "View all", onViewAll)
+        CardHeader("Money", "View all", onViewAll)
         if (summary != null) {
             Row(Modifier.padding(horizontal = 16.dp).padding(bottom = 6.dp), verticalAlignment = Alignment.Bottom) {
                 Text(Money.format(summary.totalPaise), style = HubType.clockMedium.copy(fontSize = HubType.clockMedium.fontSize * 0.82f), color = c.ink)
@@ -599,19 +607,26 @@ private fun SpendingCard(summary: MonthSummary?, onViewAll: () -> Unit, onAdd: (
                 val over = budget != null && summary.totalPaise > budget
                 Text(
                     when {
-                        budget == null -> "this month"
+                        budget == null -> "spent this month"
                         over -> "${Money.format(summary.totalPaise - budget)} over budget"
-                        else -> "of ${Money.format(budget)}"
+                        else -> "spent of ${Money.format(budget)}"
                     },
                     style = HubType.small, color = if (over) c.danger else c.inkMuted,
                     modifier = Modifier.padding(bottom = 6.dp),
                 )
             }
+            if (summary.incomePaise > 0) {
+                Text(
+                    "+${Money.format(summary.incomePaise)} received • net ${signed(summary.netPaise)}",
+                    style = HubType.small, color = c.ok,
+                    modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 6.dp),
+                )
+            }
         }
-        val recent = summary?.expenses?.take(4).orEmpty()
+        val recent = summary?.entries?.take(4).orEmpty()
         if (summary != null && recent.isEmpty()) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Nothing spent yet this month.", style = HubType.body, color = c.inkMuted, modifier = Modifier.weight(1f))
+                Text("Nothing spent or received yet.", style = HubType.body, color = c.inkMuted, modifier = Modifier.weight(1f))
                 QuietButton("Add", onClick = onAdd)
             }
         }
@@ -621,7 +636,8 @@ private fun SpendingCard(summary: MonthSummary?, onViewAll: () -> Unit, onAdd: (
                 icon = e.category.icon,
                 title = e.note.ifBlank { e.category.label },
                 meta = "${Fmt.time(context, at.toLocalTime())} • ${at.format(DateTimeFormatter.ofPattern("d MMMM", Locale.getDefault()))}",
-                trailing = Money.format(e.amountPaise),
+                trailing = if (e.isIncome) "+${Money.format(e.amountPaise)}" else Money.format(e.amountPaise),
+                trailingColor = if (e.isIncome) c.ok else c.ink,
                 iconTint = e.category.color(c),
                 iconTone = e.category.soft(c),
                 onClick = onViewAll,
@@ -630,6 +646,9 @@ private fun SpendingCard(summary: MonthSummary?, onViewAll: () -> Unit, onAdd: (
         }
     }
 }
+
+/** "+₹1,200" or "-₹300". */
+private fun signed(paise: Long): String = if (paise >= 0) "+${Money.format(paise)}" else Money.format(paise)
 
 @Composable
 private fun SetupNudge(done: Int, total: Int, pending: Int, onClick: () -> Unit) {
@@ -673,9 +692,10 @@ private fun MoreSheet(onDismiss: () -> Unit, onPick: (Tab) -> Unit) {
         Text("More", style = HubType.title, color = c.ink, modifier = Modifier.padding(bottom = 12.dp))
         Column(Modifier.fillMaxWidth().hubCard(c.raised2.takeIf { !c.isDark } ?: c.ground).padding(vertical = 6.dp)) {
             HubListRow(Icons.Outlined.Apps, "Apps and shortcuts", "Open apps, pin your favourites", onClick = { onPick(Tab.APPS) }, iconTone = c.raised)
-            HubListRow(Icons.Outlined.AccountBalanceWallet, "Spending", "Expenses and budgets", onClick = { onPick(Tab.EXPENSES) }, iconTone = c.raised)
+            HubListRow(Icons.Outlined.CalendarMonth, "Calendar", "Your Google Calendar events", onClick = { onPick(Tab.CALENDAR) }, iconTone = c.raised)
+            HubListRow(Icons.Outlined.AccountBalanceWallet, "Money", "Spending, income and budgets", onClick = { onPick(Tab.EXPENSES) }, iconTone = c.raised)
             HubListRow(Icons.Outlined.AutoAwesome, "Assistant", "Type or say what you need", onClick = { onPick(Tab.ASSISTANT) }, iconTone = c.raised)
-            HubListRow(Icons.Outlined.Settings, "Settings", "Permissions, calendar, AI keys", onClick = { onPick(Tab.SETTINGS) }, iconTone = c.raised)
+            HubListRow(Icons.Outlined.Settings, "Settings", "Themes, permissions, calendar, AI keys", onClick = { onPick(Tab.SETTINGS) }, iconTone = c.raised)
         }
         Spacer(Modifier.height(8.dp))
     }

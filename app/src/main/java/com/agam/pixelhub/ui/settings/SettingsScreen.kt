@@ -124,6 +124,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
             contentPadding = PaddingValues(bottom = 40.dp),
         ) {
+            item(key = "theme_header") { SectionHeader("Appearance") }
+            item(key = "theme") { ThemeSection() }
+
             item(key = "setup_header") {
                 SectionHeader("Alarms & reminders", Modifier.staggerIn(stagger, "setup_header", 0))
             }

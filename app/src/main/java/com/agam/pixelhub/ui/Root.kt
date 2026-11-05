@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalLayoutApi::class)
+
 package com.agam.pixelhub.ui
 
 import androidx.activity.compose.BackHandler
@@ -20,6 +22,11 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Favorite
@@ -42,6 +50,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -72,6 +81,7 @@ import com.agam.pixelhub.ui.alarms.AlarmsScreen
 import com.agam.pixelhub.ui.apps.AppsScreen
 import com.agam.pixelhub.ui.assistant.AssistantScreen
 import com.agam.pixelhub.ui.assistant.AssistantViewModel
+import com.agam.pixelhub.ui.calendar.CalendarScreen
 import com.agam.pixelhub.ui.expenses.ExpensesScreen
 import com.agam.pixelhub.ui.health.HealthScreen
 import com.agam.pixelhub.ui.home.HomeScreen
@@ -92,6 +102,7 @@ enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: Image
     SETTINGS("Settings", Icons.Outlined.Settings, Icons.Filled.Settings),
     HEALTH("Health", Icons.Outlined.FavoriteBorder, Icons.Filled.Favorite),
     EXPENSES("Money", Icons.Outlined.AccountBalanceWallet, Icons.Filled.AccountBalanceWallet),
+    CALENDAR("Calendar", Icons.Outlined.CalendarMonth, Icons.Filled.CalendarMonth),
 }
 
 /** The five places you work in day to day, in bar order. */
@@ -102,6 +113,9 @@ private val Tab.isLayer get() = this !in BarTabs
 
 /** Bar 58dp, plus 12dp above and below it. The system navigation bar is added by each screen. */
 private val NavBarSpace = 82.dp
+
+/** Home also carries the assistant bar above the tab bar. */
+private val HomeBarSpace = NavBarSpace + AssistantBarHeight + 10.dp
 
 @Composable
 fun PixelHubRoot(tabState: MutableState<Tab>) {
@@ -128,7 +142,12 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
             transitionSpec = { tabTransition(initialState, targetState, reduced) },
             label = "tabs",
         ) { t ->
-            CompositionLocalProvider(LocalNavInset provides if (t.isLayer) 0.dp else NavBarSpace) {
+            val inset = when {
+                t.isLayer -> 0.dp
+                t == Tab.HOME -> HomeBarSpace
+                else -> NavBarSpace
+            }
+            CompositionLocalProvider(LocalNavInset provides inset) {
                 when (t) {
                     Tab.HOME -> HomeScreen(onNavigate = { go(it) }, assistant = assistant)
                     Tab.REMINDERS -> RemindersScreen()
@@ -138,16 +157,37 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
                     Tab.SETTINGS -> SettingsScreen(onBack = { back() })
                     Tab.HEALTH -> HealthScreen()
                     Tab.EXPENSES -> ExpensesScreen()
+                    Tab.CALENDAR -> CalendarScreen(onBack = { back() })
                 }
             }
         }
-        AnimatedVisibility(
-            visible = !tab.isLayer,
-            modifier = Modifier.align(Alignment.BottomCenter),
-            enter = slideInVertically(tween(320, easing = Motion.EaseOut)) { it * 2 } + fadeIn(),
-            exit = slideOutVertically(tween(200, easing = Motion.EaseOut)) { it * 2 } + fadeOut(tween(150)),
+        // The assistant bar (Home only) above the tab bar. While typing, the tab bar steps
+        // aside and the assistant bar rides on top of the keyboard.
+        val typing = WindowInsets.isImeVisible
+        Column(
+            Modifier.align(Alignment.BottomCenter).imePadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            TabBar(selected = tab, onSelect = { go(it) })
+            AnimatedVisibility(
+                visible = tab == Tab.HOME,
+                enter = slideInVertically(tween(320, easing = Motion.EaseOut)) { it } + fadeIn(),
+                exit = slideOutVertically(tween(200, easing = Motion.EaseOut)) { it } + fadeOut(tween(150)),
+            ) {
+                AssistantBar(
+                    onSubmit = { text ->
+                        assistant.send(text)
+                        go(Tab.ASSISTANT)
+                    },
+                    modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 10.dp),
+                )
+            }
+            AnimatedVisibility(
+                visible = !tab.isLayer && !typing,
+                enter = slideInVertically(tween(320, easing = Motion.EaseOut)) { it * 2 } + fadeIn(),
+                exit = slideOutVertically(tween(200, easing = Motion.EaseOut)) { it * 2 } + fadeOut(tween(150)),
+            ) {
+                TabBar(selected = tab, onSelect = { go(it) })
+            }
         }
     }
 }

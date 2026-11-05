@@ -62,12 +62,13 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses WHERE spentAt >= :start AND spentAt < :end ORDER BY spentAt DESC, id DESC")
     fun observeBetween(start: Long, end: Long): Flow<List<Expense>>
 
-    @Query("SELECT COALESCE(SUM(amountPaise), 0) FROM expenses WHERE spentAt >= :start AND spentAt < :end")
+    /** Spending only; income never counts against a budget. */
+    @Query("SELECT COALESCE(SUM(amountPaise), 0) FROM expenses WHERE spentAt >= :start AND spentAt < :end AND kind = 'EXPENSE'")
     suspend fun sumBetween(start: Long, end: Long): Long
 
     @Query(
         "SELECT COALESCE(SUM(amountPaise), 0) FROM expenses " +
-            "WHERE spentAt >= :start AND spentAt < :end AND category = :category",
+            "WHERE spentAt >= :start AND spentAt < :end AND category = :category AND kind = 'EXPENSE'",
     )
     suspend fun sumBetween(start: Long, end: Long, category: ExpenseCategory): Long
 

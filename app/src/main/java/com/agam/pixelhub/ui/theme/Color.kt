@@ -90,6 +90,190 @@ val DayColors = HubColors(
     onDanger = Color(0xFFFFFFFF),
 )
 
+/*
+ * The other themes keep the same meaning for every token. Each one was checked for contrast:
+ * body text and muted text ≥ 4.5:1 on the page and cards, white on the alarm card ≥ 4.5:1,
+ * the accent ≥ 3:1 as an icon. Dark themes deepen the alarm card a little (see dawnCard).
+ */
+
+/** Dark grey rather than pure black: softer on the eyes in a lit room. */
+val DarkColors = HubColors(
+    isDark = true,
+    ground = Color(0xFF121214),
+    raised = Color(0xFF1E1E22),
+    raised2 = Color(0xFF2C2C31),
+    well = Color(0xFF17171A),
+    ink = Color(0xFFF2F2F4),
+    inkMuted = Color(0xFFA0A0A8),
+    dawn = Color(0xFF9D4EDD),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFFFFD15C),
+    onSky = Color(0xFF1A1400),
+    sun = Color(0xFFFFD15C),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF2A2A2F),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF3F3F46),
+    ok = Color(0xFF7FD6A0),
+    danger = Color(0xFFFF8A80),
+    onDanger = Color(0xFF3B0603),
+)
+
+/** Deep navy with an indigo accent. */
+val MidnightColors = HubColors(
+    isDark = true,
+    ground = Color(0xFF0B1020),
+    raised = Color(0xFF151B30),
+    raised2 = Color(0xFF232B45),
+    well = Color(0xFF0F1527),
+    ink = Color(0xFFEEF1FA),
+    inkMuted = Color(0xFF9DA5BF),
+    dawn = Color(0xFF6E62F0),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFFFFC94D),
+    onSky = Color(0xFF1A1400),
+    sun = Color(0xFFFFC94D),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF252D4A),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF36405F),
+    ok = Color(0xFF7FD6A0),
+    danger = Color(0xFFFF8A80),
+    onDanger = Color(0xFF3B0603),
+)
+
+/** Dark pine green with an emerald accent. */
+val ForestColors = HubColors(
+    isDark = true,
+    ground = Color(0xFF0D1512),
+    raised = Color(0xFF16211C),
+    raised2 = Color(0xFF23312A),
+    well = Color(0xFF111A16),
+    ink = Color(0xFFEAF3EE),
+    inkMuted = Color(0xFF9AACA2),
+    dawn = Color(0xFF2A8A5E),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFFF2CF5B),
+    onSky = Color(0xFF1A1400),
+    sun = Color(0xFFF2CF5B),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF20302A),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF30443B),
+    ok = Color(0xFF8FD9A8),
+    danger = Color(0xFFFF8A80),
+    onDanger = Color(0xFF3B0603),
+)
+
+/** Dark aubergine with an orchid accent. */
+val PlumColors = HubColors(
+    isDark = true,
+    ground = Color(0xFF15101C),
+    raised = Color(0xFF211A2B),
+    raised2 = Color(0xFF30273D),
+    well = Color(0xFF191320),
+    ink = Color(0xFFF3EEFA),
+    inkMuted = Color(0xFFAA9DBA),
+    dawn = Color(0xFFB04FD6),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFFFFCF66),
+    onSky = Color(0xFF1A1400),
+    sun = Color(0xFFFFCF66),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF2D2339),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF403352),
+    ok = Color(0xFF7FD6A0),
+    danger = Color(0xFFFF8A80),
+    onDanger = Color(0xFF3B0603),
+)
+
+/** Light, cool blue-grey with a cobalt accent. */
+val OceanColors = HubColors(
+    isDark = false,
+    ground = Color(0xFFE4EDF5),
+    raised = Color(0xFFFFFFFF),
+    raised2 = Color(0xFFEDF2F7),
+    well = Color(0xFFEDF2F7),
+    ink = Color(0xFF0E1A26),
+    inkMuted = Color(0xFF536170),
+    dawn = Color(0xFF1D6BCB),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFF835C00),
+    onSky = Color(0xFFFFFFFF),
+    sun = Color(0xFFFFD15C),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF0E2A47),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF1E3D60),
+    ok = Color(0xFF1E7B46),
+    danger = Color(0xFFC0362C),
+    onDanger = Color(0xFFFFFFFF),
+)
+
+/** Light blush with a raspberry accent. */
+val RoseColors = HubColors(
+    isDark = false,
+    ground = Color(0xFFF6E8EC),
+    raised = Color(0xFFFFFFFF),
+    raised2 = Color(0xFFF8EEF1),
+    well = Color(0xFFF8EEF1),
+    ink = Color(0xFF22121A),
+    inkMuted = Color(0xFF6E5560),
+    dawn = Color(0xFFC2185B),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFF835C00),
+    onSky = Color(0xFFFFFFFF),
+    sun = Color(0xFFFFD15C),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF3A1426),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF552238),
+    ok = Color(0xFF1E7B46),
+    danger = Color(0xFFB3261E),
+    onDanger = Color(0xFFFFFFFF),
+)
+
+/** Warm paper with a terracotta accent. */
+val SandColors = HubColors(
+    isDark = false,
+    ground = Color(0xFFEFE6D8),
+    raised = Color(0xFFFBF7F0),
+    raised2 = Color(0xFFF1EADF),
+    well = Color(0xFFF1EADF),
+    ink = Color(0xFF2A2118),
+    inkMuted = Color(0xFF685A49),
+    dawn = Color(0xFF9A4A1C),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFF765300),
+    onSky = Color(0xFFFFFFFF),
+    sun = Color(0xFFF2C14E),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF2A2118),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF43372A),
+    ok = Color(0xFF2F7A3E),
+    danger = Color(0xFFB3402F),
+    onDanger = Color(0xFFFFFFFF),
+)
+
+/** The themes offered in Settings. [SYSTEM] follows the phone: Light by day, Black at night. */
+enum class AppTheme(val label: String, val day: HubColors, val night: HubColors = day) {
+    SYSTEM("System", DayColors, NightColors),
+    LIGHT("Light", DayColors),
+    DARK("Dark", DarkColors),
+    BLACK("Black", NightColors),
+    MIDNIGHT("Midnight", MidnightColors),
+    FOREST("Forest", ForestColors),
+    PLUM("Plum", PlumColors),
+    OCEAN("Ocean", OceanColors),
+    ROSE("Rose", RoseColors),
+    SAND("Sand", SandColors),
+    ;
+
+    fun colors(systemDark: Boolean): HubColors = if (systemDark) night else day
+}
+
 val LocalHubColors = staticCompositionLocalOf { NightColors }
 
 /**

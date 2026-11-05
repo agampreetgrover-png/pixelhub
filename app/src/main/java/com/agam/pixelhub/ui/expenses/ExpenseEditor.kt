@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -51,6 +52,7 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -67,6 +69,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -75,10 +78,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agam.pixelhub.data.Expense
 import com.agam.pixelhub.data.ExpenseCategory
+import com.agam.pixelhub.data.ExpenseKind
 import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.ui.CircleIconButton
 import com.agam.pixelhub.ui.Fmt
@@ -111,12 +116,13 @@ import kotlin.math.abs
 internal val SheetTitle = HubType.title.copy(fontSize = 22.sp, lineHeight = 28.sp)
 
 /**
- * Add or edit an expense in a sheet, by hand and fast: a big amount typed on the sheet's own
- * keypad (no system keyboard), the category as a row of wells, an optional note, when it
- * happened, and an ink Save. A keystroke that can't be an amount shakes the display.
+ * Add or edit an expense or income in a sheet, by hand and fast: an Expense | Income toggle, a
+ * big amount typed on the sheet's own keypad (no system keyboard), the category as a row of
+ * wells, an optional note, when it happened, and an ink Save. A keystroke that can't be an
+ * amount shakes the display.
  *
- * [initial] null, or with id 0, is a new expense (a draft from the Assistant, a past month or
- * "Repeat" keeps its fields).
+ * [initial] null, or with id 0, is a new entry (a draft from the Assistant, a past month,
+ * "Repeat" or the Income action keeps its fields, including its kind).
  */
 @Composable
 fun ExpenseEditorSheet(
@@ -137,7 +143,15 @@ fun ExpenseEditorSheet(
     val isNew = initial == null || initial.id == 0L
 
     var amount by rememberSaveable { mutableStateOf(initial?.amountPaise?.takeIf { it > 0L }?.let { plainAmount(it) }.orEmpty()) }
-    var category by rememberSaveable { mutableStateOf(initial?.category ?: ExpenseCategory.FOOD) }
+    // The kind is saved by name so it survives rotation and process death as a plain string.
+    var kindName by rememberSaveable { mutableStateOf((initial?.kind ?: ExpenseKind.EXPENSE).name) }
+    val kind = ExpenseKind.valueOf(kindName)
+    val income = kind == ExpenseKind.INCOME
+    val categories = remember(kind) { ExpenseCategory.forKind(kind) }
+    var category by rememberSaveable {
+        val start = initial?.kind ?: ExpenseKind.EXPENSE
+        mutableStateOf(initial?.category?.takeIf { it in ExpenseCategory.forKind(start) } ?: ExpenseCategory.forKind(start).first())
+    }
     var note by rememberSaveable { mutableStateOf(initial?.note.orEmpty()) }
     val initialAt = remember { initial?.spentAt?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDateTime() } }
     // A draft stamped within the last minute ("Repeat") counts as "now".
@@ -173,19 +187,33 @@ fun ExpenseEditorSheet(
         val next = sanitizeAmount(amount + ch)
         if (next == null) reject() else amount = next
     }
+    // Switching kind keeps the category when it fits the new kind (Other fits both).
+    fun switchKind(k: ExpenseKind) {
+        if (k == kind) return
+        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        kindName = k.name
+        val fits = ExpenseCategory.forKind(k)
+        if (category !in fits) category = fits.first()
+    }
 
-    // Start the category row on the chosen category when it's off to the right.
+    // Start the category row on the chosen category when it's off to the right, and again
+    // whenever the kind changes the row.
     val catScroll = rememberScrollState()
-    LaunchedEffect(Unit) {
-        val i = category.ordinal
-        if (i > 3) catScroll.scrollTo(with(density) { ((i - 1) * 76).dp.roundToPx() })
+    LaunchedEffect(kind) {
+        val i = categories.indexOf(category)
+        catScroll.scrollTo(if (i > 3) with(density) { ((i - 1) * 76).dp.roundToPx() } else 0)
     }
 
     HubSheet(onDismiss = onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth().staggerIn(stagger, "title", 0), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (isNew) "New expense" else "Edit expense",
+                    when {
+                        isNew && income -> "Add income"
+                        isNew -> "Add expense"
+                        income -> "Edit income"
+                        else -> "Edit expense"
+                    },
                     style = SheetTitle,
                     color = c.ink,
                     modifier = Modifier.weight(1f),
@@ -193,7 +221,7 @@ fun ExpenseEditorSheet(
                 if (onDelete != null && !isNew) {
                     CircleIconButton(
                         icon = Icons.Outlined.Delete,
-                        contentDescription = "Delete expense",
+                        contentDescription = if (income) "Delete income" else "Delete expense",
                         onClick = onDelete,
                         tone = c.dangerSoft,
                         tint = c.danger,
@@ -203,35 +231,45 @@ fun ExpenseEditorSheet(
                 }
             }
 
+            KindToggle(
+                kind = kind,
+                onKind = { switchKind(it) },
+                modifier = Modifier.padding(top = 14.dp).staggerIn(stagger, "kind", 1),
+            )
+
             // The display.
             Box(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(min = 92.dp)
-                    .staggerIn(stagger, "amount", 1)
+                    .staggerIn(stagger, "amount", 2)
                     .semantics(mergeDescendants = true) {
-                        contentDescription = if (amount.isEmpty()) "Amount, empty" else "Amount ₹${groupedAmount(amount)}"
+                        val what = if (income) "Income amount" else "Amount"
+                        contentDescription = if (amount.isEmpty()) "$what, empty" else "$what ₹${groupedAmount(amount)}"
                     },
                 contentAlignment = Alignment.Center,
             ) {
                 AmountDisplay(
                     text = amount,
-                    accent = category.color(c),
+                    accent = if (income) c.ok else category.color(c),
+                    income = income,
                     flash = flash,
                     modifier = Modifier.graphicsLayer { translationX = shake.value * density.density },
                 )
             }
 
-            // Category, as a row of wells.
+            // Category, as a row of wells: spending categories, or where the money came from.
             Row(
                 Modifier
                     .fillMaxWidth()
                     .horizontalScroll(catScroll)
-                    .staggerIn(stagger, "cats", 2),
+                    .staggerIn(stagger, "cats", 3),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                ExpenseCategory.entries.forEach { cat ->
-                    CategoryChip(cat, selected = cat == category, onClick = { category = cat })
+                categories.forEach { cat ->
+                    key(cat) {
+                        CategoryChip(cat, selected = cat == category, onClick = { category = cat })
+                    }
                 }
             }
 
@@ -239,21 +277,21 @@ fun ExpenseEditorSheet(
                 onType = { type(it) },
                 onBack = { if (amount.isNotEmpty()) amount = amount.dropLast(1) else reject() },
                 onClear = { amount = "" },
-                modifier = Modifier.padding(top = 14.dp).staggerIn(stagger, "keys", 3),
+                modifier = Modifier.padding(top = 14.dp).staggerIn(stagger, "keys", 4),
             )
 
             HubTextField(
                 value = note,
                 onValueChange = { note = it },
                 label = "Note",
-                placeholder = "Lunch, cab home, phone bill",
+                placeholder = if (income) "November salary, client invoice, gift" else "Lunch, cab home, phone bill",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                modifier = Modifier.padding(top = 18.dp).staggerIn(stagger, "note", 4),
+                modifier = Modifier.padding(top = 18.dp).staggerIn(stagger, "note", 5),
             )
 
             FlowRow(
-                Modifier.fillMaxWidth().padding(top = 14.dp).staggerIn(stagger, "when", 5),
+                Modifier.fillMaxWidth().padding(top = 14.dp).staggerIn(stagger, "when", 6),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -290,7 +328,11 @@ fun ExpenseEditorSheet(
             }
 
             PrimaryButton(
-                text = if (isNew) "Save expense" else "Save changes",
+                text = when {
+                    !isNew -> "Save changes"
+                    income -> "Save income"
+                    else -> "Save expense"
+                },
                 enabled = valid,
                 onClick = {
                     val p = Money.parse(amount)
@@ -310,10 +352,11 @@ fun ExpenseEditorSheet(
                             category = category,
                             note = note.trim(),
                             spentAt = at,
+                            kind = kind,
                         ),
                     )
                 },
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp).staggerIn(stagger, "save", 6),
+                modifier = Modifier.fillMaxWidth().padding(top = 24.dp).staggerIn(stagger, "save", 7),
             )
         }
     }
@@ -368,12 +411,14 @@ fun ExpenseEditorSheet(
 
 /**
  * ₹ in the category colour, then the figures rolling digit by digit. The numerals shrink on
- * a spring as the amount grows so it always fits on one line.
+ * a spring as the amount grows so it always fits on one line. Income reads "+₹" with its
+ * figures in the ok green.
  */
 @Composable
 private fun AmountDisplay(
     text: String,
     accent: Color,
+    income: Boolean,
     flash: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -394,6 +439,7 @@ private fun AmountDisplay(
         when {
             flash -> c.danger
             empty -> c.inkMuted
+            income -> c.ok
             else -> c.ink
         },
         tween(if (flash) 60 else 220),
@@ -404,12 +450,62 @@ private fun AmountDisplay(
 
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(
-            "₹",
+            if (income) "+₹" else "₹",
             style = HubType.clockMedium.copy(fontSize = (size * 0.55f).sp, lineHeight = (size * 0.6f).sp),
             color = rupee,
             modifier = Modifier.padding(end = 6.dp),
         )
         RollingText(shown, style = style, color = digits)
+    }
+}
+
+/**
+ * Expense | Income, as two halves of a pill. An ink indicator slides under the chosen half
+ * (240ms ease-out, instant with reduced motion) and its label turns to the ground colour.
+ */
+@Composable
+private fun KindToggle(kind: ExpenseKind, onKind: (ExpenseKind) -> Unit, modifier: Modifier = Modifier) {
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val position by animateFloatAsState(
+        if (kind == ExpenseKind.INCOME) 1f else 0f,
+        if (reduced) tween(0) else tween(240, easing = Motion.EaseOut),
+        label = "kindIndicator",
+    )
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(CircleShape)
+            .background(c.raised2)
+            .padding(4.dp),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(0.5f)
+                .fillMaxHeight()
+                .graphicsLayer { translationX = position * size.width * (if (rtl) -1f else 1f) }
+                .clip(CircleShape)
+                .background(c.ink),
+        )
+        Row(Modifier.fillMaxWidth().fillMaxHeight()) {
+            listOf(ExpenseKind.EXPENSE to "Expense", ExpenseKind.INCOME to "Income").forEach { (k, label) ->
+                val selected = k == kind
+                val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(200), label = "kindLabel")
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(CircleShape)
+                        .pressable(onClick = { onKind(k) }, pressedScale = 0.96f, showRipple = false, role = Role.Tab)
+                        .semantics { this.selected = selected },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(label, style = HubType.button, color = fg, maxLines = 1)
+                }
+            }
+        }
     }
 }
 
