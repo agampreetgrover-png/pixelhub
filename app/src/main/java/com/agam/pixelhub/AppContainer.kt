@@ -15,6 +15,7 @@ import com.agam.pixelhub.notify.BudgetNotifier
 import com.agam.pixelhub.launcher.InstalledApps
 import com.agam.pixelhub.ledger.LedgerRepository
 import com.agam.pixelhub.scheduling.Scheduler
+import com.agam.pixelhub.widget.WidgetSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -48,6 +49,9 @@ class AppContainer(context: Context) {
 
     /** Every assistant request and how the rules handled it, shown in Settings. */
     val assistantLog = AssistantLog(File(appContext.filesDir, "assistant_log.json"), appScope)
+
+    /** Redraws home-screen widgets when their data changes. */
+    private val widgetSync = WidgetSync(appContext, appScope).also { it.start(this) }
 
     init {
         // The assistant no longer uses Gemini or Groq: delete any API keys saved by older versions.

@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PixelHub</string>
+    <string name="widget_health_label">Health</string>
+    <string name="widget_health_description">Today\'s steps against your goal, with exercise and energy</string>
+    <string name="widget_reminders_label">Reminders</string>
+    <string name="widget_reminders_description">What\'s due today, with a tap to mark it done</string>
+    <string name="widget_alarms_label">Alarms</string>
+    <string name="widget_alarms_description">Your next alarm, with switches to turn alarms on or off</string>
+    <string name="widget_money_label">Money</string>
+    <string name="widget_money_description">This month\'s spending against your budget</string>
+    <string name="widget_calendar_label">Calendar</string>
+    <string name="widget_calendar_description">What\'s next today and tomorrow</string>
 </resources>

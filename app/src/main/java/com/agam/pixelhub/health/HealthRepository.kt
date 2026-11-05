@@ -106,6 +106,11 @@ class HealthRepository(private val context: Context) {
     suspend fun canReadInBackground(): Boolean =
         supportsBackgroundReads() && grantedPermissions().containsAll(readPermissions + backgroundPermission)
 
+    private val latestState = kotlinx.coroutines.flow.MutableStateFlow<DailyActivity?>(null)
+
+    /** The newest figures read by anyone (the Health screen, a nudge check). Widgets follow it. */
+    val latest: kotlinx.coroutines.flow.StateFlow<DailyActivity?> = latestState
+
     /** Today's totals from midnight until now, or null if not connected. */
     suspend fun today(now: ZonedDateTime = ZonedDateTime.now()): DailyActivity? {
         if (!isConnected()) return null
@@ -127,7 +132,7 @@ class HealthRepository(private val context: Context) {
             activeKcal = result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories ?: 0.0,
             exerciseMinutes = result[ExerciseSessionRecord.EXERCISE_DURATION_TOTAL]?.toMinutes() ?: 0L,
             asOf = now.toInstant(),
-        )
+        ).also { latestState.value = it }
     }
 
     /**

@@ -64,6 +64,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.health.connect.client)
+    implementation(libs.androidx.glance.appwidget)
 
     testImplementation(libs.junit)
 }
