@@ -78,6 +78,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -666,7 +667,8 @@ fun HubSheet(
 ) {
     val c = Hub.colors
     val isDirty by rememberUpdatedState(dirty)
-    var askDiscard by remember { mutableStateOf(false) }
+    // Saved, so rotating with "Discard changes?" open keeps the question on screen.
+    var askDiscard by rememberSaveable { mutableStateOf(false) }
     // Back, the scrim and a swipe all go through confirmValueChange before the sheet hides.
     val state = rememberModalBottomSheetState(
         skipPartiallyExpanded = true,

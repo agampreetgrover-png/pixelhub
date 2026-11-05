@@ -9,8 +9,10 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -57,6 +59,14 @@ data class NowPlayingState(
 object NowPlaying {
     private fun component(context: Context) = ComponentName(context, MediaListener::class.java)
 
+    /**
+     * The latest state any collector saw, kept for the life of the process. Home starts from it,
+     * so coming back to the tab doesn't fold the card away and expand it again.
+     */
+    @Volatile
+    var last: NowPlayingState? = null
+        private set
+
     fun hasAccess(context: Context): Boolean =
         context.getSystemService(NotificationManager::class.java)
             .isNotificationListenerAccessGranted(component(context))
@@ -81,13 +91,14 @@ object NowPlaying {
         val msm = app.getSystemService(MediaSessionManager::class.java)
         val component = component(app)
         val handler = Handler(Looper.getMainLooper())
-        val watcher = Watcher(app, handler, { trySend(it) }) {
+        val watcher = Watcher(app, handler, { last = it; trySend(it) }) {
             try { msm.getActiveSessions(component) } catch (_: SecurityException) { emptyList() }
         }
         try {
             msm.addOnActiveSessionsChangedListener(watcher, component, handler)
             watcher.onActiveSessionsChanged(msm.getActiveSessions(component))
         } catch (_: SecurityException) {
+            last = null
             trySend(null) // access was revoked between the check and here
         }
         awaitClose {
@@ -111,9 +122,15 @@ object NowPlaying {
         if (session != null) {
             try {
                 // PixelHub is in the foreground; lend that to the player's PendingIntent (Android 14+).
-                @Suppress("DEPRECATION")
-                val options = ActivityOptions.makeBasic()
-                    .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                // On 16+ only while PixelHub is visible, so another app's PendingIntent never gets
+                // a standing right to start activities from the background.
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_IF_VISIBLE
+                } else {
+                    @Suppress("DEPRECATION")
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                }
+                val options = ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(mode)
                 session.send(context, 0, null, null, null, null, options.toBundle())
                 return
             } catch (_: Exception) {
@@ -126,41 +143,44 @@ object NowPlaying {
     }
 }
 
-/** Follows the top session and re-emits whenever its track or play state changes. */
+/**
+ * Watches every active session, not just the one on the card: a stopped player that starts
+ * again, or a second player starting while the first is paused, both show up at once.
+ */
 private class Watcher(
     private val app: Context,
     private val handler: Handler,
     private val emit: (NowPlayingState?) -> Unit,
     private val sessions: () -> List<MediaController>,
 ) : MediaController.Callback(), MediaSessionManager.OnActiveSessionsChangedListener {
+    private val observed = HashMap<MediaSession.Token, MediaController>()
     private var current: MediaController? = null
 
     override fun onActiveSessionsChanged(controllers: List<MediaController>?) = pick(controllers.orEmpty())
 
-    override fun onMetadataChanged(metadata: MediaMetadata?) = publish()
+    // The callback is shared by every session, so any change re-picks: whichever is playing wins.
+    override fun onMetadataChanged(metadata: MediaMetadata?) = pick(sessions())
 
-    override fun onPlaybackStateChanged(state: PlaybackState?) {
-        // Another player may have started while this one paused; prefer whichever is playing.
-        if (state?.state != PlaybackState.STATE_PLAYING) pick(sessions()) else publish()
-    }
+    override fun onPlaybackStateChanged(state: PlaybackState?) = pick(sessions())
 
     override fun onSessionDestroyed() = pick(sessions())
 
     private fun pick(list: List<MediaController>) {
-        val next = list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-            ?: list.firstOrNull { it.metadata != null && it.playbackState?.state.let { s -> s != null && s != PlaybackState.STATE_STOPPED && s != PlaybackState.STATE_NONE } }
-        if (next?.sessionToken != current?.sessionToken) {
-            current?.unregisterCallback(this)
-            current = next
-            next?.registerCallback(this, handler)
+        val live = list.associateBy { it.sessionToken }
+        (observed.keys - live.keys).forEach { observed.remove(it)?.unregisterCallback(this) }
+        (live.keys - observed.keys).forEach { token ->
+            live.getValue(token).let { it.registerCallback(this, handler); observed[token] = it }
         }
+        current = list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
+            ?: list.firstOrNull { it.metadata != null && it.playbackState?.state.let { s -> s != null && s != PlaybackState.STATE_STOPPED && s != PlaybackState.STATE_NONE } }
         publish()
     }
 
     private fun publish() = emit(current?.let { toState(it) }?.takeIf { it.showable })
 
     fun release() {
-        current?.unregisterCallback(this)
+        observed.values.forEach { it.unregisterCallback(this) }
+        observed.clear()
         current = null
     }
 
@@ -192,7 +212,8 @@ private class Watcher(
             playing = ps?.state == PlaybackState.STATE_PLAYING,
             durationMs = md?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.coerceAtLeast(0) ?: 0,
             positionMs = ps?.position ?: 0,
-            positionAt = ps?.lastPositionUpdateTime ?: SystemClock.elapsedRealtime(),
+            // Some players never set the update time (0): counting from boot would pin the bar at the end.
+            positionAt = ps?.lastPositionUpdateTime?.takeIf { it > 0L } ?: SystemClock.elapsedRealtime(),
             speed = ps?.playbackSpeed?.takeIf { it > 0f } ?: 1f,
         )
     }

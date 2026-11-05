@@ -47,12 +47,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -163,27 +160,23 @@ fun CardDeck(faces: List<CardFace>, modifier: Modifier = Modifier) {
                     .height(CardHeight)
                     .clip(notch)
                     .background(face.color)
-                    .then(
-                        if (isFront) {
-                            Modifier
-                                .draggable(
-                                    orientation = Orientation.Horizontal,
-                                    onDragStarted = { dragOwner = i },
-                                    state = rememberDraggableState { d -> scope.launch { drag.snapTo(drag.value + d) } },
-                                    onDragStopped = { v ->
-                                        if (abs(drag.value) > swipeAway || abs(v) > 1400f) flip(v)
-                                        else drag.animateTo(0f, Motion.snappy(), initialVelocity = v)
-                                    },
-                                )
-                                .pressable(onClick = face.onOpen, pressedScale = 0.985f, showRipple = false, onClickLabel = "Open ${face.name}")
-                        } else {
-                            Modifier.semantics {
-                                role = Role.Button
-                                contentDescription = "Show ${face.name}"
-                                onClick { flip(); true }
-                            }
+                    // Same modifiers on both cards at all times, only switched on or off. Swapping
+                    // them on a flip changed the card's layers and left the card that went to the
+                    // back drawn without its fill.
+                    .draggable(
+                        enabled = isFront,
+                        orientation = Orientation.Horizontal,
+                        onDragStarted = { dragOwner = i },
+                        state = rememberDraggableState { d -> scope.launch { drag.snapTo(drag.value + d) } },
+                        onDragStopped = { v ->
+                            if (abs(drag.value) > swipeAway || abs(v) > 1400f) flip(v)
+                            // Queued behind the pending drag steps, so none of them can cancel the return.
+                            else scope.launch { drag.animateTo(0f, Motion.snappy(), initialVelocity = v) }
                         },
-                    ),
+                    )
+                    .pressable(onClick = face.onOpen, enabled = isFront, pressedScale = 0.985f, showRipple = false, onClickLabel = "Open ${face.name}")
+                    // The back card is reached through its tap strip below, which already says "Show …".
+                    .then(if (isFront) Modifier else Modifier.clearAndSetSemantics { }),
             ) {
                 CardBody(face, notchWidth)
             }
@@ -235,8 +228,13 @@ private fun CardBody(face: CardFace, notchWidth: Dp) {
             Icon(face.icon, contentDescription = null, tint = on, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(10.dp))
             Text(face.name, style = HubType.bodyStrong.copy(fontSize = 14.sp), color = on, maxLines = 1)
-            Spacer(Modifier.weight(1f))
-            Text(face.corner, style = HubType.clockSmall.copy(fontSize = 14.sp), color = on, maxLines = 1)
+            Spacer(Modifier.width(12.dp))
+            // Takes the rest of the row and ellipsizes: custom days ("Mon, Tue, Wed, Thu, Sat")
+            // were cut off mid-letter at large font sizes.
+            Text(
+                face.corner, style = HubType.clockSmall.copy(fontSize = 14.sp), color = on, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End, modifier = Modifier.weight(1f),
+            )
         }
         Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {

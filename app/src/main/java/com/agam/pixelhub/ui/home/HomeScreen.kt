@@ -620,7 +620,8 @@ private fun ReminderRow(
 private fun SpendingCard(summary: MonthSummary?, onViewAll: () -> Unit, onAdd: () -> Unit, modifier: Modifier = Modifier) {
     val c = Hub.colors
     val context = LocalContext.current
-    val zone = remember { ZoneId.systemDefault() }
+    // Not remembered: Home recomposes every minute and on resume, so a time zone change shows up.
+    val zone = ZoneId.systemDefault()
     Column(modifier.fillMaxWidth().hubCard(c.raised).padding(bottom = 8.dp)) {
         CardHeader("Money", "View all", onViewAll)
         if (summary != null) {
@@ -643,7 +644,8 @@ private fun SpendingCard(summary: MonthSummary?, onViewAll: () -> Unit, onAdd: (
             if (summary.incomePaise > 0) {
                 Text(
                     "+${Money.format(summary.incomePaise)} received • net ${signed(summary.netPaise)}",
-                    style = HubType.small, color = c.ok,
+                    // Green only when you're ahead; a negative net in green read as good news.
+                    style = HubType.small, color = if (summary.netPaise >= 0) c.ok else c.inkMuted,
                     modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 6.dp),
                 )
             }

@@ -17,7 +17,9 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
@@ -25,6 +27,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 
@@ -47,9 +50,14 @@ fun PixelHubTheme(content: @Composable () -> Unit) {
             window.setBackgroundDrawable(ColorDrawable(hub.ground.toArgb()))
         }
     }
-    // "Remove animations" in Accessibility sets the animator scale to 0.
-    val reduced = remember {
+    // "Remove animations" in Accessibility sets the animator scale to 0. Re-read on every resume:
+    // flipping it isn't a configuration change, so the activity is never recreated for it.
+    fun animationsOff() =
         Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+    var reduced by remember { mutableStateOf(animationsOff()) }
+    LifecycleResumeEffect(Unit) {
+        reduced = animationsOff()
+        onPauseOrDispose { }
     }
     // Switching theme in Settings crossfades every colour instead of snapping. Colour change
     // isn't travel, so it stays on under reduced motion; at launch start equals target.

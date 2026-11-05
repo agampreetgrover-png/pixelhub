@@ -1,5 +1,6 @@
 package com.agam.pixelhub.ui.home
 
+import android.content.Context
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -19,12 +20,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -80,26 +83,42 @@ fun NowPlayingCard(modifier: Modifier = Modifier) {
         onPauseOrDispose { }
     }
     val flow = remember(access) { if (access) NowPlaying.flow(context) else flowOf(null) }
-    val state by flow.collectAsStateWithLifecycle(initialValue = null)
+    // Starts from the last state seen this process, so returning to Home doesn't re-expand the card.
+    val state by flow.collectAsStateWithLifecycle(initialValue = if (access) NowPlaying.last else null)
+    // "Not now" on the connect prompt; remembered so declining access isn't asked on every visit.
+    var dismissed by remember { mutableStateOf(connectDismissed(context)) }
 
     // Keep the last track while the card folds away, so it doesn't blank mid-animation.
-    var shown by remember { mutableStateOf<NowPlayingState?>(null) }
+    var shown by remember { mutableStateOf(state) }
     if (state != null) shown = state
 
     AnimatedVisibility(
-        visible = !access || state != null,
+        visible = (!access && !dismissed) || state != null,
         enter = revealEnter(reduced),
         exit = revealExit(reduced),
     ) {
         Box(modifier.animateContentSize(sizeSpec(reduced))) {
             val s = shown
-            if (!access) ConnectRow() else if (s != null) Playing(s)
+            if (!access) {
+                ConnectRow(onNotNow = { dismissed = true; setConnectDismissed(context) })
+            } else if (s != null) {
+                Playing(s)
+            }
         }
     }
 }
 
+private const val PREFS = "now_playing"
+private const val KEY_DISMISSED = "connect_dismissed"
+
+private fun connectDismissed(context: Context): Boolean =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_DISMISSED, false)
+
+private fun setConnectDismissed(context: Context) =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_DISMISSED, true).apply()
+
 @Composable
-private fun ConnectRow() {
+private fun ConnectRow(onNotNow: () -> Unit) {
     val c = Hub.colors
     val context = LocalContext.current
     Row(
@@ -116,6 +135,9 @@ private fun ConnectRow() {
                 "Show Spotify and other music here",
                 style = MetaStyle, color = c.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
+        }
+        IconButton(onClick = onNotNow) {
+            Icon(Icons.Outlined.Close, contentDescription = "Not now", tint = c.inkMuted, modifier = Modifier.size(20.dp))
         }
         QuietButton("Connect", onClick = { NowPlaying.openAccessSettings(context) })
     }

@@ -71,6 +71,7 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.launch
@@ -191,7 +192,8 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
             val reminders by LocalContext.current.container.reminders.all
                 .collectAsStateWithLifecycle(initialValue = emptyList())
             val checks = rememberSetupChecks()
-            val nowMs = System.currentTimeMillis()
+            // Re-read each time the drawer opens, so it counts what's overdue now, like Home's badge.
+            val nowMs = remember(drawer.targetValue, reminders) { System.currentTimeMillis() }
             val badges = mapOf(
                 Tab.REMINDERS to reminders.count { !it.done && it.triggerAt < nowMs },
                 Tab.SETTINGS to checks.count { !it.ok },
