@@ -48,7 +48,6 @@ import androidx.compose.material.icons.outlined.Receipt
 import androidx.compose.material.icons.outlined.Restaurant
 import androidx.compose.material.icons.outlined.Savings
 import androidx.compose.material.icons.outlined.ShoppingBag
-import androidx.compose.material.icons.outlined.ShoppingBasket
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -112,7 +111,7 @@ import java.time.YearMonth
 import kotlin.math.abs
 
 /*
- * Money keeps ink as its accent. Each spending category has its own hue from a set of nine,
+ * Money keeps ink as its accent. Each spending category has its own hue from a set of eight,
  * spaced round the wheel at the same muted chroma: pale and soft on the night ground, deeper on
  * the day ground, so every one holds about the same contrast against its page. The five income
  * categories take the gaps between them at the same chroma (each at least 4.5:1 on its card).
@@ -124,7 +123,6 @@ fun ExpenseCategory.color(c: HubColors): Color = if (c.isDark) {
     when (this) {
         ExpenseCategory.FOOD -> Color(0xFFEE9A7A)          // terracotta
         ExpenseCategory.BILLS -> Color(0xFFE3BE6A)         // amber
-        ExpenseCategory.GROCERIES -> Color(0xFFB3C878)     // olive
         ExpenseCategory.HEALTH -> Color(0xFF86D1A8)        // mint
         ExpenseCategory.TRANSPORT -> Color(0xFF6FC6C6)     // teal
         ExpenseCategory.TRAVEL -> Color(0xFF8DB2EC)        // cornflower
@@ -142,7 +140,6 @@ fun ExpenseCategory.color(c: HubColors): Color = if (c.isDark) {
     when (this) {
         ExpenseCategory.FOOD -> Color(0xFFB0522F)
         ExpenseCategory.BILLS -> Color(0xFF8F660A)
-        ExpenseCategory.GROCERIES -> Color(0xFF5B771C)
         ExpenseCategory.HEALTH -> Color(0xFF23805A)
         ExpenseCategory.TRANSPORT -> Color(0xFF12767A)
         ExpenseCategory.TRAVEL -> Color(0xFF2F63AE)
@@ -175,7 +172,6 @@ internal fun signedText(paise: Long): String = (if (paise < 0L) "−" else "+") 
 val ExpenseCategory.icon: ImageVector
     get() = when (this) {
         ExpenseCategory.FOOD -> Icons.Outlined.Restaurant
-        ExpenseCategory.GROCERIES -> Icons.Outlined.ShoppingBasket
         ExpenseCategory.TRANSPORT -> Icons.Outlined.DirectionsBus
         ExpenseCategory.SHOPPING -> Icons.Outlined.ShoppingBag
         ExpenseCategory.BILLS -> Icons.Outlined.Receipt
@@ -193,7 +189,7 @@ val ExpenseCategory.icon: ImageVector
 /** Icon colour on a well filled with the category colour: dark on the pale night hues, white on the deep day ones. */
 internal fun ExpenseCategory.onColor(c: HubColors): Color = if (c.isDark) Color(0xFF141414) else Color.White
 
-/** "Food", "Bills", "Groceries": the label without its "& …" tail, for chips under a well. */
+/** "Bills", "Food": the label without its "& …" tail, for chips under a well. */
 internal val ExpenseCategory.shortLabel: String get() = label.substringBefore(" &")
 
 /** Text styles with tabular figures, for captions that carry amounts. */

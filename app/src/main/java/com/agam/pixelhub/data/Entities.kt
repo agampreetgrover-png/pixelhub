@@ -48,8 +48,8 @@ enum class ExpenseKind { EXPENSE, INCOME }
  * offered for income; OTHER fits both.
  */
 enum class ExpenseCategory(val label: String, val isIncome: Boolean = false) {
-    FOOD("Food & dining"),
-    GROCERIES("Groceries"),
+    /** Eating out and groceries alike. */
+    FOOD("Food"),
     TRANSPORT("Transport"),
     SHOPPING("Shopping"),
     BILLS("Bills & utilities"),

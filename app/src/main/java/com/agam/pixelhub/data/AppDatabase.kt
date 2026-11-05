@@ -17,7 +17,7 @@ class Converters {
 
 @Database(
     entities = [Reminder::class, Alarm::class, AppShortcut::class, HealthNudge::class, Expense::class, Budget::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -74,9 +74,29 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5 folds Groceries into Food. Entries move over; a Groceries budget is added to the
+         * Food budget, or becomes it when there was none.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("UPDATE `expenses` SET `category` = 'FOOD' WHERE `category` = 'GROCERIES'")
+                db.execSQL(
+                    "UPDATE `budgets` SET `limitPaise` = `limitPaise` + " +
+                        "COALESCE((SELECT `limitPaise` FROM `budgets` WHERE `key` = 'GROCERIES'), 0) " +
+                        "WHERE `key` = 'FOOD'",
+                )
+                db.execSQL(
+                    "UPDATE `budgets` SET `key` = 'FOOD' WHERE `key` = 'GROCERIES' " +
+                        "AND NOT EXISTS (SELECT 1 FROM `budgets` WHERE `key` = 'FOOD')",
+                )
+                db.execSQL("DELETE FROM `budgets` WHERE `key` = 'GROCERIES'")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "pixelhub.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
     }
 }
