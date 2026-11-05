@@ -3,10 +3,15 @@ package com.agam.pixelhub.widget
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.glance.ColorFilter
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
+import androidx.glance.Image
+import androidx.glance.ImageProvider
 import androidx.glance.LocalSize
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
@@ -21,26 +26,32 @@ import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
+import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
+import androidx.glance.layout.padding
+import androidx.glance.layout.size
 import androidx.glance.layout.width
 import androidx.glance.semantics.contentDescription
 import androidx.glance.semantics.semantics
+import androidx.glance.text.FontWeight
+import androidx.glance.text.Text
+import androidx.glance.unit.ColorProvider
+import com.agam.pixelhub.R
 import com.agam.pixelhub.calendar.CalendarEvent
 import com.agam.pixelhub.calendar.CalendarEvents
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.Tab
 import com.agam.pixelhub.ui.theme.NightColors
-import com.agam.pixelhub.widget.kit.Caption
 import com.agam.pixelhub.widget.kit.CardTone
-import com.agam.pixelhub.widget.kit.Figure
 import com.agam.pixelhub.widget.kit.Notice
 import com.agam.pixelhub.widget.kit.WidgetCard
 import com.agam.pixelhub.widget.kit.WidgetPalette
 import com.agam.pixelhub.widget.kit.WidgetShape
-import com.agam.pixelhub.widget.kit.openTab
 import com.agam.pixelhub.widget.kit.isStrip
+import com.agam.pixelhub.widget.kit.openTab
+import com.agam.pixelhub.widget.kit.ringBitmap
 import com.agam.pixelhub.widget.kit.shapeOf
 import kotlinx.coroutines.flow.first
 import java.time.Instant
@@ -50,18 +61,57 @@ import java.time.ZoneId
 import java.time.format.TextStyle
 import java.util.Locale
 import androidx.glance.color.ColorProvider as DayNightColor
+import androidx.glance.text.TextStyle as GlanceTextStyle
 
 /** Android's entry point for the Calendar widget. */
 class CalendarWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = CalendarWidget()
 }
 
-private const val DAY_MS = 24 * 60 * 60_000L
+private const val MINUTE_MS = 60_000L
+private const val HOUR_MS = 60 * MINUTE_MS
+private const val DAY_MS = 24 * HOUR_MS
 
-/** What the widget can show: the coming events, or that it may not read the calendar. */
+/** The fixed dark look of this widget, the same in every theme (the user's choice). */
+private object Cal {
+    val Container = Color(0xFF1F2123)
+    val Card = Color(0xFF2D3135)
+    val White = Color(0xFFFFFFFF)
+    val OffWhite = Color(0xFFE8E8EA)
+    /** Lighter than solid-card grey: on glass over a bright wallpaper it still keeps ~5:1. */
+    val Muted = Color(0xFFCFCFD4)
+    /** The ring's track: glass, like the cards. */
+    val Track = Color(0x24FFFFFF)
+    /** "in 45m": a step softer than white. */
+    val SoftText = Color(0xFFC4C4C9)
+    val Mint = Color(0xFF4ADE80)
+    val Ring = Color(0xFF34D399)
+    /** The highlighted card's time line. */
+    val MintTime = Color(0xFF8FD9AE)
+
+    /** The kit's palette in these colours, so the empty and no-access notices match. */
+    val palette = NightColors.copy(raised = Container, raised2 = Card, ink = White, inkMuted = Muted)
+        .let { WidgetPalette(it, it, CardTone.RAISED, isNight = true) }
+}
+
+private fun fixed(c: Color): ColorProvider = DayNightColor(c, c)
+
+/** The glass panel behind everything (widgets can't blur, so this is clear tinted glass). */
+private val Glass get() = ImageProvider(R.drawable.widget_glass_container)
+
+/** What the widget can show: the coming events and the day's progress, or that it may not read the calendar. */
 private sealed interface CalendarState {
-    /** [soon]: now until the end of tomorrow. [next]: the first event within a week, for the 1×1. */
-    data class Ready(val soon: List<CalendarEvent>, val next: CalendarEvent?) : CalendarState
+    /**
+     * [soon]: now until the end of tomorrow, timed events in order then all-day ones. [next]: the
+     * first timed event within a week (under way or coming). [doneToday]/[totalToday]: today's
+     * timed events that have ended, out of all of them (the ring).
+     */
+    data class Ready(
+        val soon: List<CalendarEvent>,
+        val next: CalendarEvent?,
+        val doneToday: Int,
+        val totalToday: Int,
+    ) : CalendarState
     data object NoAccess : CalendarState
 }
 
@@ -79,20 +129,30 @@ class CalendarWidget : GlanceAppWidget() {
     }
 }
 
+/** The same event from several calendars (a holiday three times) shows once; back-to-back sessions stay separate. */
+private fun List<CalendarEvent>.unique() = distinctBy { it.title.trim().lowercase() to it.begin }
+
 private suspend fun load(context: Context): CalendarState {
     val events = CalendarEvents(context)
     if (!events.hasPermission()) return CalendarState.NoAccess
     val now = System.currentTimeMillis()
     val zone = ZoneId.systemDefault()
+    val startOfToday = LocalDate.now().atStartOfDay(zone).toInstant().toEpochMilli()
+    val endOfToday = LocalDate.now().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
     val endOfTomorrow = LocalDate.now().plusDays(2).atStartOfDay(zone).toInstant().toEpochMilli()
     val week = runCatching { events.observe(now, now + 7 * DAY_MS).first() }.getOrDefault(emptyList())
         .filter { it.end > now }
-        // The same event from several calendars (a holiday three times) shows once. Same title
-        // AND same start: back-to-back sessions of one class stay separate.
-        .distinctBy { it.title.trim().lowercase() to it.begin }
-        .sortedWith(compareBy<CalendarEvent> { !it.allDay }.thenBy { it.begin })
-        .sortedBy { dayOf(it) }
-    return CalendarState.Ready(soon = week.filter { it.begin < endOfTomorrow }, next = week.firstOrNull())
+        .unique()
+        .sortedWith(compareBy<CalendarEvent>({ dayOf(it) }, { it.allDay }, { it.begin }))
+    val today = runCatching { events.observe(startOfToday, endOfToday).first() }.getOrDefault(emptyList())
+        .filter { !it.allDay && it.begin >= startOfToday && it.begin < endOfToday }
+        .unique()
+    return CalendarState.Ready(
+        soon = week.filter { it.begin < endOfTomorrow },
+        next = week.firstOrNull { !it.allDay },
+        doneToday = today.count { it.end <= now },
+        totalToday = today.size,
+    )
 }
 
 /** The day an event belongs to in the list: today for anything already under way. */
@@ -103,115 +163,155 @@ private fun dayOf(e: CalendarEvent): LocalDate {
 
 @Composable
 private fun CalendarContent(context: Context, state: CalendarState) {
-    val palette = WidgetPalette.of(context, CardTone.RAISED)
+    val palette = Cal.palette
     val size = LocalSize.current
     val shape = shapeOf(size)
     val open = openTab(context, Tab.CALENDAR)
     if (state is CalendarState.NoAccess) {
-        Notice(palette, "Calendar", "Tap to allow calendar access", open, shape)
+        Notice(palette, "Calendar", "Tap to allow calendar access", open, shape, background = Glass)
         return
     }
     val ready = state as CalendarState.Ready
     val events = CalendarEvents(context)
+    val today = LocalDate.now()
+    val countdown = countdown(ready.next)
+    val description = buildString {
+        append("${today.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.getDefault())} ${today.dayOfMonth}.")
+        ready.next?.let { append(" Next: ${it.title}${countdown?.let { c -> " $c" }.orEmpty().replace("m", " minutes").replace("h", " hours")}.") }
+        if (ready.totalToday > 0) append(" ${ready.doneToday} of ${ready.totalToday} classes done.")
+    }
+
     if (shape == WidgetShape.TINY) {
-        val next = ready.next
-        if (next == null) {
-            Notice(palette, "Free", "Nothing this week", open, shape)
-            return
-        }
-        WidgetCard(palette, actionStartActivity(events.openIntent(next)), "Next: ${next.title}, ${dayWord(dayOf(next))} ${timeText(context, next)}", padding = 10.dp) {
+        WidgetCard(palette, open, description, padding = 10.dp, background = Glass) {
             Column(GlanceModifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalAlignment = Alignment.CenterVertically) {
-                Figure(if (next.allDay) "All day" else startTime(context, next), palette, if (next.allDay) 16.sp else 20.sp)
-                Caption(dayWord(dayOf(next)), palette)
+                Label("${today.dayOfMonth}", Cal.White, 28.sp, FontWeight.Bold)
+                countdown?.let { Countdown(it) }
             }
         }
         return
     }
     if (ready.soon.isEmpty()) {
-        Notice(palette, "Free today", "Nothing on your calendar today or tomorrow", open, shape)
+        Notice(palette, "Free today", "Nothing on your calendar today or tomorrow", open, shape, background = Glass)
         return
     }
-    val first = ready.soon.first()
-    val description = "${ready.soon.size} events today and tomorrow. Next: ${first.title}, ${timeText(context, first)}"
+    // The highlighted card: the event under way, or the next one.
+    val highlight = ready.soon.firstOrNull { !it.allDay }
     WidgetCard(
-        palette, open, description,
+        palette, open, description, padding = 16.dp, background = Glass,
         verticalAlignment = if (shape.isStrip()) Alignment.CenterVertically else Alignment.Top,
     ) {
         when (shape) {
-            WidgetShape.STRIP_S, WidgetShape.STRIP_M, WidgetShape.STRIP_L -> Row(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                EventLine(context, palette, events, first, showDay = dayOf(first) != LocalDate.now(), modifier = GlanceModifier.defaultWeight())
-                if (shape != WidgetShape.STRIP_S && first.location.isNotBlank()) {
-                    Spacer(GlanceModifier.width(12.dp))
-                    Caption(first.location, palette)
-                }
-                if (shape == WidgetShape.STRIP_L) ready.soon.getOrNull(1)?.let { second ->
-                    Spacer(GlanceModifier.width(16.dp))
-                    EventLine(context, palette, events, second, showDay = dayOf(second) != LocalDate.now(), modifier = GlanceModifier.defaultWeight())
+            WidgetShape.STRIP_S, WidgetShape.STRIP_M -> EventCard(context, events, ready.soon.first(), ready.soon.first() == highlight, GlanceModifier.fillMaxWidth())
+            WidgetShape.STRIP_L -> Row(GlanceModifier.fillMaxWidth()) {
+                EventCard(context, events, ready.soon.first(), ready.soon.first() == highlight, GlanceModifier.defaultWeight())
+                ready.soon.getOrNull(1)?.let { second ->
+                    Spacer(GlanceModifier.width(6.dp))
+                    EventCard(context, events, second, second == highlight, GlanceModifier.defaultWeight())
                 }
             }
-            else -> {
-                // Headers and rows share the height; a row is never cut off.
-                var budget = size.height.value - 28f
-                var lastDay: LocalDate? = null
-                for (e in ready.soon) {
-                    val day = dayOf(e)
-                    val needsHeader = day != lastDay
-                    val cost = 40f + if (needsHeader) 20f else 0f
-                    if (cost > budget) break
-                    budget -= cost
-                    if (needsHeader) {
-                        Caption(dayWord(day), palette)
-                        lastDay = day
-                    }
-                    EventRow(context, palette, events, e, wide = shape != WidgetShape.SQUARE)
+            WidgetShape.SQUARE -> Cards(context, events, ready.soon, highlight, size.height.value - 32f)
+            else -> Row(GlanceModifier.fillMaxSize()) {
+                LeftColumn(context, ready, countdown, (size.width.value * 0.28f).coerceIn(64f, 96f).dp)
+                Spacer(GlanceModifier.width(12.dp))
+                Column(GlanceModifier.defaultWeight()) {
+                    Cards(context, events, ready.soon, highlight, size.height.value - 32f)
                 }
             }
         }
     }
 }
 
-/** The event's own colour as a thin bar, the way the Calendar screen marks events. */
 @Composable
-private fun ColorBar(e: CalendarEvent, height: Int) {
-    val c = if (e.color == 0) NightColors.dawn else Color(e.color).copy(alpha = 1f)
-    Box(GlanceModifier.width(4.dp).height(height.dp).cornerRadius(2.dp).background(DayNightColor(c, c))) {}
+private fun Label(text: String, color: Color, size: TextUnit, weight: FontWeight = FontWeight.Normal, maxLines: Int = 1) {
+    Text(text, maxLines = maxLines, style = GlanceTextStyle(color = fixed(color), fontSize = size, fontWeight = weight))
 }
 
-/** Title over time, beside its colour bar: the strips. */
+/** Mint ↗ and "in 45m". */
 @Composable
-private fun EventLine(context: Context, palette: WidgetPalette, events: CalendarEvents, e: CalendarEvent, showDay: Boolean, modifier: GlanceModifier) {
-    Row(modifier.clickable(actionStartActivity(events.openIntent(e))), verticalAlignment = Alignment.CenterVertically) {
-        ColorBar(e, 32)
-        Spacer(GlanceModifier.width(8.dp))
-        Column {
-            Caption(e.title, palette, strong = true)
-            Caption(if (showDay) "${dayWord(dayOf(e))} ${timeText(context, e)}" else timeText(context, e), palette)
+private fun Countdown(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Image(
+            ImageProvider(R.drawable.ic_widget_arrow_up_right),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(fixed(Cal.Mint)),
+            modifier = GlanceModifier.size(13.dp),
+        )
+        Spacer(GlanceModifier.width(3.dp))
+        Label(text, Cal.SoftText, 12.sp, FontWeight.Medium)
+    }
+}
+
+/** Day, date, "↗ in 45m", then the ring of the day's classes done ("1/4"), stacked as one group. */
+@Composable
+private fun LeftColumn(context: Context, ready: CalendarState.Ready, countdown: String?, width: Dp) {
+    val today = LocalDate.now()
+    Column(GlanceModifier.width(width).fillMaxHeight()) {
+        Label(today.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()), Cal.Muted, 15.sp, FontWeight.Bold)
+        Label("${today.dayOfMonth}", Cal.White, 32.sp, FontWeight.Bold)
+        Spacer(GlanceModifier.height(4.dp))
+        countdown?.let { Countdown(it) }
+        // The ring follows straight on: day, date, countdown and ring read as one status group.
+        Spacer(GlanceModifier.height(10.dp))
+        if (ready.totalToday > 0) {
+            val fraction = ready.doneToday.toFloat() / ready.totalToday
+            Box(GlanceModifier.size(40.dp), contentAlignment = Alignment.Center) {
+                Image(
+                    ImageProvider(ringBitmap(context, 40.dp, fraction, Cal.Track, Cal.Ring, stroke = 4.dp)),
+                    contentDescription = null,
+                    modifier = GlanceModifier.size(40.dp),
+                )
+                Label("${ready.doneToday}/${ready.totalToday}", Cal.White, 12.sp, FontWeight.Bold)
+            }
         }
     }
 }
 
-/** One row of the list: colour bar, title, and the time (beside it when there's room). */
+/** A card is two lines plus padding; the gap between cards. Cards that don't fit whole aren't drawn. */
+private const val CARD_DP = 52f
+private const val CARD_GAP_DP = 6f
+
+/** As many whole cards as fit in [heightDp], stacked. */
 @Composable
-private fun EventRow(context: Context, palette: WidgetPalette, events: CalendarEvents, e: CalendarEvent, wide: Boolean) {
-    Row(
-        GlanceModifier.fillMaxWidth().height(40.dp)
+private fun Cards(context: Context, events: CalendarEvents, list: List<CalendarEvent>, highlight: CalendarEvent?, heightDp: Float) {
+    val count = ((heightDp + CARD_GAP_DP) / (CARD_DP + CARD_GAP_DP)).toInt().coerceIn(1, list.size)
+    list.take(count).forEachIndexed { i, e ->
+        if (i > 0) Spacer(GlanceModifier.height(CARD_GAP_DP.dp))
+        EventCard(context, events, e, e == highlight, GlanceModifier.fillMaxWidth())
+    }
+}
+
+/** One event: its name on line 1, its time on line 2. The highlighted one is dark emerald with a mint time. */
+@Composable
+private fun EventCard(context: Context, events: CalendarEvents, e: CalendarEvent, highlighted: Boolean, modifier: GlanceModifier) {
+    val fill = if (highlighted) {
+        modifier.background(ImageProvider(R.drawable.widget_cal_highlight))
+    } else {
+        modifier.background(ImageProvider(R.drawable.widget_glass_card))
+    }
+    Column(
+        fill
+            .cornerRadius(12.dp)
             .clickable(actionStartActivity(events.openIntent(e)))
-            .semantics { contentDescription = "${e.title}, ${timeText(context, e)}. Opens in your calendar." },
-        verticalAlignment = Alignment.CenterVertically,
+            .semantics { contentDescription = "${e.title}, ${cardTime(context, e)}. Opens in your calendar." }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        ColorBar(e, 28)
-        Spacer(GlanceModifier.width(8.dp))
-        if (wide) {
-            // The title takes what's left and ends in "…"; the time is always shown whole.
-            Box(GlanceModifier.defaultWeight()) { Caption(e.title, palette, strong = true) }
-            Spacer(GlanceModifier.width(10.dp))
-            Caption(timeText(context, e), palette)
-        } else {
-            Column {
-                Caption(e.title, palette, strong = true)
-                Caption(timeText(context, e), palette)
-            }
-        }
+        Label(e.title, if (highlighted) Cal.White else Cal.OffWhite, 14.sp, FontWeight.Medium)
+        Label(cardTime(context, e), if (highlighted) Cal.MintTime else Cal.Muted, 12.sp)
+    }
+}
+
+/** "now" during an event; "in 45m", "in 2h 15m", "in 8h" (hours only beyond 3h), "in 2d". */
+private fun countdown(next: CalendarEvent?): String? {
+    next ?: return null
+    val now = System.currentTimeMillis()
+    if (next.begin <= now) return if (next.end > now) "now" else null
+    val minutes = ((next.begin - now + MINUTE_MS - 1) / MINUTE_MS)
+    val hours = minutes / 60
+    return when {
+        minutes < 60 -> "in ${minutes}m"
+        hours < 3 -> if (minutes % 60 == 0L) "in ${hours}h" else "in ${hours}h ${minutes % 60}m"
+        hours < 24 -> "in ${hours}h"
+        else -> "in ${hours / 24}d"
     }
 }
 
@@ -228,6 +328,18 @@ private fun timeText(context: Context, e: CalendarEvent): String {
     return if (suffix != null && start.endsWith(" $suffix")) "${start.removeSuffix(" $suffix")} – $end" else "$start – $end"
 }
 
+/** A card's second line: "9:15 – 10:10 am", "Tomorrow 9:15 – 10:10 am", "All day", "All day tomorrow". */
+private fun cardTime(context: Context, e: CalendarEvent): String {
+    val day = dayOf(e)
+    val today = LocalDate.now()
+    return when {
+        e.allDay && day == today -> "All day"
+        e.allDay -> "All day ${dayWord(day).lowercase()}"
+        day == today -> timeText(context, e)
+        else -> "${dayWord(day)} ${timeText(context, e)}"
+    }
+}
+
 /** "Today", "Tomorrow", or the weekday. */
 private fun dayWord(d: LocalDate): String {
     val today = LocalDate.now()
@@ -241,11 +353,11 @@ private fun dayWord(d: LocalDate): String {
 private fun sampleState(): CalendarState {
     val today = LocalDateTime.now().toLocalDate()
     fun at(d: LocalDate, h: Int, m: Int) = d.atTime(h, m).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-    val tomorrow = today.plusDays(1)
+    val soonStart = System.currentTimeMillis() + 45 * MINUTE_MS
     val events = listOf(
-        CalendarEvent(1, "DBMS lab", at(today, 14, 15), at(today, 15, 10), false, 0xFF4285F4.toInt(), "Timetable", "E3-3LA1"),
-        CalendarEvent(2, "Cognitive abilities", at(today, 16, 15), at(today, 17, 10), false, 0xFF4285F4.toInt(), "Timetable", "E3-214"),
-        CalendarEvent(3, "Diwali", at(tomorrow, 0, 0), at(tomorrow.plusDays(1), 0, 0), true, 0xFF0B8043.toInt(), "Holidays", ""),
+        CalendarEvent(1, "Main job work session", soonStart, soonStart + 4 * HOUR_MS, false, 0, "Work", ""),
+        CalendarEvent(2, "UI Demo", at(today, 17, 30), at(today, 18, 0), false, 0, "Work", ""),
+        CalendarEvent(3, "Daily", at(today, 19, 0), at(today, 19, 15), false, 0, "Work", ""),
     )
-    return CalendarState.Ready(events, events.first())
+    return CalendarState.Ready(events, events.first(), doneToday = 4, totalToday = 5)
 }

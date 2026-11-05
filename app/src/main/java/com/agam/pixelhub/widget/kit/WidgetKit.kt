@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceModifier
+import androidx.glance.ImageProvider
 import androidx.glance.action.Action
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.action.actionStartActivity
@@ -147,14 +148,16 @@ fun WidgetCard(
     description: String,
     padding: Dp = 14.dp,
     verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
+    /** A drawable instead of the flat theme fill (the Calendar widget's glass). */
+    background: ImageProvider? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val base = GlanceModifier
+        .fillMaxSize()
+        .appWidgetBackground()
+        .cornerRadius(android.R.dimen.system_app_widget_background_radius)
     Column(
-        GlanceModifier
-            .fillMaxSize()
-            .appWidgetBackground()
-            .cornerRadius(android.R.dimen.system_app_widget_background_radius)
-            .background(palette.card)
+        (if (background != null) base.background(background) else base.background(palette.card))
             .clickable(onClick)
             .semantics { contentDescription = description }
             .padding(padding),
@@ -185,8 +188,15 @@ fun Caption(text: String, palette: WidgetPalette, strong: Boolean = false, maxLi
 
 /** Empty and no-access states: what's missing, and the tap fixes it. Never a blank tile. */
 @Composable
-fun Notice(palette: WidgetPalette, title: String, body: String, onClick: Action, shape: WidgetShape) {
-    WidgetCard(palette, onClick, "$title. $body") {
+fun Notice(
+    palette: WidgetPalette,
+    title: String,
+    body: String,
+    onClick: Action,
+    shape: WidgetShape,
+    background: ImageProvider? = null,
+) {
+    WidgetCard(palette, onClick, "$title. $body", background = background) {
         Caption(title, palette, strong = true, maxLines = 2)
         if (shape != WidgetShape.TINY) {
             Spacer(GlanceModifier.height(2.dp))

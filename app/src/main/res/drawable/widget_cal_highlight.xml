@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Calendar widget's highlighted (next) event card: translucent dark emerald with a mint edge. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#9E1B382B"
+        android:endColor="#99162E23" />
+    <stroke android:width="1dp" android:color="#3334D399" />
+    <corners android:radius="12dp" />
+</shape>
