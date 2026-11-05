@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What Google backup and phone-to-phone transfer may copy. Reminders, alarms, expenses and
+  the People ledger still move to a new phone; these stay on this one:
+  - assistant_log.json: the raw requests typed to the assistant ("Ravi owes me 500").
+  - widget_health.xml: steps and activity copied out of Health Connect for the widget;
+    Health Connect keeps its own data and its own backup.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="assistant_log.json" />
+        <exclude domain="sharedpref" path="widget_health.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="assistant_log.json" />
+        <exclude domain="sharedpref" path="widget_health.xml" />
+    </device-transfer>
+</data-extraction-rules>
