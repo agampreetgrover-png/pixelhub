@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -37,6 +38,59 @@ interface AlarmDao {
     @Insert suspend fun insert(alarm: Alarm): Long
     @Update suspend fun update(alarm: Alarm)
     @Delete suspend fun delete(alarm: Alarm)
+}
+
+@Dao
+interface HealthNudgeDao {
+    @Query("SELECT * FROM health_nudges ORDER BY hour ASC, minute ASC")
+    fun observeAll(): Flow<List<HealthNudge>>
+
+    @Query("SELECT * FROM health_nudges WHERE id = :id")
+    suspend fun get(id: Long): HealthNudge?
+
+    @Query("SELECT * FROM health_nudges WHERE enabled = 1")
+    suspend fun enabled(): List<HealthNudge>
+
+    @Insert suspend fun insert(nudge: HealthNudge): Long
+    @Update suspend fun update(nudge: HealthNudge)
+    @Delete suspend fun delete(nudge: HealthNudge)
+}
+
+@Dao
+interface ExpenseDao {
+    /** Newest first; [end] is exclusive. */
+    @Query("SELECT * FROM expenses WHERE spentAt >= :start AND spentAt < :end ORDER BY spentAt DESC, id DESC")
+    fun observeBetween(start: Long, end: Long): Flow<List<Expense>>
+
+    @Query("SELECT COALESCE(SUM(amountPaise), 0) FROM expenses WHERE spentAt >= :start AND spentAt < :end")
+    suspend fun sumBetween(start: Long, end: Long): Long
+
+    @Query(
+        "SELECT COALESCE(SUM(amountPaise), 0) FROM expenses " +
+            "WHERE spentAt >= :start AND spentAt < :end AND category = :category",
+    )
+    suspend fun sumBetween(start: Long, end: Long, category: ExpenseCategory): Long
+
+    @Query("SELECT * FROM expenses WHERE id = :id")
+    suspend fun get(id: Long): Expense?
+
+    @Insert suspend fun insert(expense: Expense): Long
+    @Update suspend fun update(expense: Expense)
+    @Delete suspend fun delete(expense: Expense)
+}
+
+@Dao
+interface BudgetDao {
+    @Query("SELECT * FROM budgets")
+    fun observeAll(): Flow<List<Budget>>
+
+    @Query("SELECT * FROM budgets WHERE `key` = :key")
+    suspend fun get(key: String): Budget?
+
+    @Upsert suspend fun upsert(budget: Budget)
+
+    @Query("DELETE FROM budgets WHERE `key` = :key")
+    suspend fun delete(key: String)
 }
 
 @Dao

@@ -29,6 +29,10 @@ class Scheduler(private val context: Context) {
     }
     fun cancelAlarmSnooze(id: Long) = cancel(ACTION_ALARM_SNOOZE, id)
 
+    /** Health nudges are quiet checks, so no status-bar alarm icon: plain exact alarm. */
+    fun scheduleNudge(id: Long, atMillis: Long) = setExact(atMillis, trigger(ACTION_HEALTH_NUDGE, id))
+    fun cancelNudge(id: Long) = cancel(ACTION_HEALTH_NUDGE, id)
+
     private fun setExact(atMillis: Long, operation: PendingIntent) {
         if (canScheduleExact()) {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation)
@@ -71,6 +75,7 @@ class Scheduler(private val context: Context) {
         const val ACTION_REMINDER_SNOOZE = "com.agam.pixelhub.action.REMINDER_SNOOZE"
         const val ACTION_ALARM = "com.agam.pixelhub.action.ALARM"
         const val ACTION_ALARM_SNOOZE = "com.agam.pixelhub.action.ALARM_SNOOZE"
+        const val ACTION_HEALTH_NUDGE = "com.agam.pixelhub.action.HEALTH_NUDGE"
         const val EXTRA_ID = "id"
         private const val SHOW_REQUEST = 1
     }

@@ -26,14 +26,23 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import com.agam.pixelhub.data.Expense
+import com.agam.pixelhub.expenses.Money
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.ZonedDateTime
 
 sealed interface ChatItem {
     val id: Long
 
     data class User(override val id: Long, val text: String) : ChatItem
-    data class Bot(override val id: Long, val text: String, val isError: Boolean = false) : ChatItem
+    data class Bot(
+        override val id: Long,
+        val text: String,
+        val isError: Boolean = false,
+        /** Set when the backup AI answered, e.g. "Answered by Grok". */
+        val via: String? = null,
+    ) : ChatItem
     data class Action(
         override val id: Long,
         val command: ParsedCommand,
@@ -41,6 +50,8 @@ sealed interface ChatItem {
         val target: AppShortcut? = null,
         val status: Status = Status.PENDING,
         val note: String = "",
+        /** Set when the backup AI answered, e.g. "Answered by Grok". */
+        val via: String? = null,
     ) : ChatItem
 
     enum class Status { PENDING, DONE, CANCELLED }
@@ -57,7 +68,8 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
-    val hasApiKey: StateFlow<Boolean> = c.settings.apiKey.map { it.isNotBlank() }
+    /** True if the selected AI or its backup has a key. */
+    val hasApiKey: StateFlow<Boolean> = c.ai.hasKey
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     fun send(text: String) {
@@ -75,32 +87,32 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun handle(message: String) {
-        val key = c.settings.apiKey.first()
-        if (key.isBlank()) {
-            add(ChatItem.Bot(newId(), "Add your Gemini API key in Settings first.", isError = true))
-            return
-        }
         val shortcuts = c.shortcuts.list()
         val apps = c.installedApps.list()
         val prompt = CommandParser.systemPrompt(ZonedDateTime.now(), shortcuts.map { it.label }, apps.map { it.label })
-        val raw = try {
-            c.gemini.generateJson(key, c.settings.model.first(), prompt, message, CommandParser.responseSchema)
+        val reply = try {
+            c.ai.generateCommand(prompt, message)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: IllegalStateException) {
+            // "Add a … API key in Settings first." is already user-ready.
+            add(ChatItem.Bot(newId(), e.message ?: "Add an API key in Settings first.", isError = true))
+            return
         } catch (e: Exception) {
-            add(ChatItem.Bot(newId(), "Gemini request failed: ${e.message ?: e.javaClass.simpleName}", isError = true))
+            add(ChatItem.Bot(newId(), "AI request failed: ${e.message ?: e.javaClass.simpleName}", isError = true))
             return
         }
-        when (val cmd = CommandParser.parse(raw)) {
-            is ParsedCommand.Answer -> add(ChatItem.Bot(newId(), cmd.text))
+        val via = if (reply.usedFallback) "Answered by ${reply.provider.label}" else null
+        when (val cmd = CommandParser.parse(reply.text)) {
+            is ParsedCommand.Answer -> add(ChatItem.Bot(newId(), cmd.text, via = via))
             is ParsedCommand.Invalid ->
-                add(ChatItem.Bot(newId(), "I couldn't turn that into an action (${cmd.reason}). Try rephrasing.", isError = true))
-            is ParsedCommand.OpenApp -> add(ChatItem.Action(newId(), cmd, target = resolveApp(cmd.query, shortcuts, apps)))
-            else -> add(ChatItem.Action(newId(), cmd))
+                add(ChatItem.Bot(newId(), "I couldn't turn that into an action (${cmd.reason}). Try rephrasing.", isError = true, via = via))
+            is ParsedCommand.OpenApp -> add(ChatItem.Action(newId(), cmd, target = resolveApp(cmd.query, shortcuts, apps), via = via))
+            else -> add(ChatItem.Action(newId(), cmd, via = via))
         }
     }
 
-    /** Runs the action exactly as Gemini proposed it. */
+    /** Runs the action exactly as the AI proposed it. */
     fun confirm(id: Long) {
         val item = find(id) ?: return
         viewModelScope.launch {
@@ -120,6 +132,12 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
                 is ParsedCommand.OpenLink ->
                     if (ShortcutLauncher.openUri(context, cmd.uri)) Outcome(true, "Opened")
                     else Outcome(false, "No app on this phone can open that link")
+                is ParsedCommand.LogExpense -> {
+                    val at = cmd.at?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+                        ?: System.currentTimeMillis()
+                    c.expenses.save(Expense(amountPaise = cmd.amountPaise, category = cmd.category, note = cmd.note, spentAt = at))
+                    Outcome(true, "Logged ${Money.format(cmd.amountPaise)} for ${cmd.category.label}")
+                }
                 else -> Outcome(false, "Nothing to do")
             }
             finish(id, outcome)

@@ -6,6 +6,8 @@ import android.content.Intent
 import android.util.Log
 import com.agam.pixelhub.alarm.AlarmRingService
 import com.agam.pixelhub.container
+import com.agam.pixelhub.health.NudgeCheck
+import com.agam.pixelhub.notify.HealthNotifier
 import com.agam.pixelhub.notify.ReminderNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +46,14 @@ class TriggerReceiver : BroadcastReceiver() {
                     }
                 Scheduler.ACTION_ALARM_SNOOZE ->
                     c.alarms.get(id)?.let { AlarmRingService.start(context, it) }
+                Scheduler.ACTION_HEALTH_NUDGE ->
+                    c.healthNudges.onFired(id)?.let { nudge ->
+                        when (val check = c.health.check(nudge)) {
+                            is NudgeCheck.Behind -> HealthNotifier.showNudge(context, nudge, check.current)
+                            NudgeCheck.NoAccess -> HealthNotifier.showNoAccess(context)
+                            NudgeCheck.OnTrack -> Unit
+                        }
+                    }
             }
         }
     }
@@ -55,6 +65,7 @@ class BootReceiver : BroadcastReceiver() {
         val c = context.container
         runAsync {
             c.alarms.rescheduleAll()
+            c.healthNudges.rescheduleAll()
             c.reminders.rescheduleAll().forEach { ReminderNotifier.show(context, it) }
         }
     }

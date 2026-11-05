@@ -1,5 +1,6 @@
 package com.agam.pixelhub.ai
 
+import com.agam.pixelhub.data.ExpenseCategory
 import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RepeatType
@@ -78,6 +79,35 @@ class CommandParserTest {
     @Test fun reminderWithoutTitleIsInvalid() = assertInvalid(parse("""{"action":"create_reminder","datetime":"2026-11-05T18:00"}"""))
     @Test fun alarmWithImpossibleTimeIsInvalid() = assertInvalid(parse("""{"action":"create_alarm","time":"25:00"}"""))
     @Test fun linkWithoutSchemeIsInvalid() = assertInvalid(parse("""{"action":"open_link","uri":"example"}"""))
+
+    @Test fun logExpense() = assertEquals(
+        ParsedCommand.LogExpense(250_00, ExpenseCategory.FOOD, "Lunch"),
+        parse("""{"action":"log_expense","amount":250,"category":"FOOD","note":"Lunch"}"""),
+    )
+
+    @Test fun logExpenseWithDateAndPaise() = assertEquals(
+        ParsedCommand.LogExpense(1_299_50, ExpenseCategory.SHOPPING, "Shoes", LocalDateTime.of(2026, 11, 4, 19, 0)),
+        parse("""{"action":"log_expense","amount":1299.5,"category":"shopping","note":"Shoes","datetime":"2026-11-04T19:00"}"""),
+    )
+
+    @Test fun unknownExpenseCategoryFallsBackToOther() {
+        val cmd = parse("""{"action":"log_expense","amount":50,"category":"PETS"}""")
+        assertEquals(ExpenseCategory.OTHER, (cmd as ParsedCommand.LogExpense).category)
+    }
+
+    @Test fun expenseWithoutAmountIsInvalid() = assertInvalid(parse("""{"action":"log_expense","category":"FOOD"}"""))
+    @Test fun zeroExpenseIsInvalid() = assertInvalid(parse("""{"action":"log_expense","amount":0,"category":"FOOD"}"""))
+
+    @Test fun grokSchemaIsStandardJsonSchema() {
+        val s = CommandParser.jsonSchema.toString()
+        assertTrue(s.startsWith("{\"type\":\"object\""))
+        assertTrue("\"type\":\"array\"" in s && "\"type\":\"number\"" in s && "\"type\":\"integer\"" in s)
+        assertTrue("OBJECT" !in s && "STRING" !in s)
+        assertTrue("\"format\"" !in s && "propertyOrdering" !in s)
+        // Enum values themselves must survive untouched.
+        assertTrue("\"enum\":[\"create_reminder\"" in s && "\"MON\"" in s && "\"FOOD\"" in s)
+        assertTrue(s.contains("\"required\":[\"action\"]"))
+    }
 
     @Test fun schemaRequiresAction() {
         assertTrue(CommandParser.responseSchema.toString().contains("\"required\":[\"action\"]"))

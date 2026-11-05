@@ -16,7 +16,11 @@ import androidx.core.content.ContextCompat
 import com.agam.pixelhub.MainActivity
 import com.agam.pixelhub.R
 import com.agam.pixelhub.container
+import com.agam.pixelhub.data.HealthNudge
 import com.agam.pixelhub.data.Reminder
+import com.agam.pixelhub.expenses.BudgetAlert
+import com.agam.pixelhub.expenses.Money
+import com.agam.pixelhub.health.NudgeMath
 import com.agam.pixelhub.scheduling.runAsync
 import com.agam.pixelhub.ui.Tab
 
@@ -40,7 +44,105 @@ object Channels {
                 enableVibration(true)
             },
         )
+        nm.createNotificationChannel(
+            NotificationChannel(HEALTH, "Activity nudges", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Reminders to move when you're behind your step or activity goal"
+            },
+        )
+        createBudget(context)
     }
+
+    const val HEALTH = "health"
+    const val BUDGET = "budget"
+
+    internal fun createBudget(context: Context) {
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(BUDGET, "Budget alerts", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "When this month's spending reaches 80% or 100% of a budget"
+            },
+        )
+    }
+}
+
+object BudgetNotifier {
+    @SuppressLint("MissingPermission") // checked below
+    fun show(context: Context, alert: BudgetAlert) {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) return
+        val what = alert.category?.label ?: "monthly budget"
+        val title = if (alert.percent >= 100) "Over your $what" else "${alert.percent}% of your $what used"
+        val body = "${Money.format(alert.spentPaise)} of ${Money.format(alert.limitPaise)} spent this month."
+        val id = 30_000 + (alert.category?.ordinal ?: 99)
+        val open = PendingIntent.getActivity(
+            context, id,
+            Intent(context, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_TAB, EXPENSES_TAB)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(context, Channels.BUDGET)
+            .setSmallIcon(R.drawable.ic_stat_pixelhub)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(id, notification)
+    }
+
+    /** Tab.EXPENSES.name (the redesign adds that tab); unknown names fall back to Home. */
+    private const val EXPENSES_TAB = "EXPENSES"
+}
+
+object HealthNotifier {
+    private const val NO_ACCESS_ID = 29_999
+
+    @SuppressLint("MissingPermission") // checked in canNotify
+    fun showNudge(context: Context, nudge: HealthNudge, current: Long) {
+        if (!canNotify(context)) return
+        val (title, body) = NudgeMath.message(nudge.metric, current, nudge.goal)
+        val notification = NotificationCompat.Builder(context, Channels.HEALTH)
+            .setSmallIcon(R.drawable.ic_stat_pixelhub)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(openApp(context, Tab.HOME, 20_000 + nudge.id.toInt()))
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(20_000 + nudge.id.toInt(), notification)
+    }
+
+    /** A nudge couldn't read Health Connect (permission revoked or background access off). */
+    @SuppressLint("MissingPermission")
+    fun showNoAccess(context: Context) {
+        if (!canNotify(context)) return
+        val notification = NotificationCompat.Builder(context, Channels.HEALTH)
+            .setSmallIcon(R.drawable.ic_stat_pixelhub)
+            .setContentTitle("Activity nudge skipped")
+            .setContentText("PixelHub can't read your steps in the background. Tap to reconnect Health Connect.")
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText("PixelHub can't read your steps in the background. Tap to reconnect Health Connect."),
+            )
+            .setContentIntent(openApp(context, Tab.SETTINGS, NO_ACCESS_ID))
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(NO_ACCESS_ID, notification)
+    }
+
+    private fun canNotify(context: Context) =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun openApp(context: Context, tab: Tab, request: Int): PendingIntent = PendingIntent.getActivity(
+        context, request,
+        Intent(context, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_TAB, tab.name)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 }
 
 object ReminderNotifier {

@@ -1,5 +1,7 @@
 package com.agam.pixelhub.ai
 
+import com.agam.pixelhub.data.ExpenseCategory
+import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RepeatType
@@ -29,6 +31,14 @@ sealed interface ParsedCommand {
     ) : ParsedCommand
 
     data class CreateAlarm(val hour: Int, val minute: Int, val daysMask: Int, val label: String) : ParsedCommand
+    /** [at] null = "now" (decided when the user confirms). */
+    data class LogExpense(
+        val amountPaise: Long,
+        val category: ExpenseCategory,
+        val note: String,
+        val at: LocalDateTime? = null,
+    ) : ParsedCommand
+
     data class OpenApp(val query: String) : ParsedCommand
     data class OpenLink(val uri: String) : ParsedCommand
     data class Answer(val text: String) : ParsedCommand
@@ -37,12 +47,16 @@ sealed interface ParsedCommand {
 
 /** Builds the Gemini prompt/schema and turns the JSON reply into a [ParsedCommand]. */
 object CommandParser {
-    private val ACTIONS = listOf("create_reminder", "create_alarm", "open_app", "open_link", "answer")
+    private val ACTIONS = listOf("create_reminder", "create_alarm", "log_expense", "open_app", "open_link", "answer")
     private val RECURRENCES = listOf("none", "daily", "weekly", "every_n_days", "every_n_weeks")
     private val DAY_CODES = listOf("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
     private val PROPERTIES = listOf(
-        "action", "title", "datetime", "recurrence", "days", "interval", "time", "label", "query", "uri", "text",
+        "action", "title", "datetime", "recurrence", "days", "interval", "time", "label",
+        "amount", "category", "note", "query", "uri", "text",
     )
+
+    /** ₹1 crore; anything bigger is almost certainly a misheard amount. */
+    private const val MAX_EXPENSE_PAISE = 1_00_00_000_00L
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -60,6 +74,9 @@ object CommandParser {
         val interval: Int? = null,
         val time: String? = null,
         val label: String? = null,
+        val amount: Double? = null,
+        val category: String? = null,
+        val note: String? = null,
         val query: String? = null,
         val uri: String? = null,
         val text: String? = null,
@@ -86,6 +103,12 @@ object CommandParser {
                     put("description", "24-hour HH:MM")
                 }
                 putJsonObject("label") { put("type", "STRING") }
+                putJsonObject("amount") {
+                    put("type", "NUMBER")
+                    put("description", "Amount in Indian rupees")
+                }
+                putJsonObject("category") { enumString(ExpenseCategory.entries.map { it.name }) }
+                putJsonObject("note") { put("type", "STRING") }
                 putJsonObject("query") { put("type", "STRING") }
                 putJsonObject("uri") { put("type", "STRING") }
                 putJsonObject("text") { put("type", "STRING") }
@@ -94,6 +117,9 @@ object CommandParser {
             putJsonArray("propertyOrdering") { PROPERTIES.forEach { add(it) } }
         }
     }
+
+    /** The same schema in standard JSON Schema form, for Grok's response_format. */
+    val jsonSchema: JsonObject by lazy { SchemaConvert.toJsonSchema(responseSchema) as JsonObject }
 
     private fun JsonObjectBuilder.enumString(values: List<String>) {
         put("type", "STRING")
@@ -115,6 +141,9 @@ object CommandParser {
           The title is short and imperative, without the time ("Call mom").
         - create_alarm: "time" (24-hour HH:MM) is required. Optional "days" (MON..SUN) for a repeating alarm
           ("weekdays" = MON..FRI) and "label".
+        - log_expense: the user spent money. "amount" (number, Indian rupees; "1.2k" = 1200) and "category"
+          (${ExpenseCategory.entries.joinToString(", ") { it.name }}) are required. "note" = what it was for, short
+          ("Lunch at Saravana"). Include "datetime" only if the user says when ("yesterday", "on Monday").
         - open_app: "query" = the app or shortcut to open. Prefer an exact name from the lists below.
         - open_link: "uri" = a URL or Android URI (https:, tel:, geo:, mailto:, sms:, google.navigation:q=...)
           for calling a number, navigating somewhere, searching the web, etc.
@@ -141,6 +170,13 @@ object CommandParser {
             "create_alarm" -> {
                 val (hour, minute) = parseTime(a.time) ?: return ParsedCommand.Invalid("missing or bad alarm time")
                 ParsedCommand.CreateAlarm(hour, minute, daysMask(a.days), a.label.orEmpty().trim())
+            }
+            "log_expense" -> {
+                val paise = a.amount?.let { Money.fromRupees(it) }?.takeIf { it < MAX_EXPENSE_PAISE }
+                    ?: return ParsedCommand.Invalid("missing or bad amount")
+                val category = ExpenseCategory.entries.firstOrNull { it.name.equals(a.category?.trim(), ignoreCase = true) }
+                    ?: ExpenseCategory.OTHER
+                ParsedCommand.LogExpense(paise, category, a.note?.trim().orEmpty(), parseDateTime(a.datetime, zone))
             }
             "open_app" -> a.query?.trim()?.takeIf { it.isNotEmpty() }?.let { ParsedCommand.OpenApp(it) }
                 ?: ParsedCommand.Invalid("missing app name")

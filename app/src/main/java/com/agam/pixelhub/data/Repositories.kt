@@ -1,5 +1,6 @@
 package com.agam.pixelhub.data
 
+import com.agam.pixelhub.calendar.CalendarSync
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RecurrenceCalc
 import com.agam.pixelhub.scheduling.Scheduler
@@ -9,24 +10,45 @@ import java.time.ZonedDateTime
 
 private fun ZonedDateTime.millis() = toInstant().toEpochMilli()
 
-class ReminderRepository(private val dao: ReminderDao, private val scheduler: Scheduler) {
+class ReminderRepository(
+    private val dao: ReminderDao,
+    private val scheduler: Scheduler,
+    private val calendar: CalendarSync,
+) {
     val all: Flow<List<Reminder>> = dao.observeAll()
 
     suspend fun get(id: Long): Reminder? = dao.get(id)
 
-    /** Inserts (id = 0) or updates a reminder and (re)schedules it. */
+    /** Inserts (id = 0) or updates a reminder, (re)schedules it and copies it to the calendar. */
     suspend fun save(id: Long, title: String, notes: String, anchor: LocalDateTime, recurrence: Recurrence): Reminder {
         val now = ZonedDateTime.now()
         val next = RecurrenceCalc.nextTrigger(recurrence, anchor, now)
         val trigger = (next ?: anchor.atZone(now.zone)).millis()
+        val existing = if (id == 0L) null else dao.get(id)
         val draft = Reminder(
             id = id, title = title.trim(), notes = notes.trim(),
             anchor = anchor, triggerAt = trigger, recurrence = recurrence,
+            calendarEventId = existing?.calendarEventId,
         )
         val savedId = if (id == 0L) dao.insert(draft) else id.also { dao.update(draft) }
         scheduler.cancelReminder(savedId)
         if (next != null) scheduler.scheduleReminder(savedId, trigger)
-        return draft.copy(id = savedId)
+        return syncToCalendar(draft.copy(id = savedId))
+    }
+
+    /**
+     * Chooses the calendar reminders are copied to (null = stop syncing; existing events stay).
+     * Choosing a calendar copies every open reminder, moving any that live in a previous calendar.
+     */
+    suspend fun setCalendar(calendarId: Long?) {
+        calendar.select(calendarId)
+        if (calendarId != null) dao.active().forEach { syncToCalendar(it) }
+    }
+
+    private suspend fun syncToCalendar(r: Reminder): Reminder {
+        val eventId = calendar.push(r)
+        if (eventId == r.calendarEventId) return r
+        return r.copy(calendarEventId = eventId).also { dao.update(it) }
     }
 
     suspend fun setDone(reminder: Reminder, done: Boolean) {
@@ -41,6 +63,7 @@ class ReminderRepository(private val dao: ReminderDao, private val scheduler: Sc
     suspend fun delete(reminder: Reminder) {
         scheduler.cancelReminder(reminder.id)
         dao.delete(reminder)
+        reminder.calendarEventId?.let { calendar.remove(it) }
     }
 
     /** Main trigger fired: record it, schedule the next occurrence, return what to show. */
@@ -132,6 +155,46 @@ class AlarmRepository(private val dao: AlarmDao, private val scheduler: Schedule
     companion object {
         fun nextTrigger(a: Alarm, after: ZonedDateTime = ZonedDateTime.now()): ZonedDateTime =
             RecurrenceCalc.nextAlarm(a.hour, a.minute, a.daysMask, after)
+    }
+}
+
+class HealthNudgeRepository(private val dao: HealthNudgeDao, private val scheduler: Scheduler) {
+    val all: Flow<List<HealthNudge>> = dao.observeAll()
+
+    suspend fun get(id: Long): HealthNudge? = dao.get(id)
+
+    suspend fun save(nudge: HealthNudge): HealthNudge {
+        val id = if (nudge.id == 0L) dao.insert(nudge) else nudge.id.also { dao.update(nudge) }
+        val saved = nudge.copy(id = id)
+        apply(saved)
+        return saved
+    }
+
+    suspend fun delete(nudge: HealthNudge) {
+        scheduler.cancelNudge(nudge.id)
+        dao.delete(nudge)
+    }
+
+    /** Check time reached: schedule the next check and return the nudge to evaluate. */
+    suspend fun onFired(id: Long): HealthNudge? {
+        val n = dao.get(id)?.takeIf { it.enabled } ?: return null
+        scheduler.scheduleNudge(id, nextTrigger(n, ZonedDateTime.now().plusMinutes(1)).millis())
+        return n
+    }
+
+    suspend fun rescheduleAll() {
+        dao.enabled().forEach { apply(it) }
+    }
+
+    private fun apply(n: HealthNudge) {
+        scheduler.cancelNudge(n.id)
+        if (n.enabled) scheduler.scheduleNudge(n.id, nextTrigger(n).millis())
+    }
+
+    companion object {
+        /** Nudges always repeat; daysMask 0 means every day. */
+        fun nextTrigger(n: HealthNudge, after: ZonedDateTime = ZonedDateTime.now()): ZonedDateTime =
+            RecurrenceCalc.nextAlarm(n.hour, n.minute, n.daysMask, after)
     }
 }
 

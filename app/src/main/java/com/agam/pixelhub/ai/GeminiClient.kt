@@ -18,7 +18,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-class GeminiException(message: String) : Exception(message)
+/** [httpCode] is set when the API answered with an error status (429 = rate/quota limit). */
+class GeminiException(message: String, val httpCode: Int? = null) : Exception(message)
 
 /** Minimal REST client for the Gemini API's generateContent with structured JSON output. */
 class GeminiClient(private val http: OkHttpClient) {
@@ -54,7 +55,9 @@ class GeminiClient(private val http: OkHttpClient) {
             .build()
         http.newCall(request).execute().use { response ->
             val raw = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw GeminiException(errorMessage(raw) ?: "HTTP ${response.code}")
+            if (!response.isSuccessful) {
+                throw GeminiException(errorMessage(raw) ?: "HTTP ${response.code}", response.code)
+            }
             extractText(raw) ?: throw GeminiException("Gemini returned no text")
         }
     }
