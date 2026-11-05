@@ -2,6 +2,7 @@
 
 package com.agam.pixelhub.ui.reminders
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.MutableTransitionState
@@ -11,15 +12,22 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,10 +36,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Event
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -44,26 +64,30 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
@@ -73,12 +97,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Reminder
 import com.agam.pixelhub.notify.ReminderNotifier
+import com.agam.pixelhub.ui.CardRadius
 import com.agam.pixelhub.ui.CheckDot
 import com.agam.pixelhub.ui.EmptyState
 import com.agam.pixelhub.ui.Fmt
+import com.agam.pixelhub.ui.Gutter
 import com.agam.pixelhub.ui.HubFab
+import com.agam.pixelhub.ui.QuickAction
 import com.agam.pixelhub.ui.ScreenScaffold
 import com.agam.pixelhub.ui.SectionHeader
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.pressable
@@ -86,25 +114,28 @@ import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
-/** Which group a reminder sits in. Overdue and Upcoming are drawn as a timeline. */
-private enum class Lane(val threaded: Boolean) { Overdue(true), Upcoming(true), Repeating(false), Done(false) }
+/** Which group a reminder sits in. Each lane is one card. */
+private enum class Lane { Overdue, Upcoming, Repeating, Done }
 
-/** Width of the time column on the left of every row. */
-private val TimeCol = 76.dp
-/** The square that holds the check (CheckDot is 48dp with a 28dp dot). */
-private val DotBox = 48.dp
-private val DotRadius = 14.dp
-private val RowPadV = 6.dp
-private val RowPadStart = 12.dp
-private val RowShape = RoundedCornerShape(24.dp)
+/** Rounds only the outer corners, so the rows of a lane read as one card. */
+private fun segment(first: Boolean, last: Boolean) = RoundedCornerShape(
+    topStart = if (first) CardRadius else 0.dp,
+    topEnd = if (first) CardRadius else 0.dp,
+    bottomStart = if (last) CardRadius else 0.dp,
+    bottomEnd = if (last) CardRadius else 0.dp,
+)
 
 @Composable
 fun RemindersScreen() {
@@ -112,6 +143,7 @@ fun RemindersScreen() {
     val c = context.container
     val colors = Hub.colors
     val reduced = LocalReducedMotion.current
+    val haptics = LocalHapticFeedback.current
     val stagger = rememberStagger()
 
     // null until the database answers, so the empty state never flashes on open.
@@ -123,26 +155,45 @@ fun RemindersScreen() {
             value = System.currentTimeMillis()
         }
     }
-    var creating by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Reminder?>(null) }
+    // The editor opens on a draft: blank from "New", prefilled from a quick-add preset.
+    var creating by rememberSaveable(stateSaver = ReminderDraftSaver) { mutableStateOf<ReminderDraft?>(null) }
+    var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var showDone by rememberSaveable { mutableStateOf(true) }
 
     val all = reminders
     val done = all.orEmpty().filter { it.done }
     val active = all.orEmpty().filterNot { it.done }
-    val repeating = active.filter { it.recurrence.isRepeating }
+    // The hero: whatever fires next, one-off or repeating. It isn't repeated in its lane.
+    val next = active.filter { it.triggerAt >= now }.minByOrNull { it.triggerAt }
+    val repeating = active.filter { it.recurrence.isRepeating && it.id != next?.id }
     val oneOff = active.filterNot { it.recurrence.isRepeating }
     val overdue = oneOff.filter { it.triggerAt < now }
-    val upcoming = oneOff.filter { it.triggerAt >= now }
+    val upcoming = oneOff.filter { it.triggerAt >= now && it.id != next?.id }
 
+    val snackbar = remember { SnackbarHostState() }
+    val uiScope = rememberCoroutineScope()
     fun delete(r: Reminder) {
         ReminderNotifier.cancel(context, r.id)
         c.appScope.launch { c.reminders.delete(r) }
+        uiScope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val undo = snackbar.showSnackbar("Deleted 201c${r.title}201d", actionLabel = "Undo", duration = SnackbarDuration.Short)
+            if (undo == SnackbarResult.ActionPerformed) c.appScope.launch { c.reminders.restore(r) }
+        }
     }
 
-    fun setDone(r: Reminder, d: Boolean) {
-        c.appScope.launch {
+    // A tick waits for its animation before saving; un-ticking in that window cancels it.
+    val pendingTicks = remember { mutableMapOf<Long, Job>() }
+    fun setDone(r: Reminder, d: Boolean, letTickDraw: Boolean = true) {
+        val waiting = pendingTicks.remove(r.id)
+        if (waiting != null && waiting.isActive && !d) {
+            waiting.cancel()
+            return
+        }
+        pendingTicks[r.id] = c.appScope.launch {
             // Let the tick draw itself before the row travels down to Done.
-            if (d && !reduced) delay(420)
+            if (d && letTickDraw && !reduced) delay(420)
+            if (d) ReminderNotifier.cancel(context, r.id)
             c.reminders.setDone(r, d)
         }
     }
@@ -151,24 +202,23 @@ fun RemindersScreen() {
 
     ScreenScaffold(
         title = "Reminders",
+        snackbarHost = snackbar,
         floatingActionButton = {
             AnimatedVisibility(
                 visibleState = fabIn,
-                enter = scaleIn(initialScale = 0.6f, animationSpec = Motion.bouncy()) + fadeIn(tween(180)),
+                enter = scaleIn(initialScale = 0.8f, animationSpec = Motion.snappy()) + fadeIn(tween(180)),
             ) {
                 HubFab(
                     icon = Icons.Outlined.Add,
                     contentDescription = "New reminder",
-                    onClick = { creating = true },
-                    container = colors.sky,
-                    content = colors.onSky,
+                    onClick = { creating = ReminderDraft() },
                 )
             }
         },
     ) { padding ->
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(bottom = 132.dp),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 104.dp),
         ) {
             val placement = if (reduced) null else spring(
                 dampingRatio = 0.86f,
@@ -176,44 +226,80 @@ fun RemindersScreen() {
                 visibilityThreshold = IntOffset.VisibilityThreshold,
             )
 
-            if (all != null && all.isEmpty()) {
-                item(key = "empty", contentType = "empty") {
-                    EmptyState(
-                        title = "Nothing to remember yet",
-                        body = "Tap + to add a reminder, or tell the assistant what to remind you about.",
-                        accent = colors.sky,
-                        modifier = Modifier.animateItem(placementSpec = placement).staggerIn(stagger, "empty"),
+            if (next != null) {
+                item(key = "hero", contentType = "hero") {
+                    NextHero(
+                        r = next,
+                        now = now,
+                        // Repeating reminders can't be checked off, so the hero offers only Edit.
+                        onDone = {
+                            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                            setDone(next, true, letTickDraw = false)
+                        }.takeIf { !next.recurrence.isRepeating },
+                        onOpen = { editingId = next.id },
+                        modifier = Modifier
+                            .animateItem(placementSpec = placement)
+                            .padding(horizontal = Gutter)
+                            .staggerIn(stagger, "hero", 0),
                     )
                 }
             }
 
-            var n = 0
+            item(key = "quick", contentType = "quick") {
+                QuickAdd(
+                    onPick = { creating = it },
+                    modifier = Modifier
+                        .animateItem(placementSpec = placement)
+                        .padding(horizontal = Gutter)
+                        .padding(top = if (next != null) 12.dp else 0.dp)
+                        .staggerIn(stagger, "quick", 1),
+                )
+            }
+
+            if (all != null && all.isEmpty()) {
+                item(key = "empty", contentType = "empty") {
+                    EmptyState(
+                        title = "Nothing to remember yet",
+                        body = "Pick a quick time above or tap New reminder. You can also ask the assistant.",
+                        accent = colors.sky,
+                        modifier = Modifier.animateItem(placementSpec = placement).staggerIn(stagger, "empty", 2),
+                    )
+                }
+            }
+
+            var n = 2
             fun lane(lane: Lane, title: String, rows: List<Reminder>, headerColor: Color) {
                 if (rows.isEmpty()) return
                 val headerKey = "header_${lane.name}"
                 val headerIndex = n++
+                val collapsible = lane == Lane.Done
                 item(key = headerKey, contentType = "header") {
                     SectionHeader(
                         title,
                         Modifier.animateItem(placementSpec = placement).staggerIn(stagger, headerKey, headerIndex),
                         color = headerColor,
+                        action = if (!collapsible) null else if (showDone) "Hide" else "Show ${rows.size}",
+                        onAction = if (!collapsible) null else ({ showDone = !showDone }),
                     )
                 }
+                if (collapsible && !showDone) return
                 rows.forEachIndexed { i, r ->
                     val index = n++
                     item(key = r.id, contentType = "reminder") {
                         ReminderRow(
                             r = r,
                             lane = lane,
-                            threadAbove = lane.threaded && i > 0,
-                            threadBelow = lane.threaded && i < rows.lastIndex,
-                            isNext = lane == Lane.Upcoming && i == 0,
+                            first = i == 0,
+                            last = i == rows.lastIndex,
                             now = now,
-                            // Repeating reminders can't be checked off; they show a repeat mark instead.
+                            // Repeating reminders can't be checked off; they show when they fire next.
                             onToggle = { d: Boolean -> setDone(r, d) }.takeIf { lane != Lane.Repeating },
-                            onOpen = { editing = r },
+                            onOpen = { editingId = r.id },
                             onDelete = { delete(r) },
-                            modifier = Modifier.animateItem(placementSpec = placement).staggerIn(stagger, r.id, index),
+                            modifier = Modifier
+                                .animateItem(placementSpec = placement)
+                                .padding(horizontal = Gutter)
+                                .staggerIn(stagger, r.id, index),
                         )
                     }
                 }
@@ -226,30 +312,32 @@ fun RemindersScreen() {
         }
     }
 
-    if (creating) {
-        ReminderEditorSheet(
-            initial = ReminderDraft(),
-            isNew = true,
-            onDismiss = { creating = false },
-            onSave = { d ->
-                creating = false
-                c.appScope.launch { c.reminders.save(0, d.title, d.notes, d.at, d.recurrence) }
-            },
-            onDelete = null,
-        )
+    creating?.let { draft ->
+        key(draft) {
+            ReminderEditorSheet(
+                initial = draft,
+                isNew = true,
+                onDismiss = { creating = null },
+                onSave = { d ->
+                    creating = null
+                    c.appScope.launch { c.reminders.save(0, d.title, d.notes, d.at, d.recurrence) }
+                },
+                onDelete = null,
+            )
+        }
     }
-    editing?.let { r ->
+    reminders?.firstOrNull { it.id == editingId }?.let { r ->
         key(r.id) {
             ReminderEditorSheet(
                 initial = ReminderDraft(r.title, r.notes, r.anchor, r.recurrence),
                 isNew = false,
-                onDismiss = { editing = null },
+                onDismiss = { editingId = null },
                 onSave = { d ->
-                    editing = null
+                    editingId = null
                     c.appScope.launch { c.reminders.save(r.id, d.title, d.notes, d.at, d.recurrence) }
                 },
                 onDelete = {
-                    editing = null
+                    editingId = null
                     delete(r)
                 },
             )
@@ -258,16 +346,201 @@ fun RemindersScreen() {
 }
 
 /**
- * One stop on the timeline: time on the left, the check on the thread, the title and its
- * details on the right. Swipe left to delete.
+ * The next reminder on the yellow card: when it fires, what it is, and two direct actions.
+ * Tapping anywhere else on the card edits it. Swaps with a short rise when the next one changes.
+ */
+@Composable
+private fun NextHero(
+    r: Reminder,
+    now: Long,
+    onDone: (() -> Unit)?,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    val soft = c.onSun.copy(alpha = 0.72f)
+
+    Box(
+        modifier
+            .fillMaxWidth()
+            .hubCard(c.sun)
+            .pressable(onClick = onOpen, pressedScale = 0.985f, onClickLabel = "Edit reminder"),
+    ) {
+        AnimatedContent(
+            targetState = r,
+            contentKey = { it.id },
+            transitionSpec = {
+                if (reduced) {
+                    fadeIn(tween(150)) togetherWith fadeOut(tween(100))
+                } else {
+                    (slideInVertically(tween(260, easing = Motion.EaseOut)) { it / 6 } + fadeIn(tween(200))) togetherWith
+                        (slideOutVertically(tween(180, easing = Motion.EaseOut)) { -it / 8 } + fadeOut(tween(120)))
+                }
+            },
+            label = "nextHero",
+        ) { item ->
+            val at = Instant.ofEpochMilli(item.triggerAt).atZone(ZoneId.systemDefault())
+            val day = dayWord(at.toLocalDate(), LocalDate.now())
+            val meta = listOfNotNull(
+                day,
+                item.recurrence.describe().takeIf { it.isNotEmpty() },
+            ).joinToString("  •  ")
+
+            Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(40.dp).clip(CircleShape).background(c.onSun.copy(alpha = 0.10f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (item.recurrence.isRepeating) Icons.Outlined.Repeat else Icons.Outlined.NotificationsActive,
+                            contentDescription = null,
+                            tint = c.onSun,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "Next reminder",
+                        style = HubType.small.copy(fontWeight = FontWeight.Medium),
+                        color = soft,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "in ${Fmt.untilText(item.triggerAt, now)}",
+                        style = HubType.small.copy(fontWeight = FontWeight.Medium),
+                        color = c.sun,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(c.onSun)
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    Fmt.time(context, at.toLocalTime()),
+                    style = HubType.clockLarge,
+                    color = c.onSun,
+                    maxLines = 1,
+                )
+                Text(
+                    item.title,
+                    style = HubType.section.copy(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
+                    color = c.onSun,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(meta, style = HubType.small, color = soft, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (onDone != null) {
+                        HeroPill(
+                            icon = Icons.Outlined.Check,
+                            label = "Mark done",
+                            onClick = onDone,
+                            container = c.onSun,
+                            content = c.sun,
+                            description = "Mark ${item.title} as done",
+                        )
+                    }
+                    HeroPill(
+                        icon = Icons.Outlined.Edit,
+                        label = "Edit",
+                        onClick = onOpen,
+                        container = c.onSun.copy(alpha = 0.08f),
+                        content = c.onSun,
+                        description = "Edit ${item.title}",
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A pill on the yellow card: an icon in a round disc, then the action's name. */
+@Composable
+private fun HeroPill(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    container: Color,
+    content: Color,
+    description: String,
+) {
+    Row(
+        Modifier
+            .heightIn(min = 48.dp)
+            .clip(CircleShape)
+            .background(container)
+            .pressable(onClick = onClick, pressedScale = 0.94f, onClickLabel = description)
+            .semantics { contentDescription = description }
+            .padding(start = 6.dp, end = 18.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).background(content.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(label, style = HubType.button, color = content, maxLines = 1)
+    }
+}
+
+/** One-tap starting points. Each opens the editor already set to that time. */
+@Composable
+private fun QuickAdd(onPick: (ReminderDraft) -> Unit, modifier: Modifier = Modifier) {
+    val nowTime = LocalDateTime.now()
+    val today = nowTime.toLocalDate()
+    val inAnHour = nowTime.plusHours(1).truncatedTo(ChronoUnit.MINUTES)
+    val tonight = LocalDateTime.of(today, LocalTime.of(20, 0))
+    val tomorrow = LocalDateTime.of(today.plusDays(1), LocalTime.of(9, 0))
+    val nextWeek = LocalDateTime.of(today.plusWeeks(1), LocalTime.of(9, 0))
+    // "Tonight" only while there's still an evening left; otherwise offer next week.
+    val third = if (nowTime.isBefore(tonight.minusHours(1))) {
+        Triple(Icons.Outlined.Bedtime, "Tonight", tonight)
+    } else {
+        Triple(Icons.Outlined.Event, "Next week", nextWeek)
+    }
+    val options = listOf(
+        Triple(Icons.Outlined.Add, "New", null),
+        Triple(Icons.Outlined.Timer, "In 1 hour", inAnHour),
+        third,
+        Triple(Icons.Outlined.WbSunny, "Tomorrow", tomorrow),
+    )
+    Row(
+        modifier
+            .fillMaxWidth()
+            .hubCard(Hub.colors.raised)
+            .padding(horizontal = 6.dp, vertical = 12.dp),
+    ) {
+        options.forEach { (icon, label, at) ->
+            QuickAction(
+                icon = icon,
+                label = label,
+                onClick = { onPick(if (at == null) ReminderDraft() else ReminderDraft(at = at)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/**
+ * One reminder inside its lane's card: an icon in a well, the title with "time • date" under
+ * it, and the check at the end. Tap to edit, check to complete, swipe left to delete.
  */
 @Composable
 private fun ReminderRow(
     r: Reminder,
     lane: Lane,
-    threadAbove: Boolean,
-    threadBelow: Boolean,
-    isNext: Boolean,
+    first: Boolean,
+    last: Boolean,
     now: Long,
     onToggle: ((Boolean) -> Unit)?,
     onOpen: () -> Unit,
@@ -276,13 +549,13 @@ private fun ReminderRow(
 ) {
     val context = LocalContext.current
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
     val haptics = LocalHapticFeedback.current
+    val shape = segment(first, last)
 
     // Checked locally first so the tick and strike start the instant you tap.
     var checked by remember(r.done) { mutableStateOf(r.done) }
 
-    val dismiss = rememberSwipeToDismissBoxState()
+    val dismiss = rememberSwipeToDismissBoxState(positionalThreshold = { it * 0.45f })
     val latestDelete by rememberUpdatedState(onDelete)
     LaunchedEffect(dismiss.currentValue) {
         if (dismiss.currentValue == SwipeToDismissBoxValue.EndToStart) latestDelete()
@@ -298,42 +571,43 @@ private fun ReminderRow(
         runCatching { (-dismiss.requireOffset() / widthPx).coerceIn(0f, 1f) }.getOrDefault(0f)
     }
 
-    // The thread grows out of the dot towards a neighbour, and retracts when one leaves.
-    val above by animateFloatAsState(
-        if (threadAbove) 1f else 0f, if (reduced) tween(0) else Motion.gentle(), label = "threadAbove",
-    )
-    val below by animateFloatAsState(
-        if (threadBelow) 1f else 0f, if (reduced) tween(0) else Motion.gentle(), label = "threadBelow",
-    )
-    val threadColor = if (lane == Lane.Overdue) c.dangerSoft else c.skySoft
-
     val at = Instant.ofEpochMilli(r.triggerAt).atZone(ZoneId.systemDefault())
-    val today = LocalDate.now()
-    val dateText = dateLine(at.toLocalDate(), today)
-    // Follows the local check, so unchecking a done item un-strikes it before it travels back up.
-    val faded = checked
-    val timeColor by animateColorAsState(
+    val overdue = lane == Lane.Overdue && !checked
+    val meta = metaLine(
+        time = Fmt.time(context, at.toLocalTime()),
+        day = dayWord(at.toLocalDate(), LocalDate.now()),
+        repeat = r.recurrence.describe(),
+        late = if (overdue) "${Fmt.untilText(now, r.triggerAt)} late" else null,
+        muted = c.inkMuted,
+        danger = c.danger,
+    )
+    val wellTone by animateColorAsState(if (overdue) c.dangerSoft else c.well, tween(200), label = "wellTone")
+    val wellTint by animateColorAsState(
         when {
-            faded -> c.inkMuted
-            lane == Lane.Overdue -> c.danger
+            checked -> c.inkMuted
+            overdue -> c.danger
             else -> c.ink
         },
-        tween(260), label = "timeColor",
+        tween(200), label = "wellTint",
     )
+    val wellIcon = when {
+        checked -> Icons.Outlined.TaskAlt
+        lane == Lane.Repeating -> Icons.Outlined.Repeat
+        overdue -> Icons.Outlined.NotificationsActive
+        else -> Icons.Outlined.NotificationsNone
+    }
 
     SwipeToDismissBox(
         state = dismiss,
-        modifier = modifier
-            .padding(horizontal = 8.dp)
-            .onSizeChanged { widthPx = it.width.coerceAtLeast(1) },
+        modifier = modifier.onSizeChanged { widthPx = it.width.coerceAtLeast(1) },
         enableDismissFromStartToEnd = false,
         backgroundContent = {
             Box(
                 Modifier
                     .fillMaxSize()
-                    // Invisible at rest so it never peeks round the row's corners.
+                    // Invisible at rest so it never peeks round the card's corners.
                     .graphicsLayer { alpha = (swipe() * 6f).coerceAtMost(1f) }
-                    .clip(RowShape)
+                    .clip(shape)
                     .background(c.danger),
                 contentAlignment = Alignment.CenterEnd,
             ) {
@@ -343,58 +617,54 @@ private fun ReminderRow(
                     tint = c.onDanger,
                     modifier = Modifier
                         .padding(end = 28.dp)
-                        .size(26.dp)
+                        .size(24.dp)
                         .graphicsLayer {
                             val f = (swipe() / 0.45f).coerceIn(0f, 1f)
-                            val s = 0.7f + 0.55f * f
+                            val s = 0.7f + 0.5f * f
                             scaleX = s
                             scaleY = s
-                            rotationZ = -14f * (1f - f)
                         },
                 )
             }
         },
     ) {
-        Row(
+        Box(
             Modifier
                 .fillMaxWidth()
-                .clip(RowShape)
-                .background(c.ground)
-                .drawBehind {
-                    if (above <= 0f && below <= 0f) return@drawBehind
-                    val w = 3.dp.toPx()
-                    val x = (RowPadStart + TimeCol + DotBox / 2).toPx() - w / 2
-                    val cy = (RowPadV + DotBox / 2).toPx()
-                    val gap = (DotRadius + 5.dp).toPx()
-                    val corner = CornerRadius(w / 2, w / 2)
-                    if (above > 0f) {
-                        val end = cy - gap
-                        val len = (end + w) * above
-                        drawRoundRect(threadColor, Offset(x, end - len), Size(w, len), corner)
-                    }
-                    if (below > 0f) {
-                        val start = cy + gap
-                        val len = (size.height - start + w) * below
-                        drawRoundRect(threadColor, Offset(x, start), Size(w, len), corner)
-                    }
-                }
-                .pressable(onClick = onOpen, pressedScale = 0.985f, onClickLabel = "Edit reminder")
-                .padding(start = RowPadStart, end = 12.dp, top = RowPadV, bottom = RowPadV),
-            verticalAlignment = Alignment.Top,
+                .clip(shape)
+                .background(c.raised)
+                .padding(
+                    start = 6.dp,
+                    end = 6.dp,
+                    top = if (first) 8.dp else 0.dp,
+                    bottom = if (last) 8.dp else 0.dp,
+                ),
         ) {
-            Column(Modifier.width(TimeCol).padding(top = 12.dp)) {
-                TimeText(Fmt.time(context, at.toLocalTime()), timeColor)
-                if (dateText != null) {
-                    Text(
-                        dateText,
-                        style = HubType.small,
-                        color = if (lane == Lane.Overdue && !faded) c.danger else c.inkMuted,
-                        maxLines = 1,
-                    )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .pressable(onClick = onOpen, pressedScale = 0.98f, onClickLabel = "Edit reminder")
+                    .padding(start = 12.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(42.dp).clip(CircleShape).background(wellTone), contentAlignment = Alignment.Center) {
+                    Icon(wellIcon, contentDescription = null, tint = wellTint, modifier = Modifier.size(20.dp))
                 }
-            }
-
-            Box(Modifier.size(DotBox), contentAlignment = Alignment.Center) {
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                    StrikeTitle(r.title, struck = checked)
+                    Text(meta, style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (r.notes.isNotBlank()) {
+                        Text(
+                            r.notes,
+                            style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                            color = c.inkMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
                 if (onToggle != null) {
                     CheckDot(
                         checked = checked,
@@ -407,36 +677,13 @@ private fun ReminderRow(
                         contentDescription = if (checked) "Mark ${r.title} as not done" else "Mark ${r.title} as done",
                     )
                 } else {
-                    Box(
-                        Modifier.size(30.dp).clip(CircleShape).background(c.skySoft),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Outlined.Repeat, contentDescription = "Repeating", tint = c.sky, modifier = Modifier.size(17.dp))
-                    }
-                }
-            }
-
-            Column(
-                Modifier.weight(1f).padding(start = 6.dp, top = 12.dp, bottom = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                StrikeTitle(r.title, struck = faded)
-                when {
-                    lane == Lane.Overdue && !faded ->
-                        Text("${Fmt.untilText(now, r.triggerAt)} ago", style = HubType.small, color = c.danger)
-                    isNext && !faded ->
-                        Text("In ${Fmt.untilText(r.triggerAt, now)}", style = HubType.small, color = c.sky)
-                }
-                r.recurrence.describe().takeIf { it.isNotEmpty() }?.let {
-                    Text(it, style = HubType.small, color = c.inkMuted)
-                }
-                if (r.notes.isNotBlank()) {
+                    // Repeating: the value at the end is how long until it fires again.
                     Text(
-                        r.notes,
-                        style = HubType.small,
-                        color = c.inkMuted,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        "in ${Fmt.untilText(r.triggerAt, now)}",
+                        style = HubType.clockSmall.copy(fontSize = 13.sp),
+                        color = c.sky,
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 8.dp, end = 12.dp),
                     )
                 }
             }
@@ -444,21 +691,28 @@ private fun ReminderRow(
     }
 }
 
-/** Condensed clock numerals with the AM/PM marker set smaller, in any locale. */
-@Composable
-private fun TimeText(text: String, color: Color) {
-    val styled = remember(text) {
-        buildAnnotatedString {
-            text.forEach { ch ->
-                if (ch.isLetter() || ch == '.') {
-                    withStyle(SpanStyle(fontSize = 12.sp)) { append(ch) }
-                } else {
-                    append(ch)
-                }
-            }
+/** "9:00 AM  •  Tomorrow  •  Every day", with how late it is in red when overdue. */
+private fun metaLine(
+    time: String,
+    day: String,
+    repeat: String,
+    late: String?,
+    muted: Color,
+    danger: Color,
+): AnnotatedString = buildAnnotatedString {
+    withStyle(SpanStyle(color = muted)) {
+        append(time)
+        append("  •  ")
+        append(day)
+        if (repeat.isNotEmpty()) {
+            append("  •  ")
+            append(repeat)
         }
     }
-    Text(styled, style = HubType.clockSmall, color = color, maxLines = 1, softWrap = false)
+    if (late != null) {
+        withStyle(SpanStyle(color = muted)) { append("  •  ") }
+        withStyle(SpanStyle(color = danger)) { append(late) }
+    }
 }
 
 /** The title, with a strike that draws itself across every line when it's done. */
@@ -468,15 +722,17 @@ private fun StrikeTitle(text: String, struck: Boolean) {
     val reduced = LocalReducedMotion.current
     val progress by animateFloatAsState(
         if (struck) 1f else 0f,
-        if (reduced) tween(0) else if (struck) tween(380, easing = Motion.EaseOut) else tween(180),
+        if (reduced) tween(0) else if (struck) tween(280, easing = Motion.EaseOut) else tween(160),
         label = "strike",
     )
-    val color by animateColorAsState(if (struck) c.inkMuted else c.ink, tween(300), label = "titleInk")
+    val color by animateColorAsState(if (struck) c.inkMuted else c.ink, tween(240), label = "titleInk")
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     Text(
         text,
-        style = HubType.bodyStrong,
+        style = HubType.bodyStrong.copy(fontSize = 14.sp, lineHeight = 20.sp),
         color = color,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
         onTextLayout = { layout = it },
         modifier = Modifier.drawWithContent {
             drawContent()
@@ -491,7 +747,7 @@ private fun StrikeTitle(text: String, struck: Boolean) {
                 val left = l.getLineLeft(i)
                 drawLine(
                     color, Offset(left, y), Offset(left + seg, y),
-                    strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round,
+                    strokeWidth = 1.6.dp.toPx(), cap = StrokeCap.Round,
                 )
                 remaining -= seg
             }
@@ -499,16 +755,16 @@ private fun StrikeTitle(text: String, struck: Boolean) {
     )
 }
 
-/** The small line under the time: nothing for today, a word for neighbours, else a short date. */
-private fun dateLine(date: LocalDate, today: LocalDate): String? {
+/** "Today", "Tomorrow", "Yesterday", "Wed 12 Nov" this week, else "12 Nov" or "12 Nov 2027". */
+private fun dayWord(date: LocalDate, today: LocalDate): String {
     val locale = Locale.getDefault()
     return when {
-        date == today -> null
+        date == today -> "Today"
         date == today.plusDays(1) -> "Tomorrow"
         date == today.minusDays(1) -> "Yesterday"
         date.isAfter(today) && date.isBefore(today.plusDays(7)) ->
-            date.format(DateTimeFormatter.ofPattern("EEE d", locale))
-        date.year == today.year -> date.format(DateTimeFormatter.ofPattern("d MMM", locale))
-        else -> date.format(DateTimeFormatter.ofPattern("d MMM yyyy", locale))
+            date.format(DateTimeFormatter.ofPattern("EEE d MMM", locale))
+        date.year == today.year -> date.format(DateTimeFormatter.ofPattern("d MMMM", locale))
+        else -> date.format(DateTimeFormatter.ofPattern("d MMMM, yyyy", locale))
     }
 }

@@ -14,7 +14,8 @@ private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 /** Which AI service the Assistant uses. */
 enum class AiProvider(val label: String) {
     GEMINI("Google Gemini"),
-    GROK("xAI Grok"),
+    /** Groq (groq.com, "gsk_" keys); an xAI Grok key ("xai-") also works here. */
+    GROK("Groq"),
 }
 
 class SettingsStore(private val context: Context) {
@@ -81,7 +82,7 @@ class SettingsStore(private val context: Context) {
         /** Google's alias for the newest Flash model. */
         const val DEFAULT_MODEL = "gemini-flash-latest"
         const val DEFAULT_STEP_GOAL = 8_000L
-        /** xAI renames models often; Settings can load the live list via AssistantAi.listGrokModels. */
-        const val DEFAULT_GROK_MODEL = "grok-4.7"
+        /** Groq's default; Settings can load the live list via AssistantAi.listGrokModels. */
+        const val DEFAULT_GROK_MODEL = "openai/gpt-oss-120b"
     }
 }

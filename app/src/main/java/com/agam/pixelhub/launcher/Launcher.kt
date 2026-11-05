@@ -97,5 +97,8 @@ object ShortcutLauncher {
         false
     } catch (e: SecurityException) {
         false
+    } catch (e: RuntimeException) {
+        // e.g. FileUriExposedException for a file:// link: report it instead of crashing.
+        false
     }
 }

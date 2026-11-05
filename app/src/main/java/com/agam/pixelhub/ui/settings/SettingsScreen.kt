@@ -1,56 +1,56 @@
 package com.agam.pixelhub.ui.settings
 
-import com.agam.pixelhub.ui.health.HealthSettingsSection
-
 import android.Manifest
 import android.content.Intent
-import android.widget.Toast
+import android.provider.Settings
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.BatteryFull
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,58 +58,45 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.asComposePath
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
-import androidx.graphics.shapes.toPath
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.agam.pixelhub.container
-import com.agam.pixelhub.data.SettingsStore
+import com.agam.pixelhub.ui.CircleIconButton
 import com.agam.pixelhub.ui.Gutter
-import com.agam.pixelhub.ui.HubTextField
-import com.agam.pixelhub.ui.PrimaryButton
-import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.ScreenScaffold
 import com.agam.pixelhub.ui.SectionHeader
+import com.agam.pixelhub.ui.health.HealthSettingsSection
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.HubShapes
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.PolygonShape
 import com.agam.pixelhub.ui.motion.RollingText
-import com.agam.pixelhub.ui.motion.Stagger
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.openSafely
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlin.math.cos
-import kotlin.math.sin
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val c = context.container
     val checks = rememberSetupChecks()
     val notificationsFix = checks.first { it.kind == CheckKind.NOTIFICATIONS }.fix
+    val activity = LocalActivity.current
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        // After two denials Android stops showing the prompt; send the user to settings instead.
-        if (!granted) openSafely(context, notificationsFix)
+        // After two denials Android stops showing the prompt and denies at once; only then send the
+        // user to system settings. A single "Don't allow" is respected.
+        val blocked = activity?.shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) == false
+        if (!granted && blocked) openSafely(context, notificationsFix)
     }
 
     val version = remember {
@@ -128,117 +115,188 @@ fun SettingsScreen(onBack: () -> Unit) {
     ScreenScaffold(
         title = "Settings",
         navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+            CircleIconButton(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
         },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 48.dp)) {
-            item(key = "hero") {
-                SetupHero(checks, Modifier.staggerIn(stagger, "hero", 0))
+        // Edge-to-edge windows don't resize for the keyboard, so pad for it: the key field and Save
+        // stay reachable above it.
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
+            contentPadding = PaddingValues(bottom = 40.dp),
+        ) {
+            item(key = "setup_header") {
+                SectionHeader("Alarms & reminders", Modifier.staggerIn(stagger, "setup_header", 0))
             }
-            item(key = "checks") {
-                Checklist(checks, onFix = { fix(it) }, stagger = stagger)
+            item(key = "setup") {
+                SettingsCard(Modifier.staggerIn(stagger, "setup", 1)) {
+                    SetupSummary(checks)
+                    checks.forEach { check -> CheckRow(check, onFix = { fix(check) }) }
+                }
             }
 
-            item(key = "ai_header") {
-                SectionHeader("Assistant AI", Modifier.staggerIn(stagger, "ai_header", 7))
-            }
-            item(key = "ai") {
-                AssistantAiSection(Modifier.staggerIn(stagger, "ai", 8))
-            }
+            item(key = "calendar_header") { SectionHeader("Calendar", Modifier.staggerIn(stagger, "calendar_header", 2)) }
+            item(key = "calendar") { CalendarSyncSection(Modifier.staggerIn(stagger, "calendar", 3)) }
 
-            item(key = "health_header") { SectionHeader("Health", Modifier.staggerIn(stagger, "health_header", 9)) }
-            item(key = "health") { HealthSettingsSection() }
+            item(key = "health_header") { SectionHeader("Health", Modifier.staggerIn(stagger, "health_header", 4)) }
+            item(key = "health") { Box(Modifier.staggerIn(stagger, "health", 5)) { HealthSettingsSection() } }
 
-            item(key = "calendar_header") { SectionHeader("Google Calendar", Modifier.staggerIn(stagger, "calendar_header", 9)) }
-            item(key = "calendar") { CalendarSyncSection(Modifier.staggerIn(stagger, "calendar", 10)) }
+            item(key = "ai_header") { SectionHeader("Assistant", Modifier.staggerIn(stagger, "ai_header", 6)) }
+            item(key = "ai") { AssistantAiSection(Modifier.staggerIn(stagger, "ai", 7)) }
 
-            item(key = "about_header") {
-                SectionHeader("About", Modifier.staggerIn(stagger, "about_header", 9))
-            }
+            item(key = "about_header") { SectionHeader("About", Modifier.staggerIn(stagger, "about_header", 8)) }
             item(key = "about") {
-                About(version, Modifier.staggerIn(stagger, "about", 10))
+                SettingsCard(Modifier.staggerIn(stagger, "about", 9)) {
+                    SettingRow(icon = Icons.Outlined.Info, title = "PixelHub", meta = "Version $version")
+                    SettingRow(
+                        icon = Icons.Outlined.Tune,
+                        title = "App info",
+                        meta = "Permissions, storage and notifications in Android settings",
+                        onClick = {
+                            openSafely(
+                                context,
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()),
+                            )
+                        },
+                        onClickLabel = "Open app info",
+                        trailing = { Chevron() },
+                    )
+                }
             }
         }
     }
 }
 
+/** A settings group: one raised card holding its rows. */
+@Composable
+internal fun SettingsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = Gutter)
+            .hubCard(Hub.colors.raised)
+            .padding(6.dp),
+        content = content,
+    )
+}
+
 /**
- * The checklist as a bedside dial: the arc sweeps to how much is granted, the count rolls,
- * and when everything is granted the ring turns green and a burst pops behind the numbers.
+ * A row in a settings card, matching the list rows elsewhere: an icon in a round well, a
+ * title with a muted line under it, and an optional control at the far end. When [onClick]
+ * is set the whole row is the target and springs when pressed.
  */
 @Composable
-private fun SetupHero(checks: List<SetupCheck>, modifier: Modifier = Modifier) {
+internal fun SettingRow(
+    icon: ImageVector,
+    title: String,
+    meta: String?,
+    modifier: Modifier = Modifier,
+    iconTint: Color = Hub.colors.ink,
+    iconTone: Color = Hub.colors.well,
+    onClick: (() -> Unit)? = null,
+    onClickLabel: String? = null,
+    role: Role? = Role.Button,
+    /** Drawn in the well instead of [icon], e.g. a calendar's colour. */
+    wellContent: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    val c = Hub.colors
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 60.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .then(
+                if (onClick != null) {
+                    Modifier.pressable(onClick = onClick, pressedScale = 0.98f, role = role, onClickLabel = onClickLabel)
+                } else Modifier,
+            )
+            .padding(start = 12.dp, end = if (trailing != null) 6.dp else 12.dp, top = 9.dp, bottom = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(42.dp).clip(CircleShape).background(iconTone), contentAlignment = Alignment.Center) {
+            if (wellContent != null) {
+                wellContent()
+            } else {
+                Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = HubType.bodyStrong.copy(fontSize = 14.sp, lineHeight = 20.sp),
+                color = c.ink,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (meta != null) {
+                Text(
+                    meta,
+                    style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                    color = c.inkMuted,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            trailing()
+        }
+    }
+}
+
+/** The quiet arrow at the end of a row that opens somewhere else. */
+@Composable
+internal fun Chevron() {
+    Icon(
+        Icons.Outlined.ChevronRight,
+        contentDescription = null,
+        tint = Hub.colors.inkMuted,
+        modifier = Modifier.padding(end = 6.dp).size(22.dp),
+    )
+}
+
+private val CheckKind.icon: ImageVector
+    get() = when (this) {
+        CheckKind.NOTIFICATIONS -> Icons.Outlined.Notifications
+        CheckKind.EXACT_ALARMS -> Icons.Outlined.Alarm
+        CheckKind.FULL_SCREEN -> Icons.Outlined.Fullscreen
+        CheckKind.BATTERY -> Icons.Outlined.BatteryFull
+        CheckKind.ALARM_CHANNEL -> Icons.Outlined.NotificationsActive
+    }
+
+/**
+ * The top of the setup card: a small dial whose arc sweeps to how much is granted, the
+ * count rolling inside it, and one line saying what's left. Turns green when all is granted.
+ */
+@Composable
+private fun SetupSummary(checks: List<SetupCheck>) {
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
-    val haptics = LocalHapticFeedback.current
     val total = checks.size
     val done = checks.count { it.ok }
     val allDone = total > 0 && done == total
     val fraction = if (total == 0) 1f else done / total.toFloat()
 
-    // Starts empty so the arc sweeps in; animates again whenever the count changes on resume.
-    val sweep = remember { Animatable(0f) }
+    // Starts empty so the arc sweeps in; moves again whenever the count changes on resume.
+    val sweep = remember { Animatable(if (reduced) fraction else 0f) }
     LaunchedEffect(fraction) {
-        if (reduced) sweep.snapTo(fraction) else sweep.animateTo(fraction, tween(1_100, easing = Motion.EaseOut))
+        if (reduced) sweep.snapTo(fraction) else sweep.animateTo(fraction, spring(dampingRatio = 0.9f, stiffness = 260f))
     }
-    val arcColor by animateColorAsState(if (allDone) c.ok else c.dawn, tween(500), label = "arc")
+    val arcColor by animateColorAsState(if (allDone) c.ok else c.dawn, tween(240), label = "arc")
 
-    // The settled burst behind the numbers, and a ghost of it that flies outward and fades.
-    val badge = remember { Animatable(if (allDone && reduced) 1f else 0f) }
-    val ghost = remember { Animatable(1f) }
-    LaunchedEffect(allDone) {
-        if (allDone) {
-            if (reduced) {
-                badge.snapTo(1f)
-            } else {
-                delay(650) // let the arc close first
-                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                launch {
-                    badge.snapTo(0.6f)
-                    badge.animateTo(1f, Motion.bouncy())
-                }
-                ghost.snapTo(0f)
-                ghost.animateTo(1f, tween(900, easing = Motion.EaseOut))
-            }
-        } else {
-            badge.animateTo(0f, tween(200))
-        }
-    }
-    val burst = remember { HubShapes.burst.toPath(android.graphics.Path()).asComposePath() }
-
-    Column(
-        modifier.fillMaxWidth().padding(horizontal = Gutter).padding(top = 8.dp, bottom = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 8.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "$done of $total setup steps done" },
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(220.dp).semantics { contentDescription = "$done of $total setup steps done" },
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(Modifier.size(196.dp)) {
-                val stroke = 14.dp.toPx()
+        Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size(64.dp)) {
+                val stroke = 6.dp.toPx()
                 val r = size.minDimension / 2 - stroke / 2
-                val inner = r - stroke * 1.4f
-
-                // Ghost burst: grows past the ring and fades.
-                if (ghost.value < 1f) {
-                    val t = ghost.value
-                    translate(center.x, center.y) {
-                        rotate(28f * t, pivot = Offset.Zero) {
-                            scale(r * (0.95f + 0.4f * t), pivot = Offset.Zero) {
-                                drawPath(burst, c.ok.copy(alpha = 0.32f * (1f - t)))
-                            }
-                        }
-                    }
-                }
-                // Settled burst behind the numerals.
-                if (badge.value > 0f) {
-                    translate(center.x, center.y) {
-                        scale(inner * badge.value, pivot = Offset.Zero) {
-                            drawPath(burst, c.ok.copy(alpha = if (c.isDark) 0.18f else 0.14f))
-                        }
-                    }
-                }
-
                 drawCircle(c.raised2, radius = r, style = Stroke(stroke))
                 val s = sweep.value
                 if (s > 0f) {
@@ -248,104 +306,52 @@ private fun SetupHero(checks: List<SetupCheck>, modifier: Modifier = Modifier) {
                         style = Stroke(stroke, cap = StrokeCap.Round),
                     )
                 }
-                // A knob riding the head of the arc, like the hand of a dial.
-                val a = Math.toRadians(-90.0 + 360.0 * s)
-                val knob = Offset(center.x + r * cos(a).toFloat(), center.y + r * sin(a).toFloat())
-                drawCircle(if (s > 0f) arcColor else c.inkMuted, radius = stroke * 0.85f, center = knob)
-                drawCircle(c.ground, radius = stroke * 0.28f, center = knob)
             }
-            Row(verticalAlignment = Alignment.Bottom) {
-                RollingText(done.toString(), style = HubType.clockLarge, color = c.ink)
-                Text(
-                    " of $total",
-                    style = HubType.section,
-                    color = c.inkMuted,
-                    modifier = Modifier.padding(bottom = 9.dp),
-                )
-            }
+            RollingText("$done/$total", style = HubType.clockSmall, color = c.ink)
         }
-
-        Spacer(Modifier.height(8.dp))
-        AnimatedContent(
-            targetState = allDone to (total - done),
-            transitionSpec = { fadeIn(tween(220, delayMillis = 80)) togetherWith fadeOut(tween(120)) },
-            label = "heroHeading",
-        ) { (finished, left) ->
-            Text(
-                if (finished) "All set" else if (left == 1) "1 thing left to grant" else "$left things left to grant",
-                style = HubType.section,
-                color = if (finished) c.ok else c.ink,
-                textAlign = TextAlign.Center,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Grant these so alarms and reminders fire on time, even in Doze and on the lock screen.",
-            style = HubType.body,
-            color = c.inkMuted,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-/** All checks on one raised surface. Rows that need attention can be tapped anywhere. */
-@Composable
-private fun Checklist(checks: List<SetupCheck>, onFix: (SetupCheck) -> Unit, stagger: Stagger) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Gutter)
-            .clip(RoundedCornerShape(28.dp))
-            .background(Hub.colors.raised)
-            .padding(vertical = 6.dp),
-    ) {
-        checks.forEachIndexed { i, check ->
-            CheckRow(check, onFix = { onFix(check) }, modifier = Modifier.staggerIn(stagger, check.kind, i + 1))
-        }
-    }
-}
-
-@Composable
-private fun CheckRow(check: SetupCheck, onFix: () -> Unit, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    Row(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .pressable(onClick = onFix, enabled = !check.ok, pressedScale = 0.98f, onClickLabel = "Fix ${check.title}")
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        StatusMark(check.ok)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(check.title, style = HubType.bodyStrong, color = c.ink)
-            Text(check.detail, style = HubType.small, color = c.inkMuted)
-        }
-        AnimatedVisibility(
-            visible = !check.ok,
-            enter = fadeIn(tween(160)) + scaleIn(initialScale = 0.8f, animationSpec = Motion.snappy()),
-            exit = fadeOut(tween(140)) + shrinkHorizontally(tween(260, easing = Motion.EaseOut)),
-        ) {
-            Box(
-                Modifier
-                    .padding(start = 12.dp)
-                    .height(40.dp)
-                    .clip(CircleShape)
-                    .background(c.dawn)
-                    .pressable(onClick = onFix, pressedScale = 0.92f, onClickLabel = "Fix ${check.title}")
-                    .padding(horizontal = 18.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("Fix", style = HubType.button, color = c.onDawn)
+            AnimatedContent(
+                targetState = allDone to (total - done),
+                transitionSpec = { fadeIn(tween(200, delayMillis = 60)) togetherWith fadeOut(tween(120)) },
+                label = "setupHeading",
+            ) { (finished, left) ->
+                Text(
+                    if (finished) "All set" else if (left == 1) "1 thing left to grant" else "$left things left to grant",
+                    style = HubType.section,
+                    color = c.ink,
+                )
             }
+            Text(
+                "So alarms and reminders fire on time, even in Doze and on the lock screen.",
+                style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                color = c.inkMuted,
+            )
         }
     }
 }
 
-/** A green burst seal when granted (it pops in as it changes), a red dot when not. */
+/** A check as a settings row. Rows that need attention can be tapped anywhere, or on Fix. */
 @Composable
-private fun StatusMark(ok: Boolean) {
+private fun CheckRow(check: SetupCheck, onFix: () -> Unit) {
+    val c = Hub.colors
+    val tone by animateColorAsState(if (check.ok) c.well else c.dangerSoft, tween(200), label = "checkTone")
+    val tint by animateColorAsState(if (check.ok) c.ink else c.danger, tween(200), label = "checkTint")
+    SettingRow(
+        icon = check.kind.icon,
+        title = check.title,
+        meta = check.detail,
+        iconTone = tone,
+        iconTint = tint,
+        onClick = if (check.ok) null else onFix,
+        onClickLabel = "Fix ${check.title}",
+        trailing = { StatusEnd(check.ok, check.title, onFix) },
+    )
+}
+
+/** A green seal once granted (it pops in as it changes); until then, an ink "Fix" pill. */
+@Composable
+private fun StatusEnd(ok: Boolean, title: String, onFix: () -> Unit) {
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
     val seal = remember { PolygonShape(HubShapes.burst) }
@@ -356,77 +362,33 @@ private fun StatusMark(ok: Boolean) {
                 (scaleIn(initialScale = 0.5f, animationSpec = Motion.bouncy()) + fadeIn(tween(120))) togetherWith
                     fadeOut(tween(90))
             } else {
-                fadeIn(tween(160)) togetherWith fadeOut(tween(160))
+                fadeIn(tween(160)) togetherWith fadeOut(tween(120))
             }
         },
         contentAlignment = Alignment.Center,
         label = "status",
     ) { isOk ->
         if (isOk) {
-            Box(
-                Modifier.size(34.dp).clip(seal).background(c.ok).semantics { contentDescription = "Done" },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Outlined.Check, contentDescription = null, tint = c.ground, modifier = Modifier.size(18.dp))
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.size(30.dp).clip(seal).background(c.ok).semantics { contentDescription = "Granted" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Outlined.Check, contentDescription = null, tint = c.ground, modifier = Modifier.size(16.dp))
+                }
             }
         } else {
             Box(
-                Modifier.size(34.dp).clip(CircleShape).background(c.dangerSoft).semantics { contentDescription = "Needs attention" },
+                Modifier
+                    .heightIn(min = 40.dp)
+                    .clip(CircleShape)
+                    .background(c.ink)
+                    .pressable(onClick = onFix, pressedScale = 0.92f, onClickLabel = "Fix $title")
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Box(Modifier.size(10.dp).clip(CircleShape).background(c.danger))
+                Text("Fix", style = HubType.button, color = c.ground)
             }
-        }
-    }
-}
-
-/** One quiet line saying whether a key is in place. Hidden until the store has answered. */
-@Composable
-private fun KeyStatus(savedKey: String?) {
-    val c = Hub.colors
-    AnimatedVisibility(visible = savedKey != null, enter = fadeIn(tween(200)), exit = fadeOut(tween(120))) {
-        val hasKey = !savedKey.isNullOrBlank()
-        val dot by animateColorAsState(if (hasKey) c.ok else c.inkMuted, tween(240), label = "keyDot")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
-            Spacer(Modifier.width(10.dp))
-            Text(
-                if (hasKey) "A key is saved on this phone." else "Add a key to use the assistant.",
-                style = HubType.body,
-                color = c.inkMuted,
-            )
-        }
-    }
-}
-
-@Composable
-private fun About(version: String, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    Row(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = Gutter)
-            .clip(RoundedCornerShape(28.dp))
-            .background(c.raised)
-            .padding(18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // A tiny dial: dawn and sky markers on the night ring.
-        Canvas(Modifier.size(48.dp)) {
-            val stroke = 4.dp.toPx()
-            val r = size.minDimension / 2 - stroke
-            drawCircle(c.raised2, radius = r, style = Stroke(stroke))
-            fun marker(deg: Double, color: Color) {
-                val a = Math.toRadians(deg)
-                drawCircle(color, radius = 5.dp.toPx(), center = Offset(center.x + r * cos(a).toFloat(), center.y + r * sin(a).toFloat()))
-            }
-            marker(-60.0, c.dawn)
-            marker(150.0, c.sky)
-        }
-        Spacer(Modifier.width(16.dp))
-        Column {
-            Text("PixelHub", style = HubType.section, color = c.ink)
-            Text("Version $version", style = HubType.small, color = c.inkMuted)
         }
     }
 }

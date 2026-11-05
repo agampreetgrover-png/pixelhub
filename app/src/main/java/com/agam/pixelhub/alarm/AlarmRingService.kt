@@ -1,6 +1,7 @@
 package com.agam.pixelhub.alarm
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -23,6 +24,7 @@ import com.agam.pixelhub.R
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Alarm
 import com.agam.pixelhub.notify.Channels
+import com.agam.pixelhub.scheduling.Scheduler
 import com.agam.pixelhub.ui.Fmt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,9 +57,9 @@ class AlarmRingService : Service() {
             ACTION_START -> startRinging(intent)
             ACTION_SNOOZE -> {
                 ringingState.value?.let { r ->
-                    container.scheduler.scheduleAlarmSnooze(
-                        r.alarmId, System.currentTimeMillis() + r.snoozeMinutes * 60_000L,
-                    )
+                    val at = System.currentTimeMillis() + r.snoozeMinutes * 60_000L
+                    container.scheduler.scheduleAlarmSnooze(r.alarmId, at)
+                    showSnoozed(r, at)
                 }
                 finishRinging()
             }
@@ -79,6 +81,7 @@ class AlarmRingService : Service() {
             snoozeMinutes = intent.getIntExtra(EXTRA_SNOOZE, 10),
         )
         stopSound()
+        getSystemService(NotificationManager::class.java).cancel(Scheduler.snoozedNotificationId(ringing.alarmId))
         // Publish state before the full-screen intent can launch the activity.
         ringingState.value = ringing
         startForeground(
@@ -111,6 +114,25 @@ class AlarmRingService : Service() {
             .addAction(0, "Snooze ${r.snoozeMinutes} min", servicePending(ACTION_SNOOZE, 1))
             .addAction(0, "Dismiss", servicePending(ACTION_DISMISS, 2))
             .build()
+    }
+
+    /**
+     * A snoozed one-off alarm is already switched off in the list, so this quiet note is where you
+     * see that it will ring again, and where you can call it off.
+     */
+    private fun showSnoozed(r: Ringing, atMillis: Long) {
+        val at = java.time.Instant.ofEpochMilli(atMillis).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+        val n = NotificationCompat.Builder(this, Channels.ALARMS)
+            .setSmallIcon(R.drawable.ic_stat_pixelhub)
+            .setContentTitle("${r.label.ifBlank { "Alarm" }} snoozed")
+            .setContentText("Rings again at ${Fmt.time(this, at)}")
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setSilent(true)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .addAction(0, "Cancel snooze", container.scheduler.cancelSnoozeIntent(r.alarmId))
+            .build()
+        runCatching { getSystemService(NotificationManager::class.java).notify(Scheduler.snoozedNotificationId(r.alarmId), n) }
     }
 
     private fun servicePending(action: String, request: Int): PendingIntent = PendingIntent.getService(

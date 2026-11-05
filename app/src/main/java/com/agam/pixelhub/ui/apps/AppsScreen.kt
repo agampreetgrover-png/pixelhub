@@ -3,17 +3,10 @@
 package com.agam.pixelhub.ui.apps
 
 import android.content.Intent
-import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.StartOffset
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -28,22 +21,24 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Info
@@ -67,19 +62,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
-import androidx.graphics.shapes.RoundedPolygon
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.AppShortcut
@@ -87,23 +83,24 @@ import com.agam.pixelhub.data.ShortcutKind
 import com.agam.pixelhub.launcher.AppEntry
 import com.agam.pixelhub.launcher.ShortcutLauncher
 import com.agam.pixelhub.ui.AppIcon
+import com.agam.pixelhub.ui.BackButton
+import com.agam.pixelhub.ui.CardRadius
+import com.agam.pixelhub.ui.CircleIconButton
+import com.agam.pixelhub.ui.Gutter
 import com.agam.pixelhub.ui.HubFab
 import com.agam.pixelhub.ui.HubSheet
 import com.agam.pixelhub.ui.HubTextField
 import com.agam.pixelhub.ui.PrimaryButton
 import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.ScreenScaffold
-import com.agam.pixelhub.ui.motion.HubShapes
-import com.agam.pixelhub.ui.motion.LocalReducedMotion
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.Motion
-import com.agam.pixelhub.ui.motion.PolygonShape
 import com.agam.pixelhub.ui.motion.Stagger
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Starting points for link shortcuts; the user edits the number/place/search afterwards. */
@@ -116,26 +113,19 @@ private val LINK_PRESETS = listOf(
     "Email" to "mailto:someone@example.com",
 )
 
-/** The enamel-badge shapes behind shortcut icons, cycled by position. */
-private val BADGES: List<Pair<RoundedPolygon, Float>> = listOf(
-    HubShapes.cookie to 0f,
-    HubShapes.clover to 45f,
-    HubShapes.gem to 0f,
-    HubShapes.burst to 15f,
-    HubShapes.circle to 0f,
-)
+/** Shortcuts per row in the pinned card, like the quick-action row on Home. */
+private const val PER_ROW = 4
+private const val PLACEHOLDERS = 6
 
-/** The grid is 12 columns: shortcuts take 4 (three a row), apps take 3 (four a row). */
-private const val COLUMNS = 12
-private const val SHORTCUT_SPAN = 4
-private const val APP_SPAN = 3
-private const val PLACEHOLDERS = 8
+/** The all-apps card is drawn piece by piece (one lazy item per row), so it scrolls cheaply. */
+private val CardTop = RoundedCornerShape(topStart = CardRadius, topEnd = CardRadius)
+private val CardBottom = RoundedCornerShape(bottomStart = CardRadius, bottomEnd = CardRadius)
 
-/** Inner padding of each grid cell; the grid's own padding makes up the rest of the gutter. */
-private val CellPad = 6.dp
+private val TitleStyle = HubType.bodyStrong.copy(fontSize = 14.sp, lineHeight = 20.sp)
+private val MetaStyle = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp)
 
 @Composable
-fun AppsScreen() {
+fun AppsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val c = context.container
     val shortcuts by c.shortcuts.all.collectAsStateWithLifecycle<List<AppShortcut>?>(initialValue = null)
@@ -151,129 +141,136 @@ fun AppsScreen() {
     val filtered = remember(apps, query) {
         if (query.isBlank()) apps else apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
     }
+    /** Package name to its shortcut, for the pin toggles in the app list. */
+    val pinned = remember(shortcuts) {
+        shortcuts.orEmpty().filter { it.kind == ShortcutKind.APP && it.packageName != null }.associateBy { it.packageName!! }
+    }
     var addingLink by remember { mutableStateOf(false) }
+    var editing by rememberSaveable { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
 
-    val shortcutStagger = rememberStagger()
+    val stagger = rememberStagger()
     // A fresh stagger once the apps arrive, so the first load cascades even if it took a while.
     val appStagger = key(loaded) { rememberStagger() }
-    val badgeSeen = remember { mutableSetOf<Long>() }
-    val bornAt = remember { SystemClock.uptimeMillis() }
 
     fun toast(text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+    fun remove(s: AppShortcut) {
+        c.appScope.launch { c.shortcuts.delete(s) }
+    }
+    fun pin(app: AppEntry) {
+        c.appScope.launch {
+            c.shortcuts.add(AppShortcut(label = app.label, kind = ShortcutKind.APP, packageName = app.packageName))
+        }
+    }
+
+    // Leaving edit mode once there is nothing left to edit.
+    LaunchedEffect(shortcuts?.isEmpty()) { if (shortcuts?.isEmpty() == true) editing = false }
 
     ScreenScaffold(
         title = "Apps",
+        navigationIcon = { BackButton(onBack) },
         floatingActionButton = {
-            HubFab(icon = Icons.Outlined.Link, contentDescription = "Add link", onClick = { addingLink = true })
+            HubFab(icon = Icons.Outlined.Add, contentDescription = "Add link", onClick = { addingLink = true })
         },
     ) { padding ->
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(COLUMNS),
-            modifier = Modifier.padding(padding),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 120.dp),
+        LazyColumn(
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            contentPadding = PaddingValues(start = Gutter, end = Gutter, top = 4.dp, bottom = 120.dp),
         ) {
-            item(key = "h-shortcuts", span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
-                GridHeader("Shortcuts", Modifier.staggerIn(shortcutStagger, "h-shortcuts", 0))
-            }
-            if (shortcuts?.isEmpty() == true) {
-                item(key = "shortcuts-empty", span = { GridItemSpan(maxLineSpan) }, contentType = "hint") {
-                    Text(
-                        "Long-press any app below to keep it here, or add a link to a chat, a route or a playlist.",
-                        style = HubType.body,
-                        color = Hub.colors.inkMuted,
-                        modifier = Modifier
-                            .animateItem()
-                            .staggerIn(shortcutStagger, "shortcuts-empty", 1)
-                            .padding(horizontal = CellPad)
-                            .padding(bottom = 8.dp),
-                    )
-                }
-            }
-            itemsIndexed(
-                shortcuts.orEmpty(),
-                key = { _, s -> "s${s.id}" },
-                span = { _, _ -> GridItemSpan(SHORTCUT_SPAN) },
-                contentType = { _, _ -> "shortcut" },
-            ) { index, s ->
-                ShortcutTile(
-                    shortcut = s,
-                    index = index,
-                    stagger = shortcutStagger,
-                    badgeSeen = badgeSeen,
-                    bornAt = bornAt,
-                    modifier = Modifier.animateItem(),
-                    onClick = { if (!ShortcutLauncher.launch(context, s)) toast("Couldn't open ${s.label}") },
-                    onPin = { if (!ShortcutLauncher.pinToHomeScreen(context, s)) toast("Your launcher doesn't support pinning") },
-                    onRemove = { c.appScope.launch { c.shortcuts.delete(s) } },
+            item(key = "search", contentType = "search") {
+                SearchPill(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = if (apps.isEmpty()) "Search apps" else "Search ${apps.size} apps",
+                    onSearch = { keyboard?.hide() },
+                    modifier = Modifier.staggerIn(stagger, "search", 0),
                 )
             }
 
-            item(key = "h-apps", span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
-                GridHeader("All apps", Modifier.staggerIn(shortcutStagger, "h-apps", 2))
-            }
-            item(key = "search", span = { GridItemSpan(maxLineSpan) }, contentType = "search") {
-                Box(Modifier.staggerIn(shortcutStagger, "search", 3).padding(horizontal = CellPad).padding(bottom = 12.dp)) {
-                    HubTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        label = "Find an app",
-                        placeholder = if (apps.isEmpty()) "Search apps" else "Search ${apps.size} apps",
-                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = Hub.colors.inkMuted) },
-                        trailingIcon = { ClearButton(visible = query.isNotEmpty(), onClick = { query = "" }) },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
-                    )
-                }
-            }
-
-            if (!loaded || (apps.isEmpty() && query.isBlank())) {
-                // Loading: a few breathing circles where the icons will be.
-                items(PLACEHOLDERS, key = { "ph$it" }, span = { GridItemSpan(APP_SPAN) }, contentType = { "placeholder" }) { i ->
-                    LoadingDot(index = i, modifier = Modifier.animateItem())
-                }
-            } else if (filtered.isEmpty()) {
-                item(key = "no-results", span = { GridItemSpan(maxLineSpan) }, contentType = "hint") {
-                    Text(
-                        "No app called “${query.trim()}”",
-                        style = HubType.body,
-                        color = Hub.colors.inkMuted,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .animateItem()
-                            .fillMaxWidth()
-                            .padding(horizontal = CellPad, vertical = 32.dp),
-                    )
-                }
-            }
-
-            itemsIndexed(
-                filtered,
-                key = { _, app -> "a${app.packageName}" },
-                span = { _, _ -> GridItemSpan(APP_SPAN) },
-                contentType = { _, _ -> "app" },
-            ) { index, app ->
-                AppTile(
-                    app = app,
-                    index = index,
-                    stagger = appStagger,
-                    modifier = Modifier.animateItem(),
-                    onClick = {
-                        val s = AppShortcut(label = app.label, kind = ShortcutKind.APP, packageName = app.packageName)
-                        if (!ShortcutLauncher.launch(context, s)) toast("Couldn't open ${app.label}")
-                    },
-                    onAdd = {
-                        c.appScope.launch {
-                            c.shortcuts.add(AppShortcut(label = app.label, kind = ShortcutKind.APP, packageName = app.packageName))
+            item(key = "shortcuts", contentType = "shortcuts") {
+                ShortcutsCard(
+                    shortcuts = shortcuts,
+                    editing = editing,
+                    onToggleEdit = { editing = !editing },
+                    onOpen = { s -> if (!ShortcutLauncher.launch(context, s)) toast("Couldn't open ${s.label}") },
+                    onPinHome = { s ->
+                        if (!ShortcutLauncher.pinToHomeScreen(context, s)) {
+                            val supported = context.getSystemService(android.content.pm.ShortcutManager::class.java).isRequestPinShortcutSupported
+                            toast(if (supported) "Couldn't pin ${s.label}. Is the app still installed?" else "Your launcher doesn't support pinning")
                         }
                     },
-                    onInfo = {
-                        context.startActivity(
-                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${app.packageName}".toUri())
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    },
+                    onRemove = { s -> remove(s) },
+                    modifier = Modifier.padding(top = 16.dp).staggerIn(stagger, "shortcuts", 1),
                 )
+            }
+
+            item(key = "apps-head", contentType = "apps-head") {
+                Row(
+                    Modifier
+                        .padding(top = 16.dp)
+                        .staggerIn(stagger, "apps-head", 2)
+                        .fillMaxWidth()
+                        .clip(CardTop)
+                        .background(Hub.colors.raised)
+                        .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("All apps", style = HubType.section, color = Hub.colors.ink, modifier = Modifier.weight(1f))
+                    if (loaded && apps.isNotEmpty()) {
+                        Text(
+                            if (query.isBlank()) "${apps.size}" else "${filtered.size} of ${apps.size}",
+                            style = HubType.small,
+                            color = Hub.colors.inkMuted,
+                        )
+                    }
+                }
+            }
+
+            when {
+                !loaded || (apps.isEmpty() && query.isBlank()) -> {
+                    items(PLACEHOLDERS, key = { "ph$it" }, contentType = { "placeholder" }) { i ->
+                        PlaceholderRow(last = i == PLACEHOLDERS - 1)
+                    }
+                }
+                filtered.isEmpty() -> {
+                    item(key = "no-results", contentType = "hint") {
+                        Text(
+                            "No app called “${query.trim()}”",
+                            style = HubType.body,
+                            color = Hub.colors.inkMuted,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(CardBottom)
+                                .background(Hub.colors.raised)
+                                .padding(horizontal = 20.dp, vertical = 28.dp),
+                        )
+                    }
+                }
+                else -> itemsIndexed(
+                    filtered,
+                    key = { _, app -> "a${app.packageName}" },
+                    contentType = { _, _ -> "app" },
+                ) { index, app ->
+                    val shortcut = pinned[app.packageName]
+                    AppRow(
+                        app = app,
+                        pinned = shortcut != null,
+                        last = index == filtered.lastIndex,
+                        enter = Modifier.staggerIn(appStagger, app.packageName, index, distance = 12f),
+                        onOpen = {
+                            val s = AppShortcut(label = app.label, kind = ShortcutKind.APP, packageName = app.packageName)
+                            if (!ShortcutLauncher.launch(context, s)) toast("Couldn't open ${app.label}")
+                        },
+                        onTogglePin = { if (shortcut != null) remove(shortcut) else pin(app) },
+                        onInfo = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${app.packageName}".toUri())
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                    )
+                }
             }
         }
     }
@@ -289,186 +286,54 @@ fun AppsScreen() {
     }
 }
 
-@Composable
-private fun GridHeader(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        style = HubType.section,
-        color = Hub.colors.ink,
-        modifier = modifier.padding(start = CellPad, end = CellPad, top = 20.dp, bottom = 12.dp),
-    )
-}
+// ---------------------------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------------------------
 
-/**
- * A shortcut as an enamel badge: a raised block with a soft polygon behind the icon. The badge
- * spins into place on a bouncy spring as the tile arrives; pressing squashes the whole tile.
- */
+/** A raised pill: search glyph, the field, and a clear button while there is a query. */
 @Composable
-private fun ShortcutTile(
-    shortcut: AppShortcut,
-    index: Int,
-    stagger: Stagger,
-    badgeSeen: MutableSet<Long>,
-    bornAt: Long,
-    modifier: Modifier,
-    onClick: () -> Unit,
-    onPin: () -> Unit,
-    onRemove: () -> Unit,
+private fun SearchPill(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    onSearch: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    var menuOpen by remember { mutableStateOf(false) }
-    val (polygon, baseTurn) = BADGES[index % BADGES.size]
-    val badge = remember(polygon, baseTurn) { PolygonShape(polygon, baseTurn) }
-
-    val pop = remember(shortcut.id) { Animatable(if (shortcut.id in badgeSeen) 1f else 0f) }
-    LaunchedEffect(shortcut.id) {
-        if (pop.value < 1f) {
-            badgeSeen += shortcut.id
-            if (SystemClock.uptimeMillis() - bornAt < 700) delay(index.coerceIn(0, 10) * Motion.STAGGER_MS + 80)
-            pop.animateTo(1f, if (reduced) tween(160) else Motion.bouncy())
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(CircleShape)
+            .background(c.raised)
+            .padding(start = 6.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(44.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.Search, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
         }
-    }
-
-    Box(modifier.padding(CellPad)) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .staggerIn(stagger, "s${shortcut.id}", index + 1)
-                .pressable(
-                    onClick = onClick,
-                    onLongClick = { menuOpen = true },
-                    pressedScale = 0.9f,
-                    onClickLabel = "Open ${shortcut.label}",
-                    showRipple = false,
-                )
-                .clip(RoundedCornerShape(26.dp))
-                .background(c.raised)
-                .padding(start = 8.dp, end = 8.dp, top = 18.dp, bottom = 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Box(
-                Modifier
-                    .size(68.dp)
-                    .graphicsLayer {
-                        val p = pop.value
-                        if (reduced) {
-                            alpha = p.coerceIn(0f, 1f)
-                        } else {
-                            val s = 0.85f + 0.15f * p
-                            scaleX = s
-                            scaleY = s
-                            rotationZ = (1f - p) * -35f
-                            alpha = (p * 1.6f).coerceIn(0f, 1f)
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(Modifier.size(68.dp).clip(badge).background(c.raised2))
-                AppIcon(
-                    shortcut.packageName,
-                    size = 42.dp,
-                    fallback = if (shortcut.kind == ShortcutKind.LINK) Icons.Outlined.Link else Icons.Outlined.Apps,
-                    modifier = Modifier.graphicsLayer { if (!reduced) rotationZ = (1f - pop.value) * 35f },
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                shortcut.label,
-                style = HubType.small,
-                color = c.ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
-        }
-        HubMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
-            HubMenuItem("Pin to home screen", Icons.Outlined.PushPin) { menuOpen = false; onPin() }
-            HubMenuItem("Remove", Icons.Outlined.Delete, color = c.danger) { menuOpen = false; onRemove() }
-        }
-    }
-}
-
-/** An installed app: icon and label. Rises in on first load, squashes when pressed. */
-@Composable
-private fun AppTile(
-    app: AppEntry,
-    index: Int,
-    stagger: Stagger,
-    modifier: Modifier,
-    onClick: () -> Unit,
-    onAdd: () -> Unit,
-    onInfo: () -> Unit,
-) {
-    val c = Hub.colors
-    var menuOpen by remember { mutableStateOf(false) }
-    Box(modifier) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .staggerIn(stagger, app.packageName, index, distance = 16f)
-                .pressable(
-                    onClick = onClick,
-                    onLongClick = { menuOpen = true },
-                    pressedScale = 0.9f,
-                    onClickLabel = "Open ${app.label}",
-                    showRipple = false,
-                )
-                .padding(horizontal = 2.dp, vertical = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            AppIcon(app.packageName, size = 52.dp)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                app.label,
-                style = HubType.small,
-                color = c.ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        HubMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
-            HubMenuItem("Add to shortcuts", Icons.Outlined.Add) { menuOpen = false; onAdd() }
-            HubMenuItem("App info", Icons.Outlined.Info) { menuOpen = false; onInfo() }
-        }
-    }
-}
-
-/** A placeholder icon that breathes while the app list loads. Each one is a beat behind the last. */
-@Composable
-private fun LoadingDot(index: Int, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val t = rememberInfiniteTransition(label = "loading")
-    val breath by t.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            tween(900, easing = Motion.EaseInOut),
-            RepeatMode.Reverse,
-            initialStartOffset = StartOffset(index * 110),
-        ),
-        label = "breath",
-    )
-    Column(modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            Modifier
-                .size(52.dp)
-                .graphicsLayer {
-                    if (reduced) {
-                        alpha = 0.6f
-                    } else {
-                        alpha = 0.35f + 0.65f * breath
-                        val s = 0.9f + 0.1f * breath
-                        scaleX = s
-                        scaleY = s
+        Spacer(Modifier.width(12.dp))
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = HubType.body.copy(color = c.ink),
+            cursorBrush = SolidColor(c.ink),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+            modifier = Modifier
+                .weight(1f)
+                .semantics { contentDescription = "Find an app" },
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(placeholder, style = HubType.body, color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                    inner()
                 }
-                .clip(CircleShape)
-                .background(c.raised2),
+            },
         )
+        ClearButton(visible = value.isNotEmpty(), onClick = { onValueChange("") })
     }
 }
 
@@ -477,19 +342,252 @@ private fun LoadingDot(index: Int, modifier: Modifier = Modifier) {
 private fun ClearButton(visible: Boolean, onClick: () -> Unit) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(tween(140)) + scaleIn(Motion.snappy(), initialScale = 0.85f),
+        enter = fadeIn(tween(140)) + scaleIn(tween(180, easing = Motion.EaseOut), initialScale = 0.85f),
         exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.85f),
     ) {
-        Box(
-            Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .pressable(onClick = onClick, pressedScale = 0.88f, onClickLabel = "Clear search")
-                .semantics { contentDescription = "Clear search" },
-            contentAlignment = Alignment.Center,
+        CircleIconButton(
+            icon = Icons.Outlined.Close,
+            contentDescription = "Clear search",
+            onClick = onClick,
+            tone = Hub.colors.well,
+            size = 44.dp,
+            iconSize = 18.dp,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shortcuts
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The pinned shortcuts: a raised card holding rows of icons in round wells with their names
+ * under them. "Edit" puts a remove mark on every tile; tapping a tile then removes it.
+ */
+@Composable
+private fun ShortcutsCard(
+    shortcuts: List<AppShortcut>?,
+    editing: Boolean,
+    onToggleEdit: () -> Unit,
+    onOpen: (AppShortcut) -> Unit,
+    onPinHome: (AppShortcut) -> Unit,
+    onRemove: (AppShortcut) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Hub.colors
+    Column(modifier.fillMaxWidth().hubCard(c.raised).padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 14.dp)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Outlined.Close, contentDescription = null, tint = Hub.colors.inkMuted, modifier = Modifier.size(20.dp))
+            Text("Shortcuts", style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
+            if (!shortcuts.isNullOrEmpty()) {
+                PillToggle(text = if (editing) "Done" else "Edit", on = editing, onClick = onToggleEdit)
+            }
         }
+        when {
+            shortcuts == null -> Spacer(Modifier.height(84.dp))
+            shortcuts.isEmpty() -> Text(
+                "Tap the pin next to any app below to keep it here, or add a link to a chat, a route or a playlist.",
+                style = HubType.small,
+                color = c.inkMuted,
+                modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 6.dp),
+            )
+            else -> Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                shortcuts.chunked(PER_ROW).forEach { row ->
+                    Row(Modifier.fillMaxWidth()) {
+                        row.forEach { s ->
+                            key(s.id) {
+                                ShortcutTile(
+                                    shortcut = s,
+                                    editing = editing,
+                                    onOpen = { onOpen(s) },
+                                    onPinHome = { onPinHome(s) },
+                                    onRemove = { onRemove(s) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                        repeat(PER_ROW - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A small pill that inverts while on ("Edit" / "Done"). */
+@Composable
+private fun PillToggle(text: String, on: Boolean, onClick: () -> Unit) {
+    val c = Hub.colors
+    val bg by animateColorAsState(if (on) c.ink else c.well, tween(180), label = "toggleBg")
+    val fg by animateColorAsState(if (on) c.raised else c.ink, tween(180), label = "toggleFg")
+    Box(
+        Modifier
+            .heightIn(min = 40.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .pressable(onClick = onClick, pressedScale = 0.94f, showRipple = false, onClickLabel = text)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = HubType.small.copy(fontWeight = FontWeight.Medium), color = fg)
+    }
+}
+
+/** One shortcut, styled like a quick action: the icon in a round well, its name under it. */
+@Composable
+private fun ShortcutTile(
+    shortcut: AppShortcut,
+    editing: Boolean,
+    onOpen: () -> Unit,
+    onPinHome: () -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier,
+) {
+    val c = Hub.colors
+    var menuOpen by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .pressable(
+                    onClick = if (editing) onRemove else onOpen,
+                    onLongClick = { menuOpen = true },
+                    pressedScale = 0.94f,
+                    onClickLabel = if (editing) "Remove ${shortcut.label}" else "Open ${shortcut.label}",
+                    showRipple = false,
+                )
+                .padding(vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(Modifier.size(58.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(54.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
+                    if (shortcut.kind == ShortcutKind.APP && shortcut.packageName != null) {
+                        AppIcon(shortcut.packageName, size = 34.dp)
+                    } else {
+                        Icon(Icons.Outlined.Link, contentDescription = null, tint = c.ink, modifier = Modifier.size(22.dp))
+                    }
+                }
+                // Edit mode: a remove mark at the well's corner. Qualified so the Column's
+                // scoped overload isn't picked up inside this Box.
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = editing,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    enter = fadeIn(tween(140)) + scaleIn(tween(180, easing = Motion.EaseOut), initialScale = 0.6f),
+                    exit = fadeOut(tween(120)) + scaleOut(tween(120), targetScale = 0.6f),
+                ) {
+                    Box(
+                        Modifier.offset(x = 2.dp, y = (-2).dp).size(22.dp).clip(CircleShape).background(c.ink),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Outlined.Close, contentDescription = null, tint = c.raised, modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                shortcut.label,
+                style = HubType.small.copy(fontWeight = FontWeight.Medium),
+                color = c.ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+            )
+        }
+        HubMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
+            HubMenuItem("Pin to home screen", Icons.Outlined.PushPin) { menuOpen = false; onPinHome() }
+            HubMenuItem("Remove from shortcuts", Icons.Outlined.Delete, color = c.danger) { menuOpen = false; onRemove() }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// All apps
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * One installed app as a row of the all-apps card: icon, name, and a round pin toggle that
+ * adds it to (or removes it from) the shortcuts. Long-press for app info.
+ */
+@Composable
+private fun AppRow(
+    app: AppEntry,
+    pinned: Boolean,
+    last: Boolean,
+    enter: Modifier,
+    onOpen: () -> Unit,
+    onTogglePin: () -> Unit,
+    onInfo: () -> Unit,
+) {
+    val c = Hub.colors
+    var menuOpen by remember { mutableStateOf(false) }
+    val pinTone by animateColorAsState(if (pinned) c.ink else c.well, tween(180), label = "pinTone")
+    val pinTint by animateColorAsState(if (pinned) c.raised else c.ink, tween(180), label = "pinTint")
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .then(if (last) Modifier.clip(CardBottom) else Modifier)
+            .background(c.raised)
+            .padding(start = 8.dp, end = 8.dp, bottom = if (last) 10.dp else 0.dp),
+    ) {
+        Row(
+            enter
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .pressable(
+                    onClick = onOpen,
+                    onLongClick = { menuOpen = true },
+                    pressedScale = 0.98f,
+                    onClickLabel = "Open ${app.label}",
+                )
+                .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AppIcon(app.packageName, size = 42.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(app.label, style = TitleStyle, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (pinned) Text("In shortcuts", style = MetaStyle, color = c.inkMuted, maxLines = 1)
+            }
+            Spacer(Modifier.width(8.dp))
+            CircleIconButton(
+                icon = if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                contentDescription = if (pinned) "Remove ${app.label} from shortcuts" else "Add ${app.label} to shortcuts",
+                onClick = onTogglePin,
+                tone = pinTone,
+                tint = pinTint,
+                size = 44.dp,
+                iconSize = 18.dp,
+            )
+        }
+        HubMenu(expanded = menuOpen, onDismiss = { menuOpen = false }) {
+            HubMenuItem(
+                if (pinned) "Remove from shortcuts" else "Add to shortcuts",
+                if (pinned) Icons.Outlined.Delete else Icons.Outlined.PushPin,
+            ) { menuOpen = false; onTogglePin() }
+            HubMenuItem("App info", Icons.Outlined.Info) { menuOpen = false; onInfo() }
+        }
+    }
+}
+
+/** A still row in the shape of an app row while the list loads. */
+@Composable
+private fun PlaceholderRow(last: Boolean) {
+    val c = Hub.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(if (last) Modifier.clip(CardBottom) else Modifier)
+            .background(c.raised)
+            .padding(start = 20.dp, end = 20.dp, top = 9.dp, bottom = if (last) 19.dp else 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(42.dp).clip(CircleShape).background(c.well))
+        Spacer(Modifier.width(12.dp))
+        Box(Modifier.height(12.dp).width(120.dp).clip(CircleShape).background(c.well))
     }
 }
 
@@ -516,12 +614,16 @@ private fun HubMenuItem(text: String, icon: ImageVector, color: Color = Hub.colo
     )
 }
 
+// ---------------------------------------------------------------------------------------------
+// Add link
+// ---------------------------------------------------------------------------------------------
+
 /** Add a deep link: pick a preset to start from, edit it, try it, save it. */
 @Composable
 private fun AddLinkSheet(onDismiss: () -> Unit, onSave: (name: String, uri: String) -> Unit) {
     val context = LocalContext.current
     val c = Hub.colors
-    val stagger = rememberStagger()
+    val stagger: Stagger = rememberStagger()
     var name by remember { mutableStateOf("") }
     var uri by remember { mutableStateOf("") }
     val valid = name.isNotBlank() && ':' in uri
@@ -590,10 +692,10 @@ private fun AddLinkSheet(onDismiss: () -> Unit, onSave: (name: String, uri: Stri
 private fun PresetPill(text: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val c = Hub.colors
     val bg by animateColorAsState(if (selected) c.ink else c.raised2, tween(180), label = "presetBg")
-    val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(180), label = "presetFg")
+    val fg by animateColorAsState(if (selected) c.raised else c.ink, tween(180), label = "presetFg")
     Text(
         text,
-        style = HubType.small,
+        style = HubType.small.copy(fontWeight = FontWeight.Medium),
         color = fg,
         modifier = modifier
             .pressable(onClick = onClick, pressedScale = 0.94f, showRipple = false)

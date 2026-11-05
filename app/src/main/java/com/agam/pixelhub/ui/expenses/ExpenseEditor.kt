@@ -5,11 +5,7 @@ package com.agam.pixelhub.ui.expenses
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -17,12 +13,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,11 +31,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Backspace
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Schedule
@@ -55,39 +53,34 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agam.pixelhub.data.Expense
 import com.agam.pixelhub.data.ExpenseCategory
 import com.agam.pixelhub.expenses.Money
+import com.agam.pixelhub.ui.CircleIconButton
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.HubSheet
 import com.agam.pixelhub.ui.HubTextField
@@ -112,14 +105,18 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.abs
+
+/** Titles of the Expenses sheets. */
+internal val SheetTitle = HubType.title.copy(fontSize = 22.sp, lineHeight = 28.sp)
 
 /**
- * Add or edit an expense in a sheet. The amount reads like a calculator display: huge
- * condensed numerals that roll as you type, shrinking to fit as they grow, with a caret in
- * the category's colour. A keystroke that can't be an amount shakes the display.
+ * Add or edit an expense in a sheet, by hand and fast: a big amount typed on the sheet's own
+ * keypad (no system keyboard), the category as a row of wells, an optional note, when it
+ * happened, and an ink Save. A keystroke that can't be an amount shakes the display.
  *
- * [initial] null, or with id 0, is a new expense (a draft from the Assistant or a past
- * month keeps its fields).
+ * [initial] null, or with id 0, is a new expense (a draft from the Assistant, a past month or
+ * "Repeat" keeps its fields).
  */
 @Composable
 fun ExpenseEditorSheet(
@@ -133,27 +130,27 @@ fun ExpenseEditorSheet(
     val reduced = LocalReducedMotion.current
     val haptics = LocalHapticFeedback.current
     val focusManager = LocalFocusManager.current
-    val keyboard = LocalSoftwareKeyboardController.current
+    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val stagger = rememberStagger()
     val zone = remember { ZoneId.systemDefault() }
     val isNew = initial == null || initial.id == 0L
 
-    var amount by remember {
-        val start = initial?.amountPaise?.takeIf { it > 0L }?.let { plainAmount(it) }.orEmpty()
-        mutableStateOf(TextFieldValue(start, TextRange(start.length)))
-    }
-    var category by remember { mutableStateOf(initial?.category ?: ExpenseCategory.FOOD) }
-    var note by remember { mutableStateOf(initial?.note.orEmpty()) }
+    var amount by rememberSaveable { mutableStateOf(initial?.amountPaise?.takeIf { it > 0L }?.let { plainAmount(it) }.orEmpty()) }
+    var category by rememberSaveable { mutableStateOf(initial?.category ?: ExpenseCategory.FOOD) }
+    var note by rememberSaveable { mutableStateOf(initial?.note.orEmpty()) }
     val initialAt = remember { initial?.spentAt?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDateTime() } }
-    var useNow by remember { mutableStateOf(initial == null) }
-    var date by remember { mutableStateOf(initialAt?.toLocalDate() ?: LocalDate.now()) }
-    var time by remember { mutableStateOf((initialAt?.toLocalTime() ?: LocalTime.now()).withSecond(0).withNano(0)) }
-    var showDate by remember { mutableStateOf(false) }
-    var showTime by remember { mutableStateOf(false) }
+    // A draft stamped within the last minute ("Repeat") counts as "now".
+    var useNow by rememberSaveable {
+        mutableStateOf(initial == null || (initial.id == 0L && abs(initial.spentAt - System.currentTimeMillis()) < 60_000L))
+    }
+    var date by rememberSaveable { mutableStateOf(initialAt?.toLocalDate() ?: LocalDate.now()) }
+    var time by rememberSaveable { mutableStateOf((initialAt?.toLocalTime() ?: LocalTime.now()).withSecond(0).withNano(0)) }
+    var showDate by rememberSaveable { mutableStateOf(false) }
+    var showTime by rememberSaveable { mutableStateOf(false) }
     val today = remember { LocalDate.now() }
 
-    val paise = Money.parse(amount.text)
+    val paise = Money.parse(amount)
     val valid = paise != null && paise > 0L
 
     // Rejected keystrokes: a small spring shake and a brief danger tint.
@@ -164,82 +161,86 @@ fun ExpenseEditorSheet(
         scope.launch {
             flash = true
             if (reduced) {
-                delay(260)
+                delay(240)
             } else {
                 shake.snapTo(0f)
-                shake.animateTo(0f, spring(dampingRatio = 0.22f, stiffness = 1500f), initialVelocity = 520f)
+                shake.animateTo(0f, spring(dampingRatio = 0.3f, stiffness = 2200f), initialVelocity = 480f)
             }
             flash = false
         }
     }
+    fun type(ch: Char) {
+        val next = sanitizeAmount(amount + ch)
+        if (next == null) reject() else amount = next
+    }
 
-    val amountFocus = remember { FocusRequester() }
-    var focused by remember { mutableStateOf(false) }
+    // Start the category row on the chosen category when it's off to the right.
+    val catScroll = rememberScrollState()
     LaunchedEffect(Unit) {
-        if (isNew && amount.text.isEmpty()) {
-            delay(380)
-            runCatching { amountFocus.requestFocus() }
-            keyboard?.show()
-        }
+        val i = category.ordinal
+        if (i > 3) catScroll.scrollTo(with(density) { ((i - 1) * 76).dp.roundToPx() })
     }
 
     HubSheet(onDismiss = onDismiss) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Text(
-                if (isNew) "New expense" else "Edit expense",
-                style = HubType.section,
-                color = c.ink,
-                modifier = Modifier.staggerIn(stagger, "title", 0),
-            )
-            Spacer(Modifier.height(12.dp))
-
-            // The display. The real text field sits invisibly underneath to own the keyboard.
-            BasicTextField(
-                value = amount,
-                onValueChange = { v ->
-                    val cleaned = sanitizeAmount(v.text)
-                    if (cleaned == null) reject() else amount = TextFieldValue(cleaned, TextRange(cleaned.length))
-                },
-                textStyle = TextStyle(color = Color.Transparent, fontSize = 1.sp),
-                cursorBrush = SolidColor(Color.Transparent),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(amountFocus)
-                    .onFocusChanged { focused = it.isFocused }
-                    .semantics { contentDescription = "Amount in rupees" }
-                    .staggerIn(stagger, "amount", 1),
-                decorationBox = { inner ->
-                    Box(Modifier.fillMaxWidth().heightIn(min = 120.dp), contentAlignment = Alignment.Center) {
-                        Box(Modifier.matchParentSize().alpha(0f)) { inner() }
-                        AmountDisplay(
-                            text = amount.text,
-                            accent = category.color(c),
-                            focused = focused,
-                            flash = flash,
-                            modifier = Modifier.graphicsLayer { translationX = shake.value * density },
-                        )
-                    }
-                },
-            )
-
-            Text(
-                "Category",
-                style = HubType.bodyStrong,
-                color = c.ink,
-                modifier = Modifier.padding(top = 20.dp, bottom = 12.dp).staggerIn(stagger, "catTitle", 2),
-            )
-            FlowRow(
-                Modifier.fillMaxWidth().staggerIn(stagger, "cats", 3),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ExpenseCategory.entries.forEach { cat ->
-                    CategoryPill(cat, selected = cat == category, onClick = { category = cat })
+            Row(Modifier.fillMaxWidth().staggerIn(stagger, "title", 0), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (isNew) "New expense" else "Edit expense",
+                    style = SheetTitle,
+                    color = c.ink,
+                    modifier = Modifier.weight(1f),
+                )
+                if (onDelete != null && !isNew) {
+                    CircleIconButton(
+                        icon = Icons.Outlined.Delete,
+                        contentDescription = "Delete expense",
+                        onClick = onDelete,
+                        tone = c.dangerSoft,
+                        tint = c.danger,
+                        size = 44.dp,
+                        iconSize = 20.dp,
+                    )
                 }
             }
+
+            // The display.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 92.dp)
+                    .staggerIn(stagger, "amount", 1)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = if (amount.isEmpty()) "Amount, empty" else "Amount ₹${groupedAmount(amount)}"
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                AmountDisplay(
+                    text = amount,
+                    accent = category.color(c),
+                    flash = flash,
+                    modifier = Modifier.graphicsLayer { translationX = shake.value * density.density },
+                )
+            }
+
+            // Category, as a row of wells.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(catScroll)
+                    .staggerIn(stagger, "cats", 2),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ExpenseCategory.entries.forEach { cat ->
+                    CategoryChip(cat, selected = cat == category, onClick = { category = cat })
+                }
+            }
+
+            Keypad(
+                onType = { type(it) },
+                onBack = { if (amount.isNotEmpty()) amount = amount.dropLast(1) else reject() },
+                onClear = { amount = "" },
+                modifier = Modifier.padding(top = 14.dp).staggerIn(stagger, "keys", 3),
+            )
 
             HubTextField(
                 value = note,
@@ -248,17 +249,11 @@ fun ExpenseEditorSheet(
                 placeholder = "Lunch, cab home, phone bill",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                modifier = Modifier.padding(top = 24.dp).staggerIn(stagger, "note", 4),
+                modifier = Modifier.padding(top = 18.dp).staggerIn(stagger, "note", 4),
             )
 
-            Text(
-                "When",
-                style = HubType.bodyStrong,
-                color = c.ink,
-                modifier = Modifier.padding(top = 24.dp, bottom = 12.dp).staggerIn(stagger, "whenTitle", 5),
-            )
             FlowRow(
-                Modifier.fillMaxWidth().staggerIn(stagger, "when", 6),
+                Modifier.fillMaxWidth().padding(top = 14.dp).staggerIn(stagger, "when", 5),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -282,8 +277,8 @@ fun ExpenseEditorSheet(
                 )
                 AnimatedVisibility(
                     visible = !useNow,
-                    enter = fadeIn(tween(180)) + scaleIn(if (reduced) tween(0) else Motion.bouncy(), initialScale = 0.8f),
-                    exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.85f),
+                    enter = fadeIn(tween(160)) + scaleIn(if (reduced) tween(0) else Motion.snappy(), initialScale = 0.85f),
+                    exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.9f),
                 ) {
                     ValuePill(
                         text = Fmt.time(context, time),
@@ -294,46 +289,32 @@ fun ExpenseEditorSheet(
                 }
             }
 
-            Column(Modifier.padding(top = 32.dp).staggerIn(stagger, "actions", 7)) {
-                PrimaryButton(
-                    text = "Save expense",
-                    enabled = valid,
-                    container = c.ink,
-                    content = c.ground,
-                    onClick = {
-                        val p = Money.parse(amount.text)
-                        if (p == null || p <= 0L) {
-                            reject()
-                            return@PrimaryButton
-                        }
-                        val at = if (useNow) {
-                            System.currentTimeMillis()
-                        } else {
-                            LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli()
-                        }
-                        onSave(
-                            Expense(
-                                id = initial?.id ?: 0L,
-                                amountPaise = p,
-                                category = category,
-                                note = note.trim(),
-                                spentAt = at,
-                            ),
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (onDelete != null && !isNew) {
-                    Spacer(Modifier.height(10.dp))
-                    QuietButton(
-                        text = "Delete",
-                        onClick = onDelete,
-                        color = c.danger,
-                        icon = Icons.Outlined.Delete,
-                        modifier = Modifier.fillMaxWidth(),
+            PrimaryButton(
+                text = if (isNew) "Save expense" else "Save changes",
+                enabled = valid,
+                onClick = {
+                    val p = Money.parse(amount)
+                    if (p == null || p <= 0L) {
+                        reject()
+                        return@PrimaryButton
+                    }
+                    val at = if (useNow) {
+                        System.currentTimeMillis()
+                    } else {
+                        LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli()
+                    }
+                    onSave(
+                        Expense(
+                            id = initial?.id ?: 0L,
+                            amountPaise = p,
+                            category = category,
+                            note = note.trim(),
+                            spentAt = at,
+                        ),
                     )
-                }
-            }
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 24.dp).staggerIn(stagger, "save", 6),
+            )
         }
     }
 
@@ -374,7 +355,9 @@ fun ExpenseEditorSheet(
             initial = time,
             onDismiss = { showTime = false },
             onConfirm = {
-                time = it
+                // An expense can't be later than now; a later time today is clamped to the current minute.
+                val nowTime = LocalTime.now().withSecond(0).withNano(0)
+                time = if (date == LocalDate.now() && it.isAfter(nowTime)) nowTime else it
                 useNow = false
                 showTime = false
             },
@@ -384,14 +367,13 @@ fun ExpenseEditorSheet(
 }
 
 /**
- * ₹ in the category colour, then the figures rolling digit by digit, then a softly blinking
- * caret. The numerals shrink on a spring as the amount grows so it always fits on one line.
+ * ₹ in the category colour, then the figures rolling digit by digit. The numerals shrink on
+ * a spring as the amount grows so it always fits on one line.
  */
 @Composable
 private fun AmountDisplay(
     text: String,
     accent: Color,
-    focused: Boolean,
     flash: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -401,9 +383,9 @@ private fun AmountDisplay(
     val shown = if (empty) "0" else groupedAmount(text)
     val size by animateFloatAsState(
         when {
-            shown.length <= 6 -> 96f
-            shown.length <= 9 -> 72f
-            else -> 56f
+            shown.length <= 6 -> 64f
+            shown.length <= 9 -> 52f
+            else -> 42f
         },
         if (reduced) tween(0) else Motion.snappy(),
         label = "amountSize",
@@ -411,76 +393,117 @@ private fun AmountDisplay(
     val digits by animateColorAsState(
         when {
             flash -> c.danger
-            empty -> c.inkMuted.copy(alpha = 0.55f)
+            empty -> c.inkMuted
             else -> c.ink
         },
-        tween(if (flash) 60 else 260),
+        tween(if (flash) 60 else 220),
         label = "amountColor",
     )
-    val rupee by animateColorAsState(if (flash) c.danger else accent, tween(240), label = "rupeeColor")
-    val style = HubType.clockHuge.copy(fontSize = size.sp, lineHeight = size.sp)
+    val rupee by animateColorAsState(if (flash) c.danger else accent, tween(200), label = "rupeeColor")
+    val style = HubType.clockLarge.copy(fontSize = size.sp, lineHeight = (size * 1.15f).sp)
 
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(
             "₹",
-            style = HubType.clockMedium.copy(fontSize = (size * 0.5f).sp, lineHeight = (size * 0.5f).sp),
+            style = HubType.clockMedium.copy(fontSize = (size * 0.55f).sp, lineHeight = (size * 0.6f).sp),
             color = rupee,
             modifier = Modifier.padding(end = 6.dp),
         )
         RollingText(shown, style = style, color = digits)
-        val blink = if (focused && !reduced) {
-            rememberInfiniteTransition(label = "caret").animateFloat(
-                1f, 0.1f, infiniteRepeatable(tween(520, easing = Motion.EaseInOut), RepeatMode.Reverse), label = "blink",
-            ).value
-        } else 1f
-        AnimatedVisibility(
-            visible = focused,
-            enter = fadeIn(tween(160)),
-            exit = fadeOut(tween(120)),
-        ) {
-            Box(
-                Modifier
-                    .padding(start = 6.dp)
-                    .width(3.dp)
-                    .height((size * 0.62f).dp)
-                    .graphicsLayer { alpha = blink }
-                    .clip(CircleShape)
-                    .background(accent),
+    }
+}
+
+/** A category: its well with the short name under it. Choosing it fills the well and it pops. */
+@Composable
+private fun CategoryChip(category: ExpenseCategory, selected: Boolean, onClick: () -> Unit) {
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    val pop = remember { Animatable(1f) }
+    LaunchedEffect(selected) {
+        if (selected && !reduced) {
+            pop.animateTo(1.08f, spring(dampingRatio = 1f, stiffness = 1600f))
+            pop.animateTo(1f, Motion.snappy())
+        }
+    }
+    val label by animateColorAsState(if (selected) c.ink else c.inkMuted, tween(180), label = "chipLabel")
+    Column(
+        Modifier
+            .width(72.dp)
+            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
+            .pressable(onClick = onClick, pressedScale = 0.92f, role = Role.RadioButton, showRipple = false, onClickLabel = category.label)
+            .semantics { this.selected = selected }
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CategoryWell(category, size = 52.dp, selected = selected)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            category.shortLabel,
+            style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal),
+            color = label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** Digits in round wells, 1–9, then point, 0 and delete. Holding delete clears the amount. */
+@Composable
+private fun Keypad(onType: (Char) -> Unit, onBack: () -> Unit, onClear: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("123", "456", "789").forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { ch -> Key(ch.toString(), description = ch.toString(), onClick = { onType(ch) }) }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Key(".", description = "Decimal point", onClick = { onType('.') })
+            Key("0", description = "0", onClick = { onType('0') })
+            Key(
+                null,
+                icon = Icons.AutoMirrored.Outlined.Backspace,
+                description = "Delete last digit, hold to clear",
+                onClick = onBack,
+                onLongClick = onClear,
             )
         }
     }
 }
 
-/** A category choice. Selecting fills it with the category colour and it pops. */
 @Composable
-private fun CategoryPill(category: ExpenseCategory, selected: Boolean, onClick: () -> Unit) {
+private fun RowScope.Key(
+    text: String?,
+    description: String,
+    onClick: () -> Unit,
+    icon: ImageVector? = null,
+    onLongClick: (() -> Unit)? = null,
+) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val col = category.color(c)
-    val bg by animateColorAsState(if (selected) col else c.raised2, tween(200), label = "pillBg")
-    val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(200), label = "pillFg")
-    val tint by animateColorAsState(if (selected) c.ground else col, tween(200), label = "pillTint")
-    val pop = remember { Animatable(1f) }
-    LaunchedEffect(selected) {
-        if (selected && !reduced) {
-            pop.animateTo(1.09f, spring(dampingRatio = 1f, stiffness = 1600f))
-            pop.animateTo(1f, Motion.bouncy())
-        }
-    }
-    Row(
+    val haptics = LocalHapticFeedback.current
+    Box(
         Modifier
-            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
-            .pressable(onClick = onClick, pressedScale = 0.93f, role = Role.RadioButton, showRipple = false)
-            .semantics { this.selected = selected }
-            .heightIn(min = 44.dp)
+            .weight(1f)
+            .height(52.dp)
+            .pressable(
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    onClick()
+                },
+                onLongClick = onLongClick,
+                pressedScale = 0.92f,
+                showRipple = false,
+                onClickLabel = description,
+            )
             .clip(CircleShape)
-            .background(bg)
-            .padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .background(c.well)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(category.icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(category.label, style = HubType.button, color = fg)
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = c.ink, modifier = Modifier.size(22.dp))
+        } else if (text != null) {
+            Text(text, style = HubType.clockSmall.copy(fontSize = 22.sp, lineHeight = 28.sp), color = c.ink)
+        }
     }
 }
 
@@ -489,13 +512,13 @@ private fun CategoryPill(category: ExpenseCategory, selected: Boolean, onClick: 
 private fun WhenPill(text: String, selected: Boolean, onClick: () -> Unit, icon: ImageVector? = null) {
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
-    val bg by animateColorAsState(if (selected) c.ink else c.raised2, tween(200), label = "whenBg")
-    val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(200), label = "whenFg")
+    val bg by animateColorAsState(if (selected) c.ink else c.raised2, tween(180), label = "whenBg")
+    val fg by animateColorAsState(if (selected) c.ground else c.ink, tween(180), label = "whenFg")
     val pop = remember { Animatable(1f) }
     LaunchedEffect(selected) {
         if (selected && !reduced) {
-            pop.animateTo(1.07f, spring(dampingRatio = 1f, stiffness = 1600f))
-            pop.animateTo(1f, Motion.bouncy())
+            pop.animateTo(1.06f, spring(dampingRatio = 1f, stiffness = 1600f))
+            pop.animateTo(1f, Motion.snappy())
         }
     }
     Row(
@@ -517,7 +540,7 @@ private fun WhenPill(text: String, selected: Boolean, onClick: () -> Unit, icon:
     }
 }
 
-/** A value you can change: the time, in clock numerals on the raised tone. */
+/** A value you can change: the time, on raised2. */
 @Composable
 private fun ValuePill(text: String, icon: ImageVector, description: String, onClick: () -> Unit) {
     val c = Hub.colors
@@ -563,7 +586,7 @@ private fun inkDatePickerColors(): DatePickerColors {
 }
 
 /**
- * Keeps an amount typed into the display well formed: digits and one point, at most two
+ * Keeps an amount typed on the keypad well formed: digits and one point, at most two
  * decimals and eight rupee digits, no leading zeros. Null means the keystroke is refused.
  */
 private fun sanitizeAmount(raw: String): String? {

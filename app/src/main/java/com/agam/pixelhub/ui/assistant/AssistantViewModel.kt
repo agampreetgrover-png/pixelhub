@@ -115,8 +115,8 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     /** Runs the action exactly as the AI proposed it. */
     fun confirm(id: Long) {
         val item = find(id) ?: return
-        viewModelScope.launch {
-            val outcome = when (val cmd = item.command) {
+        runOnce(id) {
+            when (val cmd = item.command) {
                 is ParsedCommand.CreateReminder -> createReminder(cmd.title, cmd.notes, cmd.at, cmd.recurrence)
                 is ParsedCommand.CreateAlarm -> createAlarm(
                     Alarm(hour = cmd.hour, minute = cmd.minute, daysMask = cmd.daysMask, label = cmd.label),
@@ -140,21 +140,40 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 else -> Outcome(false, "Nothing to do")
             }
-            finish(id, outcome)
+        }
+    }
+
+    // Actions being saved right now. A second tap on Confirm (or Cancel) during the save is ignored,
+    // so a double tap can't create two reminders.
+    private val inFlight = mutableSetOf<Long>()
+
+    private fun runOnce(id: Long, work: suspend () -> Outcome) {
+        val item = find(id) ?: return
+        if (item.status != ChatItem.Status.PENDING || !inFlight.add(id)) return
+        viewModelScope.launch {
+            try {
+                finish(id, work())
+            } finally {
+                inFlight.remove(id)
+            }
         }
     }
 
     /** Saves a reminder the user adjusted in the editor. */
     fun saveReminder(id: Long, draft: ReminderDraft) {
-        viewModelScope.launch { finish(id, createReminder(draft.title, draft.notes, draft.at, draft.recurrence)) }
+        runOnce(id) { createReminder(draft.title, draft.notes, draft.at, draft.recurrence) }
     }
 
     /** Saves an alarm the user adjusted in the editor. */
     fun saveAlarm(id: Long, alarm: Alarm) {
-        viewModelScope.launch { finish(id, createAlarm(alarm)) }
+        runOnce(id) { createAlarm(alarm) }
     }
 
-    fun cancel(id: Long) = updateAction(id) { it.copy(status = ChatItem.Status.CANCELLED, note = "") }
+    fun cancel(id: Long) {
+        if (id in inFlight) return
+        updateAction(id) { it.copy(status = ChatItem.Status.CANCELLED, note = "") }
+    }
+
 
     private data class Outcome(val ok: Boolean, val message: String)
 

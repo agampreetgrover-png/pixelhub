@@ -5,6 +5,7 @@ import com.agam.pixelhub.data.SettingsStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import java.io.InterruptedIOException
 
 /** A model reply plus who produced it. */
 data class AiReply(
@@ -60,17 +61,48 @@ class AssistantAi(
     suspend fun listGrokModels(apiKey: String): List<String> = grok().listModels(apiKey)
 
     private suspend fun call(p: AiProvider, systemPrompt: String, userText: String): String = when (p) {
-        AiProvider.GEMINI -> gemini().generateJson(
-            settings.apiKey.first(), settings.model.first(), systemPrompt, userText, CommandParser.responseSchema,
-        )
+        AiProvider.GEMINI -> callGemini(systemPrompt, userText)
         AiProvider.GROK -> grok().generateJson(
             settings.grokApiKey.first(), settings.grokModel.first(), systemPrompt, userText, CommandParser.jsonSchema,
         )
     }
 
+    /**
+     * Gemini's Flash models often answer 503 "high demand" for minutes at a time, sometimes only
+     * after a long wait. Give the chosen model [PRIMARY_TIMEOUT_S], then try the lighter Flash-Lite
+     * model, which runs on separate capacity, before [generateCommand] switches to Groq.
+     * Throws the first limit error if every attempt fails.
+     */
+    private suspend fun callGemini(systemPrompt: String, userText: String): String {
+        val key = settings.apiKey.first()
+        var firstError: Exception? = null
+        for ((i, model) in geminiAttempts(settings.model.first()).withIndex()) {
+            val timeout = if (i == 0) PRIMARY_TIMEOUT_S else BACKUP_TIMEOUT_S
+            try {
+                return gemini().generateJson(key, model, systemPrompt, userText, CommandParser.responseSchema, timeout)
+            } catch (e: Exception) {
+                // A non-limit error on the user's own model (bad key, bad model name) is final.
+                if (i == 0 && !isLimitError(e)) throw e
+                if (firstError == null) firstError = e
+            }
+        }
+        throw firstError ?: IllegalStateException("Gemini did not answer")
+    }
+
     companion object {
         /** HTTP statuses that mean "try the other provider": rate/quota limit and temporary overload. */
         val FALLBACK_CODES = setOf(429, 503)
+
+        /** Alias for the newest Flash-Lite model, used when the chosen Gemini model is overloaded. */
+        const val GEMINI_BACKUP_MODEL = "gemini-flash-lite-latest"
+        private const val PRIMARY_TIMEOUT_S = 20L
+        private const val BACKUP_TIMEOUT_S = 30L
+
+        /** Models to try in order: the chosen one, then Flash-Lite. */
+        fun geminiAttempts(model: String): List<String> {
+            val chosen = model.trim().ifBlank { SettingsStore.DEFAULT_MODEL }
+            return listOf(chosen, GEMINI_BACKUP_MODEL).distinct()
+        }
 
         fun isLimitError(e: Throwable): Boolean {
             val code = when (e) {
@@ -79,6 +111,8 @@ class AssistantAi(
                 else -> null
             }
             if (code in FALLBACK_CODES) return true
+            // A call that timed out is treated like an overloaded one (no network at all is not).
+            if (e is InterruptedIOException) return true
             val msg = e.message.orEmpty()
             return listOf("RESOURCE_EXHAUSTED", "quota", "rate limit").any { msg.contains(it, ignoreCase = true) }
         }

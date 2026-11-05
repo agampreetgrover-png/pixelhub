@@ -1,9 +1,11 @@
 package com.agam.pixelhub.ai
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
+import java.net.SocketTimeoutException
 
 class AssistantAiTest {
     @Test fun geminiRateLimitFallsBack() =
@@ -26,4 +28,36 @@ class AssistantAiTest {
 
     @Test fun offlineDoesNotFallBack() =
         assertFalse(AssistantAi.isLimitError(IOException("Unable to resolve host")))
+
+    @Test fun timeoutFallsBack() =
+        assertTrue(AssistantAi.isLimitError(SocketTimeoutException("timeout")))
+
+    @Test fun overloadedGeminiTriesFlashLite() = assertEquals(
+        listOf("gemini-flash-latest", "gemini-flash-lite-latest"),
+        AssistantAi.geminiAttempts("gemini-flash-latest"),
+    )
+
+    @Test fun flashLiteIsNotTriedTwiceWhenAlreadyChosen() = assertEquals(
+        listOf("gemini-flash-lite-latest"),
+        AssistantAi.geminiAttempts(" gemini-flash-lite-latest "),
+    )
+
+    @Test fun groqKeyGoesToGroq() = assertEquals(ChatService.GROQ, ChatService.forKey(" gsk_abc"))
+
+    @Test fun xaiKeyGoesToXai() = assertEquals(ChatService.XAI, ChatService.forKey("xai-abc"))
+
+    @Test fun grokModelWithGroqKeyUsesGroqDefault() =
+        assertEquals("openai/gpt-oss-120b", ChatService.resolveModel("gsk_abc", "grok-4.7"))
+
+    @Test fun groqModelIsKept() =
+        assertEquals("qwen/qwen3.8-27b", ChatService.resolveModel("gsk_abc", " qwen/qwen3.8-27b "))
+
+    @Test fun speechModelsAreHiddenFromPicker() {
+        assertFalse(ChatService.isChatModel("whisper-large-v3"))
+        assertFalse(ChatService.isChatModel("meta-llama/llama-prompt-guard-2-22m"))
+        assertTrue(ChatService.isChatModel("openai/gpt-oss-20b"))
+    }
+
+    @Test fun blankModelUsesDefault() =
+        assertEquals("gemini-flash-latest", AssistantAi.geminiAttempts("").first())
 }

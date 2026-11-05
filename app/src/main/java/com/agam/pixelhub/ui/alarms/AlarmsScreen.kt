@@ -4,15 +4,14 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,45 +19,63 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Snooze
+import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Alarm
 import com.agam.pixelhub.data.AlarmRepository
 import com.agam.pixelhub.scheduling.Days
-import com.agam.pixelhub.ui.EmptyState
+import com.agam.pixelhub.ui.CardRadius
+import com.agam.pixelhub.ui.CircleIconButton
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.Gutter
-import com.agam.pixelhub.ui.HubFab
 import com.agam.pixelhub.ui.HubSwitch
+import com.agam.pixelhub.ui.QuickAction
 import com.agam.pixelhub.ui.ScreenScaffold
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.RollingText
@@ -66,10 +83,39 @@ import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.motion.rememberStagger
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.theme.Hub
+import com.agam.pixelhub.ui.theme.HubColors
 import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
+
+/**
+ * The violet card's fill. A touch deeper in dark mode, where white text on the bright violet
+ * falls short of 4.5:1; here even the small lines clear it in both themes.
+ */
+internal val HubColors.dawnCard: Color
+    get() = if (isDark) lerp(dawn, Color.Black, 0.16f) else dawn
+
+/** Secondary text on the violet card. Still 4.5:1 against [dawnCard]. */
+internal val HubColors.onDawnSoft: Color
+    get() = onDawn.copy(alpha = 0.92f)
+
+private val Peek = 54.dp
+private val HeroHeight = 204.dp
+private val NotchWidth = 158.dp
+private val NotchHeight = 64.dp
+private val NotchGap = 6.dp
+
+/** One-tap alarms that ring once, a set number of minutes from now. */
+private val QUICK: List<Pair<Int, ImageVector>> = listOf(
+    10 to Icons.Outlined.Timer,
+    20 to Icons.Outlined.Snooze,
+    30 to Icons.Outlined.Bedtime,
+    60 to Icons.Outlined.Schedule,
+)
+
+/** Label given to quick alarms; the same alarm is reused so they don't pile up. */
+private const val QUICK_LABEL = "Quick alarm"
 
 @Composable
 fun AlarmsScreen() {
@@ -78,21 +124,23 @@ fun AlarmsScreen() {
     // Null until the database answers, so the empty state never flashes on open.
     val loaded by c.alarms.all.collectAsStateWithLifecycle<List<Alarm>?>(initialValue = null)
     val alarms = loaded
-    var creating by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Alarm?>(null) }
+    val list = alarms.orEmpty()
+    var creating by rememberSaveable { mutableStateOf(false) }
+    var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
     val stagger = rememberStagger()
-    // Rows whose strip dot has already swept into place; scrolling back doesn't replay it.
-    val swept = remember { mutableSetOf<Long>() }
 
-    // Ticks on the :00 and :30 of every minute so the countdown turns over on time.
+    // Ticks on the :00 and :30 of every minute so the countdowns turn over on time.
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
             delay(30_000L - System.currentTimeMillis() % 30_000L + 50L)
             value = System.currentTimeMillis()
         }
     }
-    val next: Long? = remember(alarms, now) {
-        alarms?.filter { it.enabled }?.minOfOrNull { AlarmRepository.nextTrigger(it).toInstant().toEpochMilli() }
+    // Switched-on alarms in the order they will ring.
+    val upcoming: List<Pair<Alarm, Long>> = remember(list, now) {
+        list.filter { it.enabled }
+            .map { it to AlarmRepository.nextTrigger(it).toInstant().toEpochMilli() }
+            .sortedBy { it.second }
     }
 
     fun save(alarm: Alarm) {
@@ -105,40 +153,72 @@ fun AlarmsScreen() {
         }
     }
 
+    fun quickAlarm(minutes: Int) {
+        // Rounded to the nearest minute.
+        val t = LocalTime.now().plusSeconds(minutes * 60L + 30L)
+        // Reuse a spent quick alarm, but never replace one that is still set to ring.
+        val reuse = list.firstOrNull { it.label == QUICK_LABEL && (it.daysMask and Days.ALL) == 0 && !it.enabled }
+        val base = reuse ?: Alarm(hour = t.hour, minute = t.minute, label = QUICK_LABEL)
+        save(base.copy(hour = t.hour, minute = t.minute, enabled = true))
+    }
+
     ScreenScaffold(
         title = "Alarms",
-        floatingActionButton = {
-            HubFab(icon = Icons.Outlined.Add, contentDescription = "New alarm", onClick = { creating = true })
+        actions = {
+            CircleIconButton(icon = Icons.Outlined.Add, contentDescription = "New alarm", onClick = { creating = true })
         },
     ) { padding ->
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 128.dp),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
         ) {
-            item(key = "next") {
-                NextAlarmHeader(
-                    state = HeaderState(loaded = alarms != null, any = !alarms.isNullOrEmpty(), next = next, now = now),
-                    modifier = Modifier.animateItem().staggerIn(stagger, "next", 0),
+            item(key = "hero") {
+                NextAlarmHero(
+                    state = HeroState(
+                        loaded = alarms != null,
+                        any = list.isNotEmpty(),
+                        next = upcoming.firstOrNull(),
+                        now = now,
+                    ),
+                    then = upcoming.getOrNull(1),
+                    onOpen = { editingId = it.id },
+                    onNew = { creating = true },
+                    modifier = Modifier
+                        .animateItem()
+                        .staggerIn(stagger, "hero", 0)
+                        .padding(horizontal = Gutter),
                 )
             }
-            if (alarms != null && alarms.isEmpty()) {
-                item(key = "empty") {
-                    EmptyState(
-                        title = "No alarms yet",
-                        body = "Tap + to set one, or ask the assistant to wake you up.",
-                        accent = Hub.colors.dawn,
-                        modifier = Modifier.animateItem().staggerIn(stagger, "empty", 1),
+            item(key = "quick") {
+                QuickAlarms(
+                    onPick = { quickAlarm(it) },
+                    modifier = Modifier
+                        .animateItem()
+                        .staggerIn(stagger, "quick", 1)
+                        .padding(horizontal = Gutter)
+                        .padding(top = 12.dp),
+                )
+            }
+            if (list.isNotEmpty()) {
+                item(key = "head") {
+                    ListHead(
+                        total = list.size,
+                        on = list.count { it.enabled },
+                        modifier = Modifier
+                            .animateItem()
+                            .staggerIn(stagger, "head", 2)
+                            .padding(top = 12.dp),
                     )
                 }
             }
-            itemsIndexed(alarms.orEmpty(), key = { _, a -> a.id }) { i, a ->
+            itemsIndexed(list, key = { _, a -> a.id }) { i, a ->
                 AlarmRow(
                     alarm = a,
-                    sweep = a.id !in swept,
-                    onSwept = { swept += a.id },
+                    last = i == list.lastIndex,
+                    now = now,
                     onToggle = { on -> save(a.copy(enabled = on)) },
-                    onClick = { editing = a },
-                    modifier = Modifier.animateItem().staggerIn(stagger, a.id, i + 1),
+                    onClick = { editingId = a.id },
+                    modifier = Modifier.animateItem().staggerIn(stagger, a.id, i + 3),
                 )
             }
         }
@@ -153,15 +233,15 @@ fun AlarmsScreen() {
             onDelete = null,
         )
     }
-    editing?.let { a ->
+    list.firstOrNull { it.id == editingId }?.let { a ->
         key(a.id) {
             AlarmEditorDialog(
                 initial = a,
                 isNew = false,
-                onDismiss = { editing = null },
-                onSave = { editing = null; save(it) },
+                onDismiss = { editingId = null },
+                onSave = { editingId = null; save(it) },
                 onDelete = {
-                    editing = null
+                    editingId = null
                     c.appScope.launch { c.alarms.delete(a) }
                 },
             )
@@ -169,194 +249,382 @@ fun AlarmsScreen() {
     }
 }
 
-private data class HeaderState(val loaded: Boolean, val any: Boolean, val next: Long?, val now: Long)
+private data class HeroState(val loaded: Boolean, val any: Boolean, val next: Pair<Alarm, Long>?, val now: Long)
 
-/** What the header is showing: nothing yet, "No alarms on", or the countdown. */
-private val HeaderState.kind: Int
+/** 0 = still loading, 1 = no alarms at all, 2 = alarms but all off, 3 = one is coming up. */
+private val HeroState.kind: Int
     get() = when {
-        !loaded || !any -> 0
-        next == null -> 1
-        else -> 2
+        !loaded -> 0
+        !any -> 1
+        next == null -> 2
+        else -> 3
     }
 
 /**
- * "Next alarm in 4h 12m" with the countdown rolling like an odometer as minutes pass, and
- * the day and time it rings on the line below. Cross-fades when alarms switch on or off.
+ * The hero, as on the reference wallet: the next alarm on a violet card with the time large,
+ * and the one after it peeking out behind. Tap the card to edit that alarm, tap the strip
+ * behind to edit the following one. The card's bottom-right corner is cut away to seat the
+ * New alarm button.
  */
 @Composable
-private fun NextAlarmHeader(state: HeaderState, modifier: Modifier = Modifier) {
+private fun NextAlarmHero(
+    state: HeroState,
+    then: Pair<Alarm, Long>?,
+    onOpen: (Alarm) -> Unit,
+    onNew: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    val notch = remember { NotchShape(CardRadius, 18.dp, NotchWidth, NotchHeight) }
+    val peek by animateDpAsState(
+        if (then != null) Peek else 0.dp,
+        if (reduced) snap<Dp>() else Motion.snappy<Dp>(),
+        label = "peek",
+    )
+    val next = state.next
+
+    Box(modifier.fillMaxWidth().height(peek + HeroHeight)) {
+        if (then != null) {
+            ThenStrip(
+                alarm = then.first,
+                at = then.second,
+                now = state.now,
+                onClick = { onOpen(then.first) },
+            )
+        }
+        Box(
+            Modifier
+                .offset(y = peek)
+                .fillMaxWidth()
+                .height(HeroHeight)
+                .pressable(
+                    onClick = { next?.let { onOpen(it.first) } },
+                    enabled = next != null,
+                    pressedScale = 0.985f,
+                    showRipple = false,
+                    onClickLabel = "Edit next alarm",
+                )
+                .clip(notch)
+                .background(c.dawnCard),
+        ) {
+            HeroBody(state)
+        }
+        // The card's own action, seated in its notch.
+        Row(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .width(NotchWidth - NotchGap)
+                .height(NotchHeight - NotchGap)
+                .pressable(onClick = onNew, pressedScale = 0.95f, onClickLabel = "New alarm")
+                .clip(CircleShape)
+                .background(c.chrome)
+                .padding(start = 8.dp, end = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(c.onChrome), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Add, contentDescription = null, tint = c.chrome, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Text("New alarm", style = HubType.button, color = c.onChrome, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun HeroBody(state: HeroState) {
     val c = Hub.colors
     val context = LocalContext.current
     val reduced = LocalReducedMotion.current
-    AnimatedContent(
-        targetState = state,
-        contentKey = { it.kind },
-        transitionSpec = {
-            if (reduced) {
-                fadeIn(tween(200)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false)
-            } else {
-                (fadeIn(tween(260, delayMillis = 60)) + slideInVertically(tween(320, easing = Motion.EaseOut)) { it / 3 }) togetherWith
-                    (fadeOut(tween(140)) + slideOutVertically(tween(200)) { -it / 4 }) using
-                    SizeTransform(clip = false)
+    val on = c.onDawn
+    val soft = c.onDawnSoft
+    val meta = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp)
+    Column(Modifier.padding(horizontal = 20.dp)) {
+        Row(Modifier.fillMaxWidth().height(Peek), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Alarm, contentDescription = null, tint = on, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("Next alarm", style = HubType.bodyStrong.copy(fontSize = 14.sp), color = on, maxLines = 1)
+            Spacer(Modifier.weight(1f))
+            state.next?.let { (alarm, _) ->
+                Text(
+                    repeatCaption(alarm.daysMask),
+                    style = HubType.bodyStrong.copy(fontSize = 14.sp),
+                    color = on,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-        },
-        modifier = modifier.fillMaxWidth().padding(horizontal = Gutter),
-        label = "nextAlarm",
-    ) { s ->
-        when (s.kind) {
-            0 -> Spacer(Modifier.fillMaxWidth().height(if (s.loaded) 0.dp else 52.dp))
-            1 -> Text(
-                "No alarms on",
-                style = HubType.section,
-                color = c.inkMuted,
-                modifier = Modifier.padding(bottom = 16.dp),
-            )
-            else -> {
-                val at = s.next ?: 0L
-                Column(Modifier.padding(bottom = 16.dp)) {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text("Next alarm in ", style = HubType.section, color = c.inkMuted)
-                        RollingText(Fmt.untilText(at, s.now), style = HubType.section, color = c.dawn)
+        }
+        AnimatedContent(
+            targetState = state,
+            contentKey = { it.kind },
+            transitionSpec = {
+                if (reduced) {
+                    fadeIn(tween(150)) togetherWith fadeOut(tween(100)) using SizeTransform(clip = false)
+                } else {
+                    fadeIn(tween(220, delayMillis = 40, easing = Motion.EaseOut)) togetherWith
+                        fadeOut(tween(120)) using SizeTransform(clip = false)
+                }
+            },
+            label = "hero",
+        ) { s ->
+            when (s.kind) {
+                0 -> Spacer(Modifier.fillMaxWidth().height(100.dp))
+                1, 2 -> Column {
+                    Text(if (s.kind == 1) "Nothing set yet" else "Every alarm is off", style = HubType.small, color = soft, maxLines = 1)
+                    Text(if (s.kind == 1) "No alarms" else "All off", style = HubType.clockLarge, color = on, maxLines = 1)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        if (s.kind == 1) "Tap New alarm, or pick a quick alarm below" else "Switch one on below, or add a new one",
+                        style = meta,
+                        color = soft,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = NotchWidth),
+                    )
+                }
+                else -> s.next?.let { (alarm, at) ->
+                    val (digits, period) = splitTime(Fmt.time(context, LocalTime.of(alarm.hour, alarm.minute)))
+                    Column {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Rings at", style = HubType.small, color = soft, maxLines = 1)
+                                Row(verticalAlignment = Alignment.Bottom) {
+                                    RollingText(digits, HubType.clockLarge, color = on)
+                                    if (period != null) {
+                                        Text(
+                                            period,
+                                            style = HubType.bodyStrong,
+                                            color = on,
+                                            modifier = Modifier.padding(start = 6.dp, bottom = 7.dp),
+                                        )
+                                    }
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 6.dp)) {
+                                Text("Rings in", style = meta, color = soft, maxLines = 1)
+                                RollingText(Fmt.untilText(at, s.now), HubType.clockSmall, color = on)
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Column(Modifier.padding(end = NotchWidth)) {
+                            Text(Fmt.whenText(context, at), style = meta, color = soft, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                alarm.label.ifBlank { "Alarm" },
+                                style = HubType.bodyStrong,
+                                color = on,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
-                    Spacer(Modifier.height(2.dp))
-                    Text(Fmt.whenText(context, at), style = HubType.body, color = c.inkMuted)
                 }
             }
         }
     }
 }
 
+/** The alarm after the next one, peeking out from behind the violet card. */
+@Composable
+private fun ThenStrip(alarm: Alarm, at: Long, now: Long, onClick: () -> Unit) {
+    val c = Hub.colors
+    val context = LocalContext.current
+    val time = Fmt.time(context, LocalTime.of(alarm.hour, alarm.minute))
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(Peek + CardRadius + 8.dp)
+            .pressable(onClick = onClick, pressedScale = 0.99f, showRipple = false, onClickLabel = "Edit alarm at $time")
+            .clip(RoundedCornerShape(CardRadius))
+            .background(c.raised)
+            .background(c.dawnSoft),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(Peek).padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Then", style = HubType.small, color = c.inkMuted)
+            Spacer(Modifier.width(10.dp))
+            Text(time, style = HubType.clockSmall.copy(fontSize = 14.sp), color = c.ink, maxLines = 1)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                alarm.label.ifBlank { repeatCaption(alarm.daysMask) },
+                style = HubType.small,
+                color = c.inkMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("in ${Fmt.untilText(at, now)}", style = HubType.small.copy(fontSize = 12.sp), color = c.ink, maxLines = 1)
+        }
+    }
+}
+
+/** A white card of one-tap alarms: an icon in a well with "In 10 min" under it. */
+@Composable
+private fun QuickAlarms(onPick: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val c = Hub.colors
+    Column(modifier.fillMaxWidth().hubCard(c.raised).padding(horizontal = 8.dp, vertical = 14.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Quick alarm", style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
+            Text("Rings once", style = HubType.small, color = c.inkMuted)
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth()) {
+            QUICK.forEach { (minutes, icon) ->
+                QuickAction(
+                    icon = icon,
+                    label = if (minutes % 60 == 0) "In ${minutes / 60} hour" else "In $minutes min",
+                    onClick = { onPick(minutes) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/** Rounds only the corners at the card's ends, so consecutive list items read as one card. */
+private fun Modifier.cardSlice(color: Color, top: Boolean, bottom: Boolean): Modifier {
+    val t = if (top) CardRadius else 0.dp
+    val b = if (bottom) CardRadius else 0.dp
+    return clip(RoundedCornerShape(topStart = t, topEnd = t, bottomStart = b, bottomEnd = b)).background(color)
+}
+
+/** The top of the alarms card: its title and how many are on. */
+@Composable
+private fun ListHead(total: Int, on: Int, modifier: Modifier = Modifier) {
+    val c = Hub.colors
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = Gutter)
+            .cardSlice(c.raised, top = true, bottom = false)
+            .padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Your alarms", style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
+        Text("$on of $total on", style = HubType.small, color = c.inkMuted)
+    }
+}
+
 /**
- * One alarm: the time set large, the label and repeat days beneath, a slim 24-hour strip that
- * echoes the dial on Home, and the switch. Switching off fades the numerals and settles the
- * row back a touch; the switch moves at once and the save follows.
+ * One alarm inside the card: the time large, the label and repeat days muted under it with
+ * when it rings (or "Off"), and the switch. Tap anywhere else on the row to edit. The switch
+ * answers at once and the save follows.
  */
 @Composable
 private fun AlarmRow(
     alarm: Alarm,
-    sweep: Boolean,
-    onSwept: () -> Unit,
+    last: Boolean,
+    now: Long,
     onToggle: (Boolean) -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
     // Optimistic: the switch answers immediately, the database catches up.
     var on by remember(alarm.enabled) { mutableStateOf(alarm.enabled) }
-    val timeColor by animateColorAsState(if (on) c.ink else c.inkMuted, tween(240), label = "time")
-    val labelColor by animateColorAsState(if (on) c.ink else c.inkMuted, tween(240), label = "label")
-    val settle by animateFloatAsState(if (on || reduced) 1f else 0.96f, Motion.snappy(), label = "settle")
+    val timeColor by animateColorAsState(if (on) c.ink else c.inkMuted, tween(200, easing = Motion.EaseOut), label = "time")
     val (digits, period) = splitTime(Fmt.time(context, LocalTime.of(alarm.hour, alarm.minute)))
-    val repeat = repeatCaption(alarm.daysMask)
+    val ringsAt = remember(alarm, now) { AlarmRepository.nextTrigger(alarm).toInstant().toEpochMilli() }
+    val meta = listOfNotNull(alarm.label.takeIf { it.isNotBlank() }, repeatCaption(alarm.daysMask)).joinToString(" • ")
+    // Words, not just the dimmed time, say whether it is on.
+    val status = if (on) "in ${Fmt.untilText(ringsAt, now)}" else "Off"
+    val metaStyle = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp)
 
-    Row(
+    Box(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .pressable(onClick = onClick, pressedScale = 0.98f, onClickLabel = "Edit alarm")
-            .padding(start = Gutter - 8.dp, end = Gutter - 12.dp, top = 14.dp, bottom = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = Gutter)
+            .cardSlice(c.raised, top = false, bottom = last)
+            .padding(start = 8.dp, end = 8.dp, bottom = if (last) 10.dp else 0.dp),
     ) {
-        Column(
+        Row(
             Modifier
-                .weight(1f)
-                .graphicsLayer {
-                    scaleX = settle
-                    scaleY = settle
-                    transformOrigin = TransformOrigin(0f, 0.5f)
-                },
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .pressable(onClick = onClick, pressedScale = 0.98f, onClickLabel = "Edit alarm")
+                .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(digits, style = HubType.clockLarge, color = timeColor)
-                if (period != null) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(digits, style = HubType.clockMedium, color = timeColor)
+                    if (period != null) {
+                        Text(
+                            period,
+                            style = HubType.bodyStrong.copy(fontSize = 14.sp),
+                            color = timeColor,
+                            modifier = Modifier.padding(start = 5.dp, bottom = 6.dp),
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        period,
-                        style = HubType.bodyStrong,
-                        color = timeColor,
-                        modifier = Modifier.padding(start = 6.dp, bottom = 9.dp),
+                        meta,
+                        style = metaStyle,
+                        color = c.inkMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
+                    Text(" • $status", style = metaStyle, color = c.inkMuted, maxLines = 1)
                 }
             }
-            Spacer(Modifier.height(6.dp))
-            if (alarm.label.isNotBlank()) {
-                Text(
-                    alarm.label,
-                    style = HubType.bodyStrong,
-                    color = labelColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text(repeat, style = HubType.small, color = c.inkMuted)
-            Spacer(Modifier.height(12.dp))
-            DayStrip(
-                hour = alarm.hour,
-                minute = alarm.minute,
-                on = on,
-                sweep = sweep,
-                onSwept = onSwept,
+            HubSwitch(
+                checked = on,
+                onCheckedChange = { on = it; onToggle(it) },
+                accent = c.dawn,
+                contentDescription = buildString {
+                    append("Alarm at ").append(digits)
+                    if (period != null) append(' ').append(period)
+                    if (alarm.label.isNotBlank()) append(", ").append(alarm.label)
+                },
             )
         }
-        HubSwitch(
-            checked = on,
-            onCheckedChange = { on = it; onToggle(it) },
-            accent = c.dawn,
-            contentDescription = buildString {
-                append("Alarm at ").append(digits)
-                if (period != null) append(' ').append(period)
-                if (alarm.label.isNotBlank()) append(", ").append(alarm.label)
-            },
-        )
     }
 }
 
 /**
- * A short 24-hour track with a dawn dot where the alarm falls in the day. The daylight
- * stretch (6:00 to 18:00) is a faintly lighter tone, as on the Home dial. On first sight
- * the dot sweeps in from midnight; edits glide it to the new time.
+ * A rounded card with its bottom-right corner cut away: convex corners where the card meets
+ * the cut, a pill-round inner corner that hugs the button seated there. Same geometry as the
+ * deck on Home.
  */
-@Composable
-private fun DayStrip(hour: Int, minute: Int, on: Boolean, sweep: Boolean, onSwept: () -> Unit) {
-    val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val target = (hour * 60 + minute) / 1440f
-    val pos = remember { Animatable(if (sweep && !reduced) 0f else target) }
-    LaunchedEffect(target) {
-        onSwept()
-        if (reduced) pos.snapTo(target) else pos.animateTo(target, Motion.gentle())
-    }
-    val dot by animateColorAsState(if (on) c.dawn else c.inkMuted, tween(240), label = "dot")
-    val dotScale by animateFloatAsState(if (on) 1f else 0.9f, Motion.bouncy(), label = "dotScale")
-    val halo by animateFloatAsState(if (on) 1f else 0f, tween(240), label = "halo")
-    Canvas(
-        Modifier
-            .width(148.dp)
-            .height(14.dp)
-            .clearAndSetSemantics { },
-    ) {
-        val trackH = 4.dp.toPx()
-        val r = 5.dp.toPx()
-        val y = size.height / 2f
-        val left = r
-        val span = size.width - 2 * r
-        drawRoundRect(
-            c.raised2,
-            topLeft = Offset(0f, y - trackH / 2f),
-            size = Size(size.width, trackH),
-            cornerRadius = CornerRadius(trackH / 2f),
-        )
-        drawRoundRect(
-            c.ink.copy(alpha = if (c.isDark) 0.10f else 0.08f),
-            topLeft = Offset(left + span * 0.25f, y - trackH / 2f),
-            size = Size(span * 0.5f, trackH),
-            cornerRadius = CornerRadius(trackH / 2f),
-        )
-        val at = Offset(left + span * pos.value, y)
-        if (halo > 0f) drawCircle(dot.copy(alpha = 0.22f * halo), radius = r * 1.9f * dotScale, center = at)
-        drawCircle(dot, radius = r * dotScale, center = at)
+private class NotchShape(
+    private val radius: Dp,
+    private val fillet: Dp,
+    private val notchWidth: Dp,
+    private val notchHeight: Dp,
+) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        with(density) {
+            val w = size.width
+            val h = size.height
+            val r = radius.toPx()
+            val f = fillet.toPx()
+            val nw = notchWidth.toPx()
+            val nh = notchHeight.toPx()
+            val inner = nh / 2f
+            val p = Path().apply {
+                moveTo(r, 0f)
+                lineTo(w - r, 0f)
+                arcTo(Rect(w - 2 * r, 0f, w, 2 * r), -90f, 90f, false)
+                lineTo(w, h - nh - f)
+                arcTo(Rect(w - 2 * f, h - nh - 2 * f, w, h - nh), 0f, 90f, false)
+                lineTo(w - nw + inner, h - nh)
+                arcTo(Rect(w - nw, h - nh, w - nw + 2 * inner, h - nh + 2 * inner), -90f, -90f, false)
+                lineTo(w - nw, h - f)
+                arcTo(Rect(w - nw - 2 * f, h - 2 * f, w - nw, h), 0f, 90f, false)
+                lineTo(r, h)
+                arcTo(Rect(0f, h - 2 * r, 2 * r, h), 90f, 90f, false)
+                lineTo(0f, r)
+                arcTo(Rect(0f, 0f, 2 * r, 2 * r), 180f, 90f, false)
+                close()
+            }
+            return Outline.Generic(p)
+        }
     }
 }
 
@@ -365,7 +633,7 @@ private fun repeatCaption(mask: Int): String =
 
 /** "7:30 AM" → ("7:30", "AM"); "07:30" → ("07:30", null). */
 private fun splitTime(s: String): Pair<String, String?> {
-    val i = s.indexOfFirst { it.isWhitespace() || it == ' ' }
+    val i = s.indexOfFirst { it.isWhitespace() || it == ' ' }
     if (i <= 0) return s to null
     val rest = s.substring(i + 1).trim()
     return if (rest.any { it.isLetter() }) s.substring(0, i) to rest else s to null

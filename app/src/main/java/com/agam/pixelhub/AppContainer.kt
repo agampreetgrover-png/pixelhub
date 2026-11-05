@@ -43,7 +43,13 @@ class AppContainer(context: Context) {
         onBudgetAlert = { BudgetNotifier.show(appContext, it) },
     )
     val installedApps = InstalledApps(appContext)
-    private val http by lazy { OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build() }
+    // OkHttp's default 10 s read timeout is shorter than a busy model takes to start answering.
+    private val http by lazy {
+        OkHttpClient.Builder()
+            .callTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
+            .build()
+    }
     val gemini: GeminiClient by lazy { GeminiClient(http) }
     val grok: GrokClient by lazy { GrokClient(http) }
 

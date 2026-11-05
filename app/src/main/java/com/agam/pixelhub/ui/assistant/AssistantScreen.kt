@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalLayoutApi::class)
-
 package com.agam.pixelhub.ui.assistant
 
 import android.content.ActivityNotFoundException
@@ -12,29 +10,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -63,11 +48,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.CurrencyRupee
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -82,43 +69,48 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.asComposePath
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.graphics.shapes.Morph
-import androidx.graphics.shapes.toPath
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.ai.ParsedCommand
 import com.agam.pixelhub.data.Alarm
+import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.ui.AppIcon
+import com.agam.pixelhub.ui.BackButton
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.Gutter
+import com.agam.pixelhub.ui.HubFab
+import com.agam.pixelhub.ui.HubListRow
 import com.agam.pixelhub.ui.PrimaryButton
-import com.agam.pixelhub.ui.QuietButton
+import com.agam.pixelhub.ui.QuickAction
 import com.agam.pixelhub.ui.ScreenScaffold
 import com.agam.pixelhub.ui.alarms.AlarmEditorDialog
-import com.agam.pixelhub.ui.motion.HubShapes
+import com.agam.pixelhub.ui.expenses.color
+import com.agam.pixelhub.ui.expenses.icon
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
-import com.agam.pixelhub.ui.motion.MorphShape
 import com.agam.pixelhub.ui.motion.Motion
-import com.agam.pixelhub.ui.motion.PolygonShape
 import com.agam.pixelhub.ui.motion.Stagger
 import com.agam.pixelhub.ui.motion.ThinkingIndicator
 import com.agam.pixelhub.ui.motion.pressable
@@ -127,51 +119,75 @@ import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.reminders.ReminderDraft
 import com.agam.pixelhub.ui.reminders.ReminderEditorDialog
 import com.agam.pixelhub.ui.theme.Hub
+import com.agam.pixelhub.ui.theme.HubColors
 import com.agam.pixelhub.ui.theme.HubType
 import java.time.LocalTime
-import androidx.compose.material.icons.outlined.CurrencyRupee
-import com.agam.pixelhub.expenses.Money
-import com.agam.pixelhub.ui.expenses.color
-import com.agam.pixelhub.ui.expenses.icon
 
-private enum class Kind { REMINDER, ALARM, EXPENSE, APP, LINK }
+private enum class Kind(val label: String) {
+    REMINDER("Reminder"), ALARM("Alarm"), EXPENSE("Expense"), APP("Open app"), LINK("Route")
+}
 
+private fun Kind.glyph(): ImageVector = when (this) {
+    Kind.REMINDER -> Icons.Outlined.NotificationsActive
+    Kind.ALARM -> Icons.Outlined.Alarm
+    Kind.EXPENSE -> Icons.Outlined.CurrencyRupee
+    Kind.APP -> Icons.Outlined.Apps
+    Kind.LINK -> Icons.Outlined.Place
+}
+
+/** A whole request, sent as is when tapped. */
 private data class Suggestion(val text: String, val kind: Kind)
 
 private val SUGGESTIONS = listOf(
     Suggestion("Remind me to call mom at 6pm", Kind.REMINDER),
     Suggestion("Wake me up at 6:30 on weekdays", Kind.ALARM),
-    Suggestion("Remind me to water the plants every 3 days at 8am", Kind.REMINDER),
     Suggestion("Spent 250 on lunch", Kind.EXPENSE),
     Suggestion("Open Spotify", Kind.APP),
-    Suggestion("Navigate to the nearest petrol station", Kind.LINK),
+    Suggestion("Navigate to a petrol station", Kind.LINK),
+)
+
+/** The start of a request: tapping one types it into the field so the user finishes it. */
+private data class Starter(val kind: Kind, val prefill: String)
+
+private val STARTERS = listOf(
+    Starter(Kind.REMINDER, "Remind me to "),
+    Starter(Kind.ALARM, "Wake me up at "),
+    Starter(Kind.EXPENSE, "Spent "),
+    Starter(Kind.APP, "Open "),
 )
 
 /** Big radius everywhere except the bottom corner nearest the speaker. */
 private val MineShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomEnd = 6.dp, bottomStart = 22.dp)
 private val TheirsShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomEnd = 22.dp, bottomStart = 6.dp)
-private val BlockShape = RoundedCornerShape(28.dp)
+private val PillShape = RoundedCornerShape(28.dp)
+
+private val MetaStyle = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp)
+private val LabelStyle = HubType.small.copy(fontWeight = FontWeight.Medium)
 
 @Composable
-fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit) {
+fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     val items by vm.items.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
     val hasKey by vm.hasApiKey.collectAsStateWithLifecycle()
-    var input by rememberSaveable { mutableStateOf("") }
+    var input by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var editing by remember { mutableStateOf<ChatItem.Action?>(null) }
     var listening by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
 
     // Messages already in the conversation when the screen opens rise in with the stagger;
-    // anything new springs in from its speaker's side. Nothing animates twice.
+    // anything new slides in from its speaker's side. Nothing animates twice.
     val stagger = rememberStagger()
     val initialIds = remember { items.mapTo(HashSet()) { it.id } }
     val seen = remember { mutableSetOf<Any>() }
 
-    LaunchedEffect(items.size, busy) {
-        val count = listState.layoutInfo.totalItemsCount
-        if (count > 0) listState.animateScrollToItem(count - 1)
+    // The newest row, counted from the data: the list's layout info still describes the previous
+    // frame when this runs, so it would scroll to the old last row (or nowhere on first open).
+    LaunchedEffect(items.size, busy, hasKey) {
+        val last = (if (!hasKey) 1 else 0) + (if (items.isEmpty()) 1 else 0) + items.size + (if (busy) 1 else 0) - 1
+        if (last > 0) listState.animateScrollToItem(last)
     }
 
     val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -180,21 +196,34 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit) {
     }
 
     fun submit() {
-        if (input.isBlank() || busy) return
-        vm.send(input)
-        input = ""
+        if (input.text.isBlank() || busy) return
+        vm.send(input.text)
+        input = TextFieldValue("")
+    }
+
+    /** Types the start of a request into the field, cursor at the end, keyboard up. */
+    fun prefill(text: String) {
+        input = TextFieldValue(text, TextRange(text.length))
+        focus.requestFocus()
+        keyboard?.show()
+    }
+
+    fun speak() {
+        listening = startSpeech(context) { speech.launch(it) }
     }
 
     ScreenScaffold(
         title = "Assistant",
+        navigationIcon = { BackButton(onBack) },
         bottomBar = {
             InputBar(
                 value = input,
                 onValueChange = { input = it },
+                focus = focus,
                 busy = busy,
                 listening = listening,
                 onSend = { submit() },
-                onMic = { listening = startSpeech(context) { speech.launch(it) } },
+                onMic = { speak() },
             )
         },
     ) { padding ->
@@ -224,7 +253,14 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit) {
             }
             if (items.isEmpty()) {
                 item(key = "intro", contentType = "intro") {
-                    Intro(stagger = stagger, onSuggest = { vm.send(it) }, modifier = Modifier.animateItem())
+                    Intro(
+                        stagger = stagger,
+                        onSpeak = { speak() },
+                        onStarter = { prefill(it) },
+                        // Without a key a sent request can only fail, so a suggestion just fills the field.
+                        onSuggest = { if (hasKey) vm.send(it) else prefill(it) },
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
             itemsIndexed(
@@ -267,7 +303,7 @@ fun AssistantScreen(vm: AssistantViewModel, onOpenSettings: () -> Unit) {
                 }
             }
             if (busy) {
-                // A new key per request, so the bubble springs in each time.
+                // A new key per request, so the bubble slides in each time.
                 val key = "thinking-${items.lastOrNull()?.id ?: 0L}"
                 item(key = key, contentType = "thinking") {
                     ThinkingBubble(enter = Modifier.sideEntrance(seen, key, fromEnd = false), modifier = Modifier.animateItem())
@@ -317,24 +353,24 @@ private fun startSpeech(context: Context, launch: (Intent) -> Unit): Boolean {
 }
 
 /**
- * A new message's entrance: springs in 24dp from its speaker's side while growing from 0.92,
- * anchored at that side's bottom corner. Runs once per [key].
+ * A new message's entrance: slides 16dp in from its speaker's side while growing from 0.96,
+ * anchored at that side's bottom corner. 220ms; a plain fade with reduced motion. Runs once per [key].
  */
 private fun Modifier.sideEntrance(seen: MutableSet<Any>, key: Any, fromEnd: Boolean): Modifier = composed {
     val reduced = LocalReducedMotion.current
     val progress = remember(key) { Animatable(if (key in seen) 1f else 0f) }
-    val px = with(LocalDensity.current) { 24.dp.toPx() }
+    val px = with(LocalDensity.current) { 16.dp.toPx() }
     LaunchedEffect(key) {
         if (progress.value < 1f) {
             seen += key
-            progress.animateTo(1f, if (reduced) tween(160) else spring(dampingRatio = 0.78f, stiffness = 420f))
+            progress.animateTo(1f, tween(if (reduced) 150 else 220, easing = Motion.EaseOut))
         }
     }
     graphicsLayer {
         val p = progress.value
-        alpha = (p * 1.4f).coerceIn(0f, 1f)
+        alpha = p
         if (!reduced) {
-            val s = 0.92f + 0.08f * p
+            val s = 0.96f + 0.04f * p
             scaleX = s
             scaleY = s
             translationX = (1f - p) * px * (if (fromEnd) 1f else -1f)
@@ -348,14 +384,14 @@ private fun Modifier.sideEntrance(seen: MutableSet<Any>, key: Any, fromEnd: Bool
 // ---------------------------------------------------------------------------------------------
 
 /**
- * A raised pill: the text field, the mic and, once there is something to send, the send button.
- * Pads itself by the keyboard (and the navigation bar, if nothing above has handled it), so the
- * keyboard never covers it.
+ * A raised pill: the text field, the mic and a round send button. Pads itself by the keyboard
+ * (and the navigation bar, if nothing above has handled it), so the keyboard never covers it.
  */
 @Composable
 private fun InputBar(
-    value: String,
-    onValueChange: (String) -> Unit,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    focus: FocusRequester,
     busy: Boolean,
     listening: Boolean,
     onSend: () -> Unit,
@@ -373,7 +409,7 @@ private fun InputBar(
             Modifier
                 .fillMaxWidth()
                 .heightIn(min = 56.dp)
-                .clip(BlockShape)
+                .clip(PillShape)
                 .background(c.raised)
                 .padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.Bottom,
@@ -382,7 +418,7 @@ private fun InputBar(
                 value = value,
                 onValueChange = onValueChange,
                 textStyle = HubType.body.copy(color = c.ink),
-                cursorBrush = SolidColor(c.dawn),
+                cursorBrush = SolidColor(c.ink),
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
@@ -392,105 +428,69 @@ private fun InputBar(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 44.dp)
+                    .focusRequester(focus)
                     .semantics { contentDescription = "Message" },
                 decorationBox = { inner ->
                     Box(Modifier.heightIn(min = 44.dp).padding(vertical = 10.dp), contentAlignment = Alignment.CenterStart) {
-                        if (value.isEmpty()) {
+                        if (value.text.isEmpty()) {
                             Text("Ask or give a command", style = HubType.body, color = c.inkMuted, maxLines = 1)
                         }
                         inner()
                     }
                 },
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(6.dp))
             MicButton(enabled = !busy, listening = listening, onClick = onMic)
-            AnimatedVisibility(
-                visible = value.isNotBlank(),
-                enter = fadeIn(tween(140)) +
-                    scaleIn(spring(dampingRatio = 0.6f, stiffness = 500f), initialScale = 0.85f) +
-                    expandHorizontally(expandFrom = Alignment.Start),
-                exit = fadeOut(tween(120)) +
-                    scaleOut(tween(140), targetScale = 0.85f) +
-                    shrinkHorizontally(tween(180, easing = Motion.EaseOut), shrinkTowards = Alignment.Start),
-            ) {
-                Row {
-                    Spacer(Modifier.width(4.dp))
-                    SendButton(enabled = !busy, onClick = onSend)
-                }
-            }
+            Spacer(Modifier.width(6.dp))
+            SendButton(enabled = value.text.isNotBlank() && !busy, onClick = onSend)
         }
     }
 }
 
-/** The mic. While the speech screen is launching, a soft ring pulses out from it. */
+/** The mic in a round well; it takes the reminder tint while the speech screen is launching. */
 @Composable
 private fun MicButton(enabled: Boolean, listening: Boolean, onClick: () -> Unit) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-        AnimatedVisibility(listening, enter = fadeIn(tween(160)), exit = fadeOut(tween(220))) {
-            val t = rememberInfiniteTransition(label = "micPulse")
-            val wave by t.animateFloat(
-                0f, 1f,
-                infiniteRepeatable(tween(1100, easing = Motion.EaseOut), RepeatMode.Restart),
-                label = "wave",
-            )
-            Canvas(Modifier.size(44.dp)) {
-                val r = size.minDimension / 2f
-                drawCircle(c.skySoft, radius = r)
-                if (!reduced) {
-                    drawCircle(
-                        c.sky.copy(alpha = 0.6f * (1f - wave)),
-                        radius = r * (1f + 0.5f * wave),
-                        style = Stroke(width = 2.dp.toPx()),
-                    )
-                }
-            }
-        }
-        Box(
-            Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.86f, onClickLabel = "Speak")
-                .semantics { contentDescription = "Speak" },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Outlined.Mic,
-                contentDescription = null,
-                tint = when {
-                    !enabled -> c.inkMuted
-                    listening -> c.sky
-                    else -> c.ink
-                },
-                modifier = Modifier.size(22.dp),
-            )
-        }
+    val bg by animateColorAsState(if (listening) c.skySoft else c.well, tween(180), label = "micBg")
+    val tint by animateColorAsState(
+        when {
+            !enabled -> c.inkMuted
+            listening -> c.sky
+            else -> c.ink
+        },
+        tween(180),
+        label = "micTint",
+    )
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Speak")
+            .semantics { contentDescription = "Speak" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Outlined.Mic, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
     }
 }
 
 /**
- * Send: blooms from a circle into a turning cookie as it appears; settles back to a dim circle
- * while a request is running.
+ * Send: a round chrome button. In the dark theme the chrome tone would vanish into the pill, so
+ * it inverts to ink there. Dims to the chip tone while there is nothing to send.
  */
 @Composable
 private fun SendButton(enabled: Boolean, onClick: () -> Unit) {
     val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val morph = remember { Morph(HubShapes.circle, HubShapes.cookie) }
-    val bloom = remember { Animatable(if (reduced) 1f else 0f) }
-    LaunchedEffect(Unit) { bloom.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = 320f)) }
-    val ready by animateFloatAsState(if (enabled) 1f else 0f, Motion.snappy(), label = "sendReady")
-    val bg by animateColorAsState(if (enabled) c.dawn else c.raised2, tween(180), label = "sendBg")
-    val fg by animateColorAsState(if (enabled) c.onDawn else c.inkMuted, tween(180), label = "sendFg")
-    val progress = (bloom.value * ready).coerceIn(0f, 1f)
-    val turn = (1f - bloom.value) * -60f
+    val on = if (c.isDark) c.ink else c.chrome
+    val onFg = if (c.isDark) c.ground else c.onChrome
+    val bg by animateColorAsState(if (enabled) on else c.raised2, tween(180), label = "sendBg")
+    val fg by animateColorAsState(if (enabled) onFg else c.inkMuted, tween(180), label = "sendFg")
     Box(
         Modifier
             .size(44.dp)
-            .clip(MorphShape(morph, progress, turn))
+            .clip(CircleShape)
             .background(bg)
-            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.86f, onClickLabel = "Send")
+            .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Send")
             .semantics { contentDescription = "Send" },
         contentAlignment = Alignment.Center,
     ) {
@@ -502,101 +502,84 @@ private fun SendButton(enabled: Boolean, onClick: () -> Unit) {
 // Empty state and notices
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * The empty conversation: a yellow hero card with a Speak button, a row of starters that type
+ * the beginning of a request, and a list card of whole requests to try.
+ */
 @Composable
-private fun Intro(stagger: Stagger, onSuggest: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun Intro(
+    stagger: Stagger,
+    onSpeak: () -> Unit,
+    onStarter: (String) -> Unit,
+    onSuggest: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val c = Hub.colors
-    Column(
-        modifier.fillMaxWidth().padding(top = 24.dp, bottom = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        BreathingMark(c.sky, Modifier.staggerIn(stagger, "mark", 0), size = 112.dp)
-        Spacer(Modifier.height(28.dp))
-        Text(
-            "Ask for a reminder, an alarm or an app",
-            style = HubType.section,
-            color = c.ink,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.staggerIn(stagger, "intro-title", 1),
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Type or speak. Nothing happens until you confirm it.",
-            style = HubType.body,
-            color = c.inkMuted,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.staggerIn(stagger, "intro-body", 2),
-        )
-        Spacer(Modifier.height(24.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth(),
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Hero
+        Column(
+            Modifier
+                .staggerIn(stagger, "hero", 0)
+                .fillMaxWidth()
+                .hubCard(c.sun)
+                .padding(start = 22.dp, end = 22.dp, top = 22.dp, bottom = 20.dp),
         ) {
-            SUGGESTIONS.forEachIndexed { i, s ->
-                SuggestionPill(
-                    suggestion = s,
-                    modifier = Modifier.staggerIn(stagger, "suggestion$i", i + 3, distance = 14f),
+            Text("Assistant", style = LabelStyle, color = c.onSun.copy(alpha = 0.72f))
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "What should I do?",
+                style = HubType.title.copy(fontSize = 24.sp, lineHeight = 32.sp),
+                color = c.onSun,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Type, speak or tap a shortcut below. Nothing happens until you confirm it.",
+                style = HubType.body.copy(fontSize = 14.sp, lineHeight = 21.sp),
+                color = c.onSun.copy(alpha = 0.72f),
+            )
+            Spacer(Modifier.height(18.dp))
+            HubFab(icon = Icons.Outlined.Mic, contentDescription = "Speak a request", label = "Speak", onClick = onSpeak)
+        }
+
+        // Starters: quick actions that fill the field
+        Column(
+            Modifier
+                .staggerIn(stagger, "starters", 1)
+                .fillMaxWidth()
+                .hubCard(c.raised)
+                .padding(start = 8.dp, end = 8.dp, top = 16.dp, bottom = 12.dp),
+        ) {
+            Text("Start with", style = HubType.section, color = c.ink, modifier = Modifier.padding(start = 12.dp, bottom = 8.dp))
+            Row(Modifier.fillMaxWidth()) {
+                STARTERS.forEach { s ->
+                    QuickAction(
+                        icon = s.kind.glyph(),
+                        label = s.kind.label,
+                        onClick = { onStarter(s.prefill) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
+        // Whole requests
+        Column(
+            Modifier
+                .staggerIn(stagger, "suggestions", 2)
+                .fillMaxWidth()
+                .hubCard(c.raised)
+                .padding(start = 8.dp, end = 8.dp, top = 16.dp, bottom = 8.dp),
+        ) {
+            Text("Try saying", style = HubType.section, color = c.ink, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
+            SUGGESTIONS.forEach { s ->
+                HubListRow(
+                    icon = s.kind.glyph(),
+                    title = s.text,
+                    meta = s.kind.label,
                     onClick = { onSuggest(s.text) },
                 )
             }
         }
-    }
-}
-
-/** A soft sky shape that slowly breathes between a cookie and a clover while turning. */
-@Composable
-private fun BreathingMark(color: Color, modifier: Modifier = Modifier, size: Dp = 112.dp) {
-    val reduced = LocalReducedMotion.current
-    val c = Hub.colors
-    val morph = remember { Morph(HubShapes.cookie, HubShapes.clover) }
-    val t = rememberInfiniteTransition(label = "mark")
-    val phase by t.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(3600, easing = Motion.EaseInOut), RepeatMode.Reverse),
-        label = "phase",
-    )
-    val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(26000, easing = LinearEasing)), label = "spin")
-    Canvas(modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        drawCircle(c.skySoft, radius = w / 2f, center = Offset(w / 2f, h / 2f))
-        val path = morph.toPath(if (reduced) 0f else phase, android.graphics.Path())
-        val m = android.graphics.Matrix()
-        if (!reduced) m.postRotate(spin)
-        m.postScale(w * 0.34f, h * 0.34f)
-        m.postTranslate(w / 2f, h / 2f)
-        path.transform(m)
-        drawPath(path.asComposePath(), color)
-    }
-}
-
-@Composable
-private fun SuggestionPill(suggestion: Suggestion, modifier: Modifier, onClick: () -> Unit) {
-    val c = Hub.colors
-    val (icon, tint) = kindLook(suggestion.kind)
-    Row(
-        modifier
-            .pressable(onClick = onClick, pressedScale = 0.95f, showRipple = false)
-            .clip(CircleShape)
-            .background(c.raised)
-            .padding(start = 14.dp, end = 18.dp, top = 11.dp, bottom = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(suggestion.text, style = HubType.small, color = c.ink)
-    }
-}
-
-@Composable
-private fun kindLook(kind: Kind): Pair<ImageVector, Color> {
-    val c = Hub.colors
-    return when (kind) {
-        Kind.REMINDER -> Icons.Outlined.NotificationsActive to c.sky
-        Kind.ALARM -> Icons.Outlined.Alarm to c.dawn
-        Kind.EXPENSE -> Icons.Outlined.CurrencyRupee to c.ink
-        Kind.APP -> Icons.Outlined.Apps to c.ink
-        Kind.LINK -> Icons.Outlined.Link to c.ink
     }
 }
 
@@ -606,15 +589,11 @@ private fun NoKeyNotice(onOpenSettings: () -> Unit, modifier: Modifier = Modifie
     Column(
         modifier
             .fillMaxWidth()
-            .clip(BlockShape)
-            .background(c.raised)
+            .hubCard(c.raised)
             .padding(20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(44.dp).clip(PolygonShape(HubShapes.gem)).background(c.raised2),
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(Modifier.size(44.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
                 Icon(Icons.Outlined.Key, contentDescription = null, tint = c.ink, modifier = Modifier.size(22.dp))
             }
             Spacer(Modifier.width(14.dp))
@@ -622,8 +601,8 @@ private fun NoKeyNotice(onOpenSettings: () -> Unit, modifier: Modifier = Modifie
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "Add a Gemini or Grok API key in Settings to use the assistant.",
-            style = HubType.body,
+            "Add a Gemini or Grok API key in Settings to use the assistant. The shortcuts below still fill in a request for you.",
+            style = HubType.body.copy(fontSize = 14.sp, lineHeight = 21.sp),
             color = c.inkMuted,
         )
         Spacer(Modifier.height(16.dp))
@@ -640,31 +619,34 @@ private fun NoKeyNotice(onOpenSettings: () -> Unit, modifier: Modifier = Modifie
 private fun ViaNote(text: String) {
     Text(
         text,
-        style = HubType.small,
+        style = MetaStyle,
         color = Hub.colors.inkMuted,
         modifier = Modifier.padding(start = 12.dp, top = 4.dp),
     )
 }
 
+/**
+ * A message. The user's sit in the black chrome tone (a step lighter in the dark theme, where
+ * chrome would match the cards); replies sit in a raised card.
+ */
 @Composable
 private fun Bubble(text: String, mine: Boolean, enter: Modifier, modifier: Modifier, isError: Boolean = false) {
     val c = Hub.colors
+    val bg = when {
+        mine -> if (c.isDark) c.chromeWell else c.chrome
+        isError -> c.dangerSoft
+        else -> c.raised
+    }
     Box(modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
         Text(
             text,
             style = HubType.body,
-            color = c.ink,
+            color = if (mine) c.onChrome else c.ink,
             modifier = Modifier
                 .widthIn(max = 300.dp)
                 .then(enter)
                 .clip(if (mine) MineShape else TheirsShape)
-                .background(
-                    when {
-                        mine -> c.raised2
-                        isError -> c.dangerSoft
-                        else -> c.raised
-                    },
-                )
+                .background(bg)
                 .padding(horizontal = 16.dp, vertical = 11.dp),
         )
     }
@@ -681,7 +663,7 @@ private fun ThinkingBubble(enter: Modifier, modifier: Modifier) {
                 .padding(start = 12.dp, end = 18.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ThinkingIndicator(Hub.colors.sky, size = 28.dp)
+            ThinkingIndicator(c.ink, size = 24.dp)
             Spacer(Modifier.width(10.dp))
             Text("Thinking", style = HubType.body, color = c.inkMuted)
         }
@@ -692,11 +674,58 @@ private fun ThinkingBubble(enter: Modifier, modifier: Modifier) {
 // Action cards
 // ---------------------------------------------------------------------------------------------
 
+/** Every colour a draft card needs, so hero (violet / yellow) and plain cards share one layout. */
+private data class CardPalette(
+    val bg: Color,
+    val fg: Color,
+    val muted: Color,
+    val well: Color,
+    val iconTint: Color,
+    val confirmBg: Color,
+    val confirmFg: Color,
+    val quietBg: Color,
+    val quietFg: Color,
+    val okNote: Color,
+    val badNote: Color,
+)
+
+/** Reminders: the yellow card with dark text. */
+private fun sunPalette(c: HubColors) = CardPalette(
+    bg = c.sun, fg = c.onSun, muted = c.onSun.copy(alpha = 0.72f),
+    well = c.onSun.copy(alpha = 0.10f), iconTint = c.onSun,
+    confirmBg = c.onSun, confirmFg = c.sun,
+    quietBg = c.onSun.copy(alpha = 0.10f), quietFg = c.onSun,
+    okNote = c.onSun, badNote = c.onSun,
+)
+
+/**
+ * Alarms: the violet card with white text. The dark theme's violet is a touch too light for
+ * small white text (about 4:1), so the card darkens it by a fifth there (about 5.7:1).
+ */
+private fun dawnPalette(c: HubColors): CardPalette {
+    val violet = if (c.isDark) lerp(c.dawn, Color.Black, 0.2f) else c.dawn
+    return CardPalette(
+        bg = violet, fg = c.onDawn, muted = c.onDawn,
+        well = Color.Black.copy(alpha = 0.16f), iconTint = c.onDawn,
+        confirmBg = c.onDawn, confirmFg = violet,
+        quietBg = Color.Black.copy(alpha = 0.16f), quietFg = c.onDawn,
+        okNote = c.onDawn, badNote = c.onDawn,
+    )
+}
+
+/** Everything else: the plain raised card. */
+private fun plainPalette(c: HubColors, well: Color = c.well, iconTint: Color = c.ink) = CardPalette(
+    bg = c.raised, fg = c.ink, muted = c.inkMuted,
+    well = well, iconTint = iconTint,
+    confirmBg = c.ink, confirmFg = c.raised,
+    quietBg = c.raised2, quietFg = c.ink,
+    okNote = c.ok, badNote = c.danger,
+)
+
 private data class ActionLook(
+    val kind: String,
     val icon: ImageVector,
-    val accent: Color,
-    val onAccent: Color,
-    val soft: Color,
+    val palette: CardPalette,
     val title: String,
     val titleStyle: TextStyle,
     val details: List<String>,
@@ -710,48 +739,57 @@ private fun lookOf(item: ChatItem.Action): ActionLook {
     val c = Hub.colors
     return when (val cmd = item.command) {
         is ParsedCommand.CreateReminder -> ActionLook(
+            kind = "New reminder",
             icon = Icons.Outlined.NotificationsActive,
-            accent = c.sky, onAccent = c.onSky, soft = c.skySoft,
+            palette = sunPalette(c),
             title = cmd.title,
-            titleStyle = HubType.section,
+            titleStyle = HubType.section.copy(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold),
             details = listOf(Fmt.whenText(context, cmd.at), cmd.recurrence.describe(), cmd.notes).filter { it.isNotBlank() },
         )
         is ParsedCommand.CreateAlarm -> ActionLook(
+            kind = "New alarm",
             icon = Icons.Outlined.Alarm,
-            accent = c.dawn, onAccent = c.onDawn, soft = c.dawnSoft,
+            palette = dawnPalette(c),
             title = Fmt.time(context, LocalTime.of(cmd.hour, cmd.minute)),
             titleStyle = HubType.clockMedium,
             details = listOf(cmd.label, Days.label(cmd.daysMask)).filter { it.isNotBlank() },
         )
         is ParsedCommand.OpenApp -> ActionLook(
+            kind = "Open app",
             icon = Icons.Outlined.Apps,
-            accent = c.ink, onAccent = c.ground, soft = c.raised2,
-            title = "Open ${item.target?.label ?: cmd.query}",
+            palette = plainPalette(c),
+            title = item.target?.label ?: cmd.query,
             titleStyle = HubType.section,
             details = if (item.target == null) listOf("No matching app found") else emptyList(),
             packageName = item.target?.packageName,
         )
-        is ParsedCommand.LogExpense -> ActionLook(
-            icon = cmd.category.icon,
-            accent = cmd.category.color(c), onAccent = c.ground, soft = cmd.category.color(c).copy(alpha = 0.16f),
-            title = Money.format(cmd.amountPaise),
-            titleStyle = HubType.clockMedium,
-            details = listOfNotNull(
-                cmd.category.label,
-                cmd.note.takeIf { it.isNotBlank() },
-                cmd.at?.let { Fmt.whenText(context, it) },
-            ),
-        )
+        is ParsedCommand.LogExpense -> {
+            val tone = cmd.category.color(c)
+            ActionLook(
+                kind = "Log expense",
+                icon = cmd.category.icon,
+                palette = plainPalette(c, well = tone.copy(alpha = 0.16f), iconTint = tone),
+                title = Money.format(cmd.amountPaise),
+                titleStyle = HubType.clockMedium,
+                details = listOfNotNull(
+                    cmd.category.label,
+                    cmd.note.takeIf { it.isNotBlank() },
+                    cmd.at?.let { Fmt.whenText(context, it) },
+                ),
+            )
+        }
         is ParsedCommand.OpenLink -> ActionLook(
+            kind = "Open link",
             icon = Icons.Outlined.Link,
-            accent = c.ink, onAccent = c.ground, soft = c.raised2,
+            palette = plainPalette(c),
             title = "Open link",
             titleStyle = HubType.section,
             details = listOf(cmd.uri),
         )
         else -> ActionLook(
+            kind = "Action",
             icon = Icons.Outlined.Info,
-            accent = c.ink, onAccent = c.ground, soft = c.raised2,
+            palette = plainPalette(c),
             title = "Action",
             titleStyle = HubType.section,
             details = emptyList(),
@@ -760,8 +798,9 @@ private fun lookOf(item: ChatItem.Action): ActionLook {
 }
 
 /**
- * A proposed action, waiting for the user. Confirming collapses the buttons and swaps the
- * icon for a burst-shaped check that pops in; cancelling dims the whole card.
+ * A proposed action, waiting for the user, as a card: what it is, the big figure, the details,
+ * then Cancel / Edit / Confirm. Confirming collapses the buttons and swaps the icon for a check;
+ * cancelling dims the whole card.
  */
 @Composable
 private fun ActionCard(
@@ -772,49 +811,53 @@ private fun ActionCard(
     enter: Modifier,
     modifier: Modifier,
 ) {
-    val c = Hub.colors
     val look = lookOf(item)
+    val p = look.palette
     val pending = item.status == ChatItem.Status.PENDING
     val done = item.status == ChatItem.Status.DONE
     val cancelled = item.status == ChatItem.Status.CANCELLED
-    val dim by animateFloatAsState(if (cancelled) 0.5f else 1f, tween(260), label = "cardDim")
-    val noteColor by animateColorAsState(if (done) c.ok else c.danger, tween(200), label = "noteColor")
+    val dim by animateFloatAsState(if (cancelled) 0.55f else 1f, tween(220), label = "cardDim")
+    val noteColor by animateColorAsState(if (done) p.okNote else p.badNote, tween(180), label = "noteColor")
 
     Column(
         modifier
             .fillMaxWidth()
             .then(enter)
             .graphicsLayer { alpha = dim }
-            .clip(BlockShape)
-            .background(c.raised)
-            .padding(18.dp),
+            .hubCard(p.bg)
+            .padding(start = 20.dp, end = 16.dp, top = 18.dp, bottom = 18.dp),
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            StatusMark(look = look, done = done)
-            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f).padding(top = 2.dp)) {
-                Text(look.title, style = look.titleStyle, color = c.ink)
-                look.details.forEach { line ->
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        line,
-                        style = HubType.body,
-                        color = c.inkMuted,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                Text(look.kind, style = LabelStyle, color = p.muted)
+                Spacer(Modifier.height(2.dp))
+                Text(look.title, style = look.titleStyle, color = p.fg, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.width(12.dp))
+            StatusMark(look = look, done = done)
+        }
+        if (look.details.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            look.details.forEach { line ->
+                Text(
+                    line,
+                    style = HubType.small.copy(fontSize = 13.sp, lineHeight = 19.sp),
+                    color = p.muted,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
             }
         }
 
         AnimatedVisibility(
             visible = item.note.isNotBlank(),
-            enter = fadeIn(tween(200)) + expandVertically(spring(dampingRatio = 0.9f, stiffness = 500f)),
-            exit = fadeOut(tween(120)) + shrinkVertically(tween(180)),
+            enter = fadeIn(tween(180)) + expandVertically(tween(220, easing = Motion.EaseOut)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(180, easing = Motion.EaseOut)),
         ) {
             Text(
                 item.note,
-                style = HubType.small,
+                style = LabelStyle,
                 color = noteColor,
                 modifier = Modifier.padding(top = 12.dp),
             )
@@ -822,90 +865,92 @@ private fun ActionCard(
 
         AnimatedVisibility(
             visible = pending,
-            enter = fadeIn(tween(160)) + expandVertically(),
-            exit = fadeOut(tween(140)) + shrinkVertically(spring(dampingRatio = 0.9f, stiffness = 500f)),
+            enter = fadeIn(tween(160)) + expandVertically(tween(220, easing = Motion.EaseOut)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(200, easing = Motion.EaseOut)),
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(top = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                QuietButton("Cancel", onClick = onCancel, color = c.inkMuted)
-                if (onEdit != null) QuietButton("Edit", onClick = onEdit)
-                PrimaryButton(
-                    "Confirm",
-                    onClick = onConfirm,
-                    container = look.accent,
-                    content = look.onAccent,
-                    modifier = Modifier.weight(1f),
-                )
+                CardButton("Cancel", bg = p.quietBg, fg = p.quietFg, onClick = onCancel)
+                if (onEdit != null) CardButton("Edit", bg = p.quietBg, fg = p.quietFg, onClick = onEdit)
+                CardButton("Confirm", bg = p.confirmBg, fg = p.confirmFg, onClick = onConfirm, modifier = Modifier.weight(1f))
             }
         }
 
         AnimatedVisibility(
             visible = cancelled,
-            enter = fadeIn(tween(200)) + expandVertically(),
-            exit = fadeOut(tween(120)) + shrinkVertically(),
+            enter = fadeIn(tween(180)) + expandVertically(tween(220, easing = Motion.EaseOut)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(180, easing = Motion.EaseOut)),
         ) {
-            Text("Cancelled", style = HubType.small, color = c.inkMuted, modifier = Modifier.padding(top = 10.dp))
+            Text("Cancelled", style = LabelStyle, color = p.muted, modifier = Modifier.padding(top = 10.dp))
         }
     }
 }
 
+/** A pill button in the card's own colours. */
+@Composable
+private fun CardButton(text: String, bg: Color, fg: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .heightIn(min = 48.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .pressable(onClick = onClick, pressedScale = 0.95f, onClickLabel = text)
+            .padding(horizontal = 20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = HubType.button, color = fg, maxLines = 1)
+    }
+}
+
 /**
- * The card's icon disc in the accent tone. When the action is done it shrinks away and a
- * burst-shaped check pops in on a bouncy spring, turning as it lands.
+ * The card's icon in a round well. When the action is done the icon gives way to a check on
+ * an inverted disc (the card's text colour), which scales up from 0.7 in 220ms.
  */
 @Composable
 private fun StatusMark(look: ActionLook, done: Boolean) {
-    val c = Hub.colors
+    val p = look.palette
     val reduced = LocalReducedMotion.current
-    val pop = remember { Animatable(if (done) 1f else 0f) }
-    LaunchedEffect(done) {
-        if (done) pop.animateTo(1f, if (reduced) tween(160) else Motion.bouncy()) else pop.snapTo(0f)
-    }
-    val burst = remember { PolygonShape(HubShapes.burst) }
+    val pop by animateFloatAsState(
+        if (done) 1f else 0f,
+        tween(if (reduced) 150 else 220, easing = Motion.EaseOut),
+        label = "statusPop",
+    )
     Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier
                 .size(48.dp)
-                .graphicsLayer {
-                    val p = pop.value.coerceIn(0f, 1f)
-                    alpha = 1f - p
-                    val s = 1f - 0.15f * p
-                    scaleX = s
-                    scaleY = s
-                }
+                .graphicsLayer { alpha = 1f - pop }
                 .clip(CircleShape)
-                .background(look.soft),
+                .background(p.well),
             contentAlignment = Alignment.Center,
         ) {
             if (look.packageName != null) {
                 AppIcon(look.packageName, size = 32.dp, fallback = look.icon)
             } else {
-                Icon(look.icon, contentDescription = null, tint = look.accent, modifier = Modifier.size(24.dp))
+                Icon(look.icon, contentDescription = null, tint = p.iconTint, modifier = Modifier.size(22.dp))
             }
         }
-        if (done) {
+        if (pop > 0f) {
             Box(
                 Modifier
                     .size(48.dp)
                     .graphicsLayer {
-                        val p = pop.value
-                        alpha = (p * 1.5f).coerceIn(0f, 1f)
+                        alpha = pop
                         if (!reduced) {
-                            val s = 0.85f + 0.15f * p
+                            val s = 0.7f + 0.3f * pop
                             scaleX = s
                             scaleY = s
-                            rotationZ = (1f - p) * -50f
                         }
                     }
-                    .clip(burst)
-                    .background(c.ok)
+                    .clip(CircleShape)
+                    .background(p.fg)
                     .semantics { contentDescription = "Done" },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Check, contentDescription = null, tint = c.ground, modifier = Modifier.size(24.dp))
+                Icon(Icons.Rounded.Check, contentDescription = null, tint = p.bg, modifier = Modifier.size(24.dp))
             }
         }
     }

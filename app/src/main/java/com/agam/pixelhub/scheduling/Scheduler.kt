@@ -1,6 +1,7 @@
 package com.agam.pixelhub.scheduling
 
 import android.app.AlarmManager
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -25,9 +26,18 @@ class Scheduler(private val context: Context) {
     fun scheduleAlarmSnooze(id: Long, atMillis: Long) = setAlarmClock(atMillis, trigger(ACTION_ALARM_SNOOZE, id))
     fun cancelAlarm(id: Long) {
         cancel(ACTION_ALARM, id)
-        cancel(ACTION_ALARM_SNOOZE, id)
+        cancelAlarmSnooze(id)
     }
-    fun cancelAlarmSnooze(id: Long) = cancel(ACTION_ALARM_SNOOZE, id)
+    fun cancelAlarmSnooze(id: Long) {
+        cancel(ACTION_ALARM_SNOOZE, id)
+        context.getSystemService(NotificationManager::class.java).cancel(snoozedNotificationId(id))
+    }
+
+    /** Tapping "Cancel snooze" on the "Snoozed until" notification. */
+    fun cancelSnoozeIntent(id: Long): PendingIntent = PendingIntent.getBroadcast(
+        context, id.toInt(), intent(ACTION_ALARM_SNOOZE_CANCEL, id),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     /** Health nudges are quiet checks, so no status-bar alarm icon: plain exact alarm. */
     fun scheduleNudge(id: Long, atMillis: Long) = setExact(atMillis, trigger(ACTION_HEALTH_NUDGE, id))
@@ -75,8 +85,12 @@ class Scheduler(private val context: Context) {
         const val ACTION_REMINDER_SNOOZE = "com.agam.pixelhub.action.REMINDER_SNOOZE"
         const val ACTION_ALARM = "com.agam.pixelhub.action.ALARM"
         const val ACTION_ALARM_SNOOZE = "com.agam.pixelhub.action.ALARM_SNOOZE"
+        const val ACTION_ALARM_SNOOZE_CANCEL = "com.agam.pixelhub.action.ALARM_SNOOZE_CANCEL"
         const val ACTION_HEALTH_NUDGE = "com.agam.pixelhub.action.HEALTH_NUDGE"
         const val EXTRA_ID = "id"
         private const val SHOW_REQUEST = 1
+
+        /** Notification id of the "Snoozed until" note for one alarm. */
+        fun snoozedNotificationId(alarmId: Long): Int = 50_000 + alarmId.toInt()
     }
 }

@@ -64,6 +64,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -91,6 +93,7 @@ import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RecurrenceCalc
 import com.agam.pixelhub.scheduling.RepeatType
+import com.agam.pixelhub.ui.CardRadius
 import com.agam.pixelhub.ui.DaysPicker
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.HubSheet
@@ -165,16 +168,20 @@ internal fun ReminderEditorSheet(
     val scope = rememberCoroutineScope()
     val stagger = rememberStagger()
 
-    var title by remember { mutableStateOf(initial.title) }
-    var notes by remember { mutableStateOf(initial.notes) }
-    var date by remember { mutableStateOf(initial.at.toLocalDate()) }
-    var time by remember { mutableStateOf(initial.at.toLocalTime()) }
-    var type by remember { mutableStateOf(initial.recurrence.type) }
-    var mask by remember { mutableIntStateOf(initial.recurrence.daysMask) }
-    var interval by remember { mutableIntStateOf(initial.recurrence.interval.coerceIn(2, MAX_INTERVAL)) }
-    var showDate by remember { mutableStateOf(false) }
-    var showTime by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var title by rememberSaveable { mutableStateOf(initial.title) }
+    var notes by rememberSaveable { mutableStateOf(initial.notes) }
+    var date by rememberSaveable { mutableStateOf(initial.at.toLocalDate()) }
+    var time by rememberSaveable { mutableStateOf(initial.at.toLocalTime()) }
+    var type by rememberSaveable { mutableStateOf(initial.recurrence.type) }
+    var mask by rememberSaveable { mutableIntStateOf(initial.recurrence.daysMask) }
+    var interval by rememberSaveable {
+        val r = initial.recurrence
+        val custom = r.type == RepeatType.EVERY_N_DAYS || r.type == RepeatType.EVERY_N_WEEKS
+        mutableIntStateOf(if (custom) r.interval.coerceIn(1, MAX_INTERVAL) else 2)
+    }
+    var showDate by rememberSaveable { mutableStateOf(false) }
+    var showTime by rememberSaveable { mutableStateOf(false) }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
     // Keeps the last message on screen while the error line collapses.
     val lastError = remember { arrayOf("") }
     error?.let { lastError[0] = it }
@@ -239,9 +246,16 @@ internal fun ReminderEditorSheet(
                 Modifier.fillMaxWidth().padding(top = 4.dp).staggerIn(stagger, "head", 0),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Box(
+                    Modifier.size(48.dp).clip(CircleShape).background(c.sun),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Outlined.NotificationsActive, contentDescription = null, tint = c.onSun, modifier = Modifier.size(22.dp))
+                }
+                Spacer(Modifier.width(14.dp))
                 Text(
                     if (isNew) "New reminder" else "Edit reminder",
-                    style = HubType.title.copy(fontSize = 28.sp, lineHeight = 32.sp),
+                    style = HubType.title.copy(fontSize = 24.sp, lineHeight = 30.sp),
                     color = c.ink,
                     modifier = Modifier.weight(1f),
                 )
@@ -273,6 +287,8 @@ internal fun ReminderEditorSheet(
             }
 
             Spacer(Modifier.height(22.dp))
+            Text("When", style = HubType.section, color = c.ink, modifier = Modifier.staggerIn(stagger, "whenLabel", 2))
+            Spacer(Modifier.height(10.dp))
             Row(
                 Modifier.fillMaxWidth().staggerIn(stagger, "when", 2),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -335,7 +351,7 @@ internal fun ReminderEditorSheet(
 
             Spacer(Modifier.height(26.dp))
             Column(Modifier.staggerIn(stagger, "repeat", 4)) {
-                Text("Repeat", style = HubType.bodyStrong, color = c.ink)
+                Text("Repeat", style = HubType.section, color = c.ink)
                 Spacer(Modifier.height(10.dp))
                 FlowRow(
                     Modifier.fillMaxWidth(),
@@ -404,8 +420,6 @@ internal fun ReminderEditorSheet(
                 PrimaryButton(
                     text = "Save reminder",
                     onClick = { save() },
-                    container = c.sky,
-                    content = c.onSky,
                     icon = Icons.Outlined.Check,
                     modifier = Modifier
                         .weight(1f)
@@ -487,8 +501,8 @@ private fun roll(up: Boolean, reduced: Boolean): ContentTransform =
         fadeIn(tween(120)) togetherWith fadeOut(tween(120))
     } else {
         val dir = if (up) 1 else -1
-        (slideInVertically(tween(380, easing = Motion.EaseOut)) { h -> dir * h } + fadeIn(tween(240))) togetherWith
-            (slideOutVertically(tween(380, easing = Motion.EaseOut)) { h -> -dir * h } + fadeOut(tween(160)))
+        (slideInVertically(tween(260, easing = Motion.EaseOut)) { h -> dir * h } + fadeIn(tween(200))) togetherWith
+            (slideOutVertically(tween(220, easing = Motion.EaseOut)) { h -> -dir * h } + fadeOut(tween(140)))
     }
 
 /** A big tappable value: icon, the value itself, and one quiet line under it. */
@@ -505,12 +519,18 @@ private fun ValueChip(
     val c = Hub.colors
     Column(
         modifier
-            .clip(RoundedCornerShape(26.dp))
+            .clip(RoundedCornerShape(CardRadius))
             .background(c.raised2)
-            .pressable(onClick = onClick, onClickLabel = "Change ${description.lowercase()}")
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .pressable(onClick = onClick, pressedScale = 0.97f, onClickLabel = "Change ${description.lowercase()}")
+            .padding(horizontal = 14.dp, vertical = 14.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = c.sky, modifier = Modifier.size(20.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(CircleShape).background(c.sun), contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = null, tint = c.onSun, modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(description, style = HubType.small, color = c.inkMuted, maxLines = 1)
+        }
         Spacer(Modifier.height(10.dp))
         value()
         Spacer(Modifier.height(2.dp))
@@ -619,7 +639,7 @@ private fun IntervalStepper(value: Int, weeks: Boolean, onChange: (Int) -> Unit)
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(26.dp))
+            .clip(RoundedCornerShape(CardRadius))
             .background(c.raised2)
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -655,12 +675,12 @@ private fun StepButton(icon: ImageVector, description: String, enabled: Boolean,
             .size(44.dp)
             .graphicsLayer { this.alpha = alpha }
             .clip(CircleShape)
-            .background(c.skySoft)
+            .background(c.raised)
             .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.88f, onClickLabel = description)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = c.sky, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -671,12 +691,17 @@ private fun Summary(text: String, modifier: Modifier = Modifier) {
     Row(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(c.skySoft)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .clip(RoundedCornerShape(CardRadius))
+            .background(c.sun)
+            .padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Outlined.NotificationsActive, contentDescription = null, tint = c.sky, modifier = Modifier.size(20.dp))
+        Box(
+            Modifier.size(40.dp).clip(CircleShape).background(c.onSun.copy(alpha = 0.10f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Outlined.Schedule, contentDescription = null, tint = c.onSun, modifier = Modifier.size(20.dp))
+        }
         Spacer(Modifier.width(12.dp))
         AnimatedContent(
             targetState = text,
@@ -685,7 +710,7 @@ private fun Summary(text: String, modifier: Modifier = Modifier) {
             },
             label = "summary",
         ) { t ->
-            Text(t, style = HubType.bodyStrong, color = c.ink)
+            Text(t, style = HubType.bodyStrong, color = c.onSun)
         }
     }
 }
@@ -706,7 +731,7 @@ private fun DeleteButton(onDelete: () -> Unit) {
     val fg by animateColorAsState(if (armed) c.onDanger else c.danger, tween(180), label = "delFg")
     Row(
         Modifier
-            .height(44.dp)
+            .height(48.dp)
             .clip(CircleShape)
             .background(bg)
             .pressable(
@@ -720,7 +745,7 @@ private fun DeleteButton(onDelete: () -> Unit) {
                 },
                 onClickLabel = if (armed) "Delete reminder" else "Delete",
             )
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -778,3 +803,18 @@ private fun summaryText(
         RepeatType.EVERY_N_WEEKS -> "$day at $at, then every ${if (interval <= 1) "week" else "$interval weeks"}"
     }
 }
+
+/** Keeps an open "new reminder" draft through rotation and theme changes. */
+val ReminderDraftSaver: Saver<ReminderDraft?, ArrayList<Any>> = Saver(
+    save = { d ->
+        d?.let { arrayListOf(it.title, it.notes, it.at.toString(), it.recurrence.type.name, it.recurrence.daysMask, it.recurrence.interval) }
+    },
+    restore = { l ->
+        ReminderDraft(
+            title = l[0] as String,
+            notes = l[1] as String,
+            at = LocalDateTime.parse(l[2] as String),
+            recurrence = Recurrence(RepeatType.valueOf(l[3] as String), l[4] as Int, l[5] as Int),
+        )
+    },
+)

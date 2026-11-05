@@ -8,6 +8,9 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.graphics.shapes.toPath
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -20,7 +23,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,7 +45,6 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -55,19 +56,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asComposePath
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -81,7 +79,11 @@ import com.agam.pixelhub.health.HealthRepository
 import com.agam.pixelhub.health.HealthStatus
 import com.agam.pixelhub.ui.PrimaryButton
 import com.agam.pixelhub.ui.QuietButton
-import com.agam.pixelhub.ui.home.Dot
+import com.agam.pixelhub.ui.CardRadius
+import com.agam.pixelhub.ui.expenses.ProgressTrack
+import com.agam.pixelhub.ui.expenses.RowMeta
+import com.agam.pixelhub.ui.expenses.RowTitle
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.HubShapes
 import com.agam.pixelhub.ui.motion.Motion
@@ -312,14 +314,15 @@ internal fun pointOn(center: Offset, radius: Float, angleDeg: Float): Offset {
 /* ----------------------------------------- Home card -------------------------------------- */
 
 /**
- * Today's steps on Home: a small ring that sweeps to the day's progress (and bursts when the
- * goal is reached), the count rolling like an odometer, and exercise and energy beneath.
- * The whole card opens the Health page.
+ * Today's steps on Home, in the list-card language: a sun well with the walker, "Steps today"
+ * and a quiet line under it, then the count rolling like an odometer against the goal with a
+ * bar to it. The whole card opens the Health page.
  */
 @Composable
 fun HealthHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val c = Hub.colors
     val context = LocalContext.current
+    val readFailed by context.container.health.readFailed.collectAsStateWithLifecycle()
     val reduced = LocalReducedMotion.current
     val access = rememberHealthAccess()
     val today by rememberToday(access)
@@ -331,129 +334,89 @@ fun HealthHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
         data == null -> CardKind.LOADING
         else -> CardKind.DATA
     }
+    val steps = data?.steps ?: 0L
+    val reached = data != null && steps >= goal
+    val pct = if (goal > 0L) steps * 100 / goal else 0L
+    val meta = when (kind) {
+        CardKind.LOADING -> if (readFailed) "Couldn't read Health Connect. Retrying." else "Reading Health Connect"
+        CardKind.CONNECT -> when (access.status) {
+            HealthStatus.AVAILABLE -> "Tap to connect Health Connect"
+            HealthStatus.NEEDS_UPDATE -> "Health Connect needs an update"
+            HealthStatus.UNAVAILABLE -> "Health Connect isn't available on this phone"
+        }
+        CardKind.DATA -> "${data?.exerciseMinutes ?: 0L} min exercise • ${grouped(data?.let { kcal(it) } ?: 0L)} kcal"
+    }
 
-    Row(
+    Column(
         modifier
             .fillMaxWidth()
             .pressable(onClick = onOpen, pressedScale = 0.97f, onClickLabel = "Open Health", showRipple = false)
-            .clip(RoundedCornerShape(28.dp))
-            .background(c.raised)
-            .padding(start = 16.dp, end = 12.dp, top = 16.dp, bottom = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .hubCard(c.raised)
+            .padding(18.dp),
     ) {
-        Box(Modifier.size(76.dp), contentAlignment = Alignment.Center) {
-            StepRing(
-                fraction = data?.let { it.steps / goal.coerceAtLeast(1L).toFloat() },
-                modifier = Modifier.size(76.dp),
-            )
-            val iconTint by animateColorAsState(if (kind == CardKind.DATA) c.ok else c.inkMuted, tween(300), label = "walkTint")
-            Icon(
-                Icons.AutoMirrored.Outlined.DirectionsWalk,
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(24.dp),
-            )
-        }
-        Spacer(Modifier.width(16.dp))
-        AnimatedContent(
-            targetState = kind,
-            transitionSpec = {
-                if (reduced) {
-                    fadeIn(tween(160)) togetherWith fadeOut(tween(100)) using SizeTransform(clip = false)
-                } else {
-                    (fadeIn(tween(260, delayMillis = 60)) + slideInVertically(tween(340, easing = Motion.EaseOut)) { it / 4 }) togetherWith
-                        (fadeOut(tween(120)) + slideOutVertically(tween(200)) { -it / 6 }) using SizeTransform(clip = false)
-                }
-            },
-            contentAlignment = Alignment.CenterStart,
-            modifier = Modifier.weight(1f),
-            label = "healthCard",
-        ) { k ->
-            when (k) {
-                CardKind.LOADING -> Column {
-                    Text("Steps today", style = HubType.bodyStrong, color = c.ink)
-                    Text("Reading Health Connect", style = HubType.small, color = c.inkMuted)
-                }
-                CardKind.CONNECT -> Text(
-                    if (access.status == HealthStatus.AVAILABLE) {
-                        "Connect Health Connect to see today's steps"
-                    } else {
-                        "Health Connect needs an update to show today's steps"
-                    },
-                    style = HubType.bodyStrong,
-                    color = c.ink,
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(42.dp).clip(CircleShape).background(c.sun), contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.DirectionsWalk,
+                    contentDescription = null,
+                    tint = c.onSun,
+                    modifier = Modifier.size(20.dp),
                 )
-                CardKind.DATA -> {
-                    val a = today
-                    Column {
-                        RollingText(grouped(a?.steps ?: 0L), style = HubType.clockMedium, color = c.ink)
-                        Spacer(Modifier.height(2.dp))
-                        RollingText(
-                            "of ${grouped(goal)} steps",
-                            style = HubType.small.copy(fontFeatureSettings = "tnum"),
-                            color = if ((a?.steps ?: 0L) >= goal) c.ok else c.inkMuted,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        SmallMetric(c.sky, "${a?.exerciseMinutes ?: 0L} active minutes")
-                        Spacer(Modifier.height(2.dp))
-                        SmallMetric(c.dawn, "${grouped(a?.let { kcal(it) } ?: 0L)} active kcal")
-                    }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Steps today", style = RowTitle, color = c.ink, maxLines = 1)
+                AnimatedContent(
+                    targetState = meta,
+                    transitionSpec = {
+                        fadeIn(tween(if (reduced) 120 else 200)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false)
+                    },
+                    label = "healthMeta",
+                ) { t ->
+                    Text(t, style = RowMeta, color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            Box(Modifier.size(36.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
+            }
         }
-        Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = c.inkMuted)
+        AnimatedVisibility(
+            visible = kind == CardKind.DATA,
+            enter = expandVertically(tween(if (reduced) 0 else 240, easing = Motion.EaseOut)) + fadeIn(tween(200)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(120)),
+        ) {
+            Column {
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    RollingText(grouped(steps), style = HubType.clockMedium, color = c.ink)
+                    Text(
+                        " / ${grouped(goal)}",
+                        style = HubType.small.copy(fontFeatureSettings = "tnum"),
+                        color = c.inkMuted,
+                        maxLines = 1,
+                        modifier = Modifier.padding(bottom = 7.dp),
+                    )
+                    Spacer(Modifier.weight(1f))
+                    RollingText(
+                        "$pct%",
+                        style = HubType.clockSmall,
+                        color = if (reached) c.ok else c.ink,
+                        modifier = Modifier.padding(bottom = 5.dp),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                ProgressTrack(
+                    fraction = steps / goal.coerceAtLeast(1L).toFloat(),
+                    color = if (reached) c.ok else c.ink,
+                    track = c.well,
+                    height = 8.dp,
+                )
+            }
+        }
     }
 }
 
 private enum class CardKind { LOADING, CONNECT, DATA }
-
-@Composable
-private fun SmallMetric(color: Color, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Dot(color, size = 7.dp)
-        Spacer(Modifier.width(8.dp))
-        Text(text, style = HubType.small, color = Hub.colors.ink)
-    }
-}
-
-/** A single round-capped arc on a raised2 track, sweeping in from the top. */
-@Composable
-private fun StepRing(fraction: Float?, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val sweep = remember { Animatable(0f) }
-    val pop = remember { Animatable(0f) }
-    val ghost = remember { Animatable(1f) }
-    val burst = rememberBurstPath()
-    val raw = fraction ?: 0f
-    LaunchedEffect(raw) {
-        val target = raw.coerceIn(0f, 1f)
-        when {
-            reduced -> sweep.snapTo(target)
-            sweep.value == 0f -> sweep.animateTo(target, tween(1100, easing = Motion.EaseOut))
-            else -> sweep.animateTo(target, Motion.gentle())
-        }
-        if (raw >= 1f) popGoal(pop, ghost, reduced) else unpopGoal(pop, ghost)
-    }
-    val trackAlpha by animateFloatAsState(if (fraction == null) 0.6f else 1f, tween(300), label = "trackAlpha")
-    Canvas(modifier.clearAndSetSemantics { }) {
-        val stroke = 7.dp.toPx()
-        val r = size.minDimension / 2f - stroke * 0.95f
-        drawCircle(c.raised2.copy(alpha = trackAlpha), radius = r, center = center, style = Stroke(stroke))
-        val s = sweep.value
-        if (s > 0.002f) {
-            drawArc(
-                c.ok, startAngle = -90f, sweepAngle = 360f * s, useCenter = false,
-                topLeft = Offset(center.x - r, center.y - r), size = Size(r * 2, r * 2),
-                style = Stroke(stroke, cap = StrokeCap.Round),
-            )
-            drawGoalKnob(
-                burst, pointOn(center, r, -90f + 360f * s), stroke, c.ok, c.raised,
-                pop.value, ghost.value, reduced,
-            )
-        }
-    }
-}
 
 /* -------------------------------------- Settings block ------------------------------------ */
 
@@ -475,7 +438,7 @@ fun HealthSettingsSection() {
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(CardRadius))
                 .background(c.raised)
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -518,8 +481,6 @@ fun HealthSettingsSection() {
                         HealthStatus.UNAVAILABLE -> "Open Play Store"
                     },
                     onClick = connect,
-                    container = c.ok,
-                    content = c.ground,
                 )
                 connected == true && background == false && access.status == HealthStatus.AVAILABLE ->
                     QuietButton("Allow background reading", onClick = connect, color = c.ok)

@@ -20,18 +20,16 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -43,26 +41,27 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.DirectionsWalk
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.LocalFireDepartment
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Remove
+import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -73,6 +72,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -85,9 +85,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -98,12 +96,10 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -119,17 +115,26 @@ import com.agam.pixelhub.health.DayActivity
 import com.agam.pixelhub.health.HealthStatus
 import com.agam.pixelhub.health.NudgeMath
 import com.agam.pixelhub.scheduling.Days
+import com.agam.pixelhub.ui.CardRadius
 import com.agam.pixelhub.ui.DaysPicker
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.Gutter
+import com.agam.pixelhub.ui.HubListRow
 import com.agam.pixelhub.ui.HubSheet
 import com.agam.pixelhub.ui.HubSwitch
 import com.agam.pixelhub.ui.HubTextField
 import com.agam.pixelhub.ui.PrimaryButton
+import com.agam.pixelhub.ui.QuickAction
 import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.ScreenScaffold
-import com.agam.pixelhub.ui.SectionHeader
 import com.agam.pixelhub.ui.TimeSelectDialog
+import com.agam.pixelhub.ui.expenses.HeroPeek
+import com.agam.pixelhub.ui.expenses.NotchedHero
+import com.agam.pixelhub.ui.expenses.PillDisc
+import com.agam.pixelhub.ui.expenses.ProgressTrack
+import com.agam.pixelhub.ui.expenses.RowMeta
+import com.agam.pixelhub.ui.expenses.RowTitle
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.home.Dot
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
@@ -156,11 +161,12 @@ private const val GOAL_MIN = 1_000L
 private const val GOAL_MAX = 50_000L
 
 /**
- * The Health page: today as three activity rings, the last week as bars, the step goal, and
- * nudges that notify you when you're behind. Everything comes from Health Connect.
+ * The Health page: today's steps on a sun card with the step goal in its notch, quick
+ * actions, today's other figures, the last week as bars, and nudges that notify you when
+ * you're behind. Everything comes from Health Connect; every control is a direct one.
  */
 @Composable
-fun HealthScreen(onBack: () -> Unit) {
+fun HealthScreen() {
     val context = LocalContext.current
     val c = context.container
     val colors = Hub.colors
@@ -197,18 +203,20 @@ fun HealthScreen(onBack: () -> Unit) {
         }
     }
     val nudges by c.healthNudges.all.collectAsStateWithLifecycle<List<HealthNudge>?>(initialValue = null)
-    var creating by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<HealthNudge?>(null) }
+    var creating by rememberSaveable { mutableStateOf(false) }
+    var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    val list = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val reduced = LocalReducedMotion.current
 
     ScreenScaffold(
         title = "Health",
-        navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
-        },
     ) { padding ->
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 56.dp),
+            state = list,
+            contentPadding = PaddingValues(top = 4.dp, bottom = 40.dp),
         ) {
             when (access.connected) {
                 null -> item(key = "checking") {
@@ -225,119 +233,56 @@ fun HealthScreen(onBack: () -> Unit) {
                     )
                 }
                 true -> {
-                    item(key = "rings") {
-                        RingsHero(
+                    item(key = "hero") {
+                        StepsHero(
                             activity = today,
                             goal = goal,
-                            modifier = Modifier.animateItem().staggerIn(stagger, "rings", 0),
+                            onGoal = { draftGoal = it },
+                            modifier = Modifier.animateItem().staggerIn(stagger, "hero", 0).padding(horizontal = Gutter),
                         )
                     }
-                    item(key = "metrics") {
-                        MetricsBlock(today, Modifier.animateItem().staggerIn(stagger, "metrics", 1))
+                    item(key = "actions") {
+                        HealthActions(
+                            onNudge = { creating = true },
+                            onWeek = {
+                                scope.launch {
+                                    // The week card is the fourth item: hero, actions, today, week.
+                                    if (reduced) list.scrollToItem(3) else list.animateScrollToItem(3)
+                                }
+                            },
+                            onAccess = { manageAccess(context) },
+                            onPrivacy = { openPrivacy(context) },
+                            modifier = Modifier.animateItem().staggerIn(stagger, "actions", 1),
+                        )
                     }
-
-                    item(key = "weekHeader") {
-                        SectionHeader("Last 7 days", Modifier.animateItem().staggerIn(stagger, "weekHeader", 2))
+                    item(key = "today") {
+                        TodayCard(today, Modifier.animateItem().staggerIn(stagger, "today", 2))
                     }
                     item(key = "week") {
                         WeekSection(history, today, goal, Modifier.animateItem().staggerIn(stagger, "week", 3))
                     }
-
-                    item(key = "goalHeader") {
-                        SectionHeader("Daily step goal", Modifier.animateItem().staggerIn(stagger, "goalHeader", 4))
-                    }
-                    item(key = "goal") {
-                        StepGoalControl(
-                            goal = goal,
-                            onChange = { draftGoal = it },
-                            modifier = Modifier.animateItem().staggerIn(stagger, "goal", 5),
+                    item(key = "nudges") {
+                        NudgesCard(
+                            nudges = nudges,
+                            backgroundDenied = access.background == false,
+                            onToggle = { n, on -> c.appScope.launch { c.healthNudges.save(n.copy(enabled = on)) } },
+                            onEdit = { editingId = it.id },
+                            onAdd = { creating = true },
+                            onManage = { manageAccess(context) },
+                            modifier = Modifier.animateItem().staggerIn(stagger, "nudges", 4),
                         )
                     }
-
-                    item(key = "nudgesHeader") {
-                        SectionHeader("Nudges", Modifier.animateItem().staggerIn(stagger, "nudgesHeader", 6))
-                    }
-                    item(key = "nudgesIntro") {
+                    item(key = "source") {
                         Text(
-                            "A notification at a time you choose, sent only if you're behind by then.",
-                            style = HubType.body,
+                            "Activity comes from Health Connect. Fitbit and Google Fit only show up here with Health Connect sync turned on in their settings.",
+                            style = HubType.small,
                             color = colors.inkMuted,
                             modifier = Modifier
                                 .animateItem()
-                                .staggerIn(stagger, "nudgesIntro", 7)
-                                .padding(horizontal = Gutter)
-                                .padding(bottom = 8.dp),
+                                .staggerIn(stagger, "source", 5)
+                                .padding(horizontal = Gutter + 4.dp)
+                                .padding(top = 20.dp),
                         )
-                    }
-                    val list = nudges.orEmpty()
-                    if (list.isNotEmpty() && access.background == false) {
-                        item(key = "bgNotice") {
-                            BackgroundNotice(
-                                onManage = { manageAccess(context) },
-                                modifier = Modifier.animateItem().staggerIn(stagger, "bgNotice", 8),
-                            )
-                        }
-                    }
-                    itemsIndexed(list, key = { _, n -> "nudge${n.id}" }) { i, n ->
-                        NudgeRow(
-                            nudge = n,
-                            onToggle = { on -> c.appScope.launch { c.healthNudges.save(n.copy(enabled = on)) } },
-                            onClick = { editing = n },
-                            modifier = Modifier.animateItem().staggerIn(stagger, "nudge${n.id}", 9 + i),
-                        )
-                    }
-                    if (nudges != null && list.isEmpty()) {
-                        item(key = "nudgesEmpty") {
-                            Text(
-                                "None yet. A good first one: steps under 6,000 at 18:00.",
-                                style = HubType.small,
-                                color = colors.inkMuted,
-                                modifier = Modifier
-                                    .animateItem()
-                                    .staggerIn(stagger, "nudgesEmpty", 9)
-                                    .padding(horizontal = Gutter)
-                                    .padding(bottom = 4.dp),
-                            )
-                        }
-                    }
-                    item(key = "addNudge") {
-                        Box(
-                            Modifier
-                                .animateItem()
-                                .staggerIn(stagger, "addNudge", 10)
-                                .padding(horizontal = Gutter)
-                                .padding(top = 8.dp),
-                        ) {
-                            QuietButton("Add nudge", onClick = { creating = true }, color = colors.ok, icon = Icons.Outlined.Add)
-                        }
-                    }
-
-                    item(key = "manage") {
-                        Column(
-                            Modifier
-                                .animateItem()
-                                .staggerIn(stagger, "manage", 11)
-                                .padding(horizontal = Gutter)
-                                .padding(top = 36.dp),
-                        ) {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
-                            ) {
-                                QuietButton(
-                                    "Manage access",
-                                    onClick = { manageAccess(context) },
-                                    icon = Icons.AutoMirrored.Outlined.OpenInNew,
-                                )
-                                QuietButton("Privacy", onClick = { openPrivacy(context) }, color = colors.inkMuted)
-                            }
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                "Activity comes from Health Connect. Fitbit and Google Fit only show up here with Health Connect sync turned on in their settings.",
-                                style = HubType.small,
-                                color = colors.inkMuted,
-                            )
-                        }
                     }
                 }
             }
@@ -356,18 +301,18 @@ fun HealthScreen(onBack: () -> Unit) {
             onDelete = null,
         )
     }
-    editing?.let { n ->
+    nudges?.firstOrNull { it.id == editingId }?.let { n ->
         key(n.id) {
             NudgeEditor(
                 initial = n,
                 isNew = false,
-                onDismiss = { editing = null },
+                onDismiss = { editingId = null },
                 onSave = { updated ->
-                    editing = null
+                    editingId = null
                     c.appScope.launch { c.healthNudges.save(updated) }
                 },
                 onDelete = {
-                    editing = null
+                    editingId = null
                     c.appScope.launch { c.healthNudges.delete(n) }
                 },
             )
@@ -442,8 +387,6 @@ private fun ConnectHero(
         PrimaryButton(
             text = button,
             onClick = onConnect,
-            container = c.ok,
-            content = c.ground,
             modifier = Modifier.fillMaxWidth(),
         )
         AnimatedVisibility(
@@ -455,9 +398,9 @@ private fun ConnectHero(
                 Modifier
                     .padding(top = 14.dp)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
+                    .clip(RoundedCornerShape(CardRadius))
                     .background(c.dangerSoft)
-                    .padding(16.dp),
+                    .padding(18.dp),
             ) {
                 Text("Access wasn't granted", style = HubType.bodyStrong, color = c.ink)
                 Text(
@@ -530,8 +473,8 @@ private fun ActivityRings(
                 when {
                     reduced -> sweeps[i].snapTo(target)
                     first -> {
-                        delay(160L + i * 170L)
-                        sweeps[i].animateTo(target, tween(1_300, easing = Motion.EaseOut))
+                        delay(80L + i * 70L)
+                        sweeps[i].animateTo(target, tween(300, easing = Motion.EaseOut))
                     }
                     else -> sweeps[i].animateTo(target, Motion.gentle())
                 }
@@ -576,97 +519,194 @@ private fun ActivityRings(
     }
 }
 
-/** The rings with today's steps rolling in the middle. */
+/* ------------------------------------------ The hero -------------------------------------- */
+
+private val GoalPillWidth = 176.dp
+
+/**
+ * Today's steps on the sun card: the count, what's left to the goal, a bar to it, and when
+ * Health Connect last answered. The step goal sits in the black pill in the notch: tap − or +
+ * to move it by 500, hold to keep going.
+ */
 @Composable
-private fun RingsHero(activity: DailyActivity?, goal: Long, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    val steps = activity?.steps ?: 0L
-    val minutes = activity?.exerciseMinutes ?: 0L
-    val energy = activity?.let { kcal(it) } ?: 0L
-    val reached = activity != null && steps >= goal
-    val rings = listOf(
-        RingSpec(steps / goal.coerceAtLeast(1L).toFloat(), c.ok),
-        RingSpec(minutes / EXERCISE_GOAL_MIN.toFloat(), c.sky),
-        RingSpec(energy / ACTIVE_KCAL_GOAL.toFloat(), c.dawn),
-    )
-    val stepsText = grouped(steps)
-    val caption by animateColorAsState(if (reached) c.ok else c.inkMuted, tween(400), label = "goalCaption")
-    Box(modifier.fillMaxWidth().padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
-        ActivityRings(
-            rings = rings,
-            loaded = activity != null,
-            description = "${grouped(steps)} of ${grouped(goal)} steps, $minutes of $EXERCISE_GOAL_MIN exercise minutes, " +
-                "${grouped(energy)} of ${grouped(ACTIVE_KCAL_GOAL)} active kilocalories",
-            modifier = Modifier.widthIn(max = 340.dp).fillMaxWidth().aspectRatio(1f),
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                RollingText(
-                    stepsText,
-                    style = if (stepsText.length > 5) HubType.clockLarge.copy(fontSize = 54.sp, lineHeight = 54.sp) else HubType.clockLarge,
-                    color = c.ink,
-                )
-                Spacer(Modifier.height(4.dp))
-                RollingText(
-                    "of ${grouped(goal)} steps",
-                    style = HubType.body.copy(fontFeatureSettings = "tnum"),
-                    color = caption,
-                )
-            }
-        }
-    }
-}
-
-/* ---------------------------------------- Today's figures --------------------------------- */
-
-private val MetricFigure = HubType.clockMedium.copy(fontSize = 36.sp, lineHeight = 36.sp)
-
-@Composable
-private fun MetricsBlock(activity: DailyActivity?, modifier: Modifier = Modifier) {
+private fun StepsHero(activity: DailyActivity?, goal: Long, onGoal: (Long) -> Unit, modifier: Modifier = Modifier) {
     val c = Hub.colors
     val context = LocalContext.current
+    val readFailed by context.container.health.readFailed.collectAsStateWithLifecycle()
+    val on = c.onSun
+    val soft = on.copy(alpha = 0.72f)
+    val steps = activity?.steps ?: 0L
+    val reached = activity != null && steps >= goal
+    val pct = if (goal > 0L) (steps * 100 / goal) else 0L
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
             delay(20_000)
             value = System.currentTimeMillis()
         }
     }
-    val allZero = activity != null && activity.steps == 0L && activity.exerciseMinutes == 0L && kcal(activity) == 0L
-    Column(modifier.fillMaxWidth().padding(horizontal = Gutter).padding(top = 12.dp)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(28.dp))
-                .background(c.raised)
-                .padding(horizontal = 18.dp, vertical = 18.dp),
-        ) {
-            MetricCell("${activity?.exerciseMinutes ?: 0L}", "min", "Exercise", c.sky, Modifier.weight(1f))
-            MetricCell(grouped(activity?.let { kcal(it) } ?: 0L), "kcal", "Energy", c.dawn, Modifier.weight(1f))
-            MetricCell(km(activity?.distanceMeters ?: 0.0), "km", "Distance", c.ok.copy(alpha = 0.45f), Modifier.weight(1f))
+    NotchedHero(
+        color = c.sun,
+        notchWidth = GoalPillWidth,
+        modifier = modifier,
+        pill = { GoalPill(goal = goal, onChange = onGoal) },
+    ) {
+        Row(Modifier.fillMaxWidth().height(HeroPeek), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.AutoMirrored.Outlined.DirectionsWalk, contentDescription = null, tint = on, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("Steps today", style = RowTitle, color = on, maxLines = 1)
+            Spacer(Modifier.weight(1f))
+            RollingText("$pct%", style = HubType.clockSmall.copy(fontSize = 14.sp), color = on)
         }
-        Text(
-            activity?.let { updatedText(context, it.asOf, now) } ?: "Reading Health Connect",
-            style = HubType.small,
-            color = c.inkMuted,
-            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp),
+        Row(verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Text("Walked", style = HubType.small, color = soft, maxLines = 1)
+                RollingText(grouped(steps), style = HubType.clockLarge, color = on)
+            }
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 12.dp, bottom = 6.dp)) {
+                Text(if (reached) "Goal" else "To go", style = RowMeta, color = soft, maxLines = 1)
+                RollingText(
+                    if (reached) "Reached" else grouped((goal - steps).coerceAtLeast(0L)),
+                    style = HubType.clockSmall,
+                    color = on,
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        ProgressTrack(
+            fraction = steps / goal.coerceAtLeast(1L).toFloat(),
+            color = on,
+            track = on.copy(alpha = 0.14f),
+        )
+        Spacer(Modifier.height(10.dp))
+        Column(Modifier.padding(end = GoalPillWidth)) {
+            Text("Health Connect", style = RowMeta, color = soft, maxLines = 1)
+            Text(
+                activity?.let { updatedText(context, it.asOf, now) }
+                    ?: if (readFailed) "Couldn't read it. Trying again in a minute." else "Reading…",
+                style = HubType.small.copy(fontWeight = FontWeight.Medium),
+                color = on,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** − 8,000 + in the black pill. Holding a disc repeats; the goal saves once the taps stop. */
+@Composable
+private fun RowScope.GoalPill(goal: Long, onChange: (Long) -> Unit) {
+    val c = Hub.colors
+    PillDisc(
+        icon = Icons.Outlined.Remove,
+        description = "Lower the goal by 500 steps",
+        enabled = goal > GOAL_MIN,
+        onStep = { onChange((goal - GOAL_STEP).coerceIn(GOAL_MIN, GOAL_MAX)) },
+        repeat = true,
+    )
+    Column(
+        Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = "Daily goal ${grouped(goal)} steps" },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        RollingText(grouped(goal), style = HubType.button.copy(fontFeatureSettings = "tnum"), color = c.onChrome)
+        Text("goal", style = RowMeta, color = c.onChrome.copy(alpha = 0.75f), maxLines = 1)
+    }
+    PillDisc(
+        icon = Icons.Outlined.Add,
+        description = "Raise the goal by 500 steps",
+        enabled = goal < GOAL_MAX,
+        onStep = { onChange((goal + GOAL_STEP).coerceIn(GOAL_MIN, GOAL_MAX)) },
+        repeat = true,
+    )
+}
+
+/** New nudge, jump to the week, Health Connect access, privacy: icons in round wells. */
+@Composable
+private fun HealthActions(
+    onNudge: () -> Unit,
+    onWeek: () -> Unit,
+    onAccess: () -> Unit,
+    onPrivacy: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = Gutter)
+            .padding(top = 16.dp)
+            .hubCard(Hub.colors.raised)
+            .padding(horizontal = 6.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        QuickAction(Icons.Outlined.NotificationsActive, "Nudge", onClick = onNudge, modifier = Modifier.weight(1f))
+        QuickAction(Icons.Outlined.BarChart, "Week", onClick = onWeek, modifier = Modifier.weight(1f))
+        QuickAction(Icons.AutoMirrored.Outlined.OpenInNew, "Access", onClick = onAccess, modifier = Modifier.weight(1f))
+        QuickAction(Icons.Outlined.Lock, "Privacy", onClick = onPrivacy, modifier = Modifier.weight(1f))
+    }
+}
+
+/* ---------------------------------------- Today's figures --------------------------------- */
+
+/** Exercise, energy and distance as list rows, each in its own coloured well. */
+@Composable
+private fun TodayCard(activity: DailyActivity?, modifier: Modifier = Modifier) {
+    val c = Hub.colors
+    val minutes = activity?.exerciseMinutes ?: 0L
+    val energy = activity?.let { kcal(it) } ?: 0L
+    val allZero = activity != null && activity.steps == 0L && minutes == 0L && energy == 0L
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = Gutter)
+            .padding(top = 16.dp)
+            .hubCard(c.raised)
+            .padding(top = 14.dp, bottom = 8.dp),
+    ) {
+        Text("Today", style = HubType.section, color = c.ink, modifier = Modifier.padding(horizontal = 18.dp).padding(bottom = 4.dp))
+        HubListRow(
+            icon = Icons.Outlined.Timer,
+            title = "Exercise",
+            meta = "Goal $EXERCISE_GOAL_MIN min",
+            modifier = Modifier.padding(horizontal = 6.dp),
+            trailing = "$minutes min",
+            iconTint = c.sky,
+            iconTone = c.skySoft,
+        )
+        HubListRow(
+            icon = Icons.Outlined.LocalFireDepartment,
+            title = "Active energy",
+            meta = "Goal ${grouped(ACTIVE_KCAL_GOAL)} kcal",
+            modifier = Modifier.padding(horizontal = 6.dp),
+            trailing = "${grouped(energy)} kcal",
+            iconTint = c.dawn,
+            iconTone = c.dawnSoft,
+        )
+        HubListRow(
+            icon = Icons.Outlined.Route,
+            title = "Distance",
+            meta = "Walking and running",
+            modifier = Modifier.padding(horizontal = 6.dp),
+            trailing = "${km(activity?.distanceMeters ?: 0.0)} km",
+            iconTint = c.ok,
+            iconTone = c.okSoft,
         )
         AnimatedVisibility(
             visible = allZero,
-            enter = expandVertically(tween(360, easing = Motion.EaseOut)) + fadeIn(tween(260, delayMillis = 80)),
-            exit = shrinkVertically(tween(240)) + fadeOut(tween(160)),
+            enter = expandVertically(tween(260, easing = Motion.EaseOut)) + fadeIn(tween(200, delayMillis = 60)),
+            exit = shrinkVertically(tween(200)) + fadeOut(tween(140)),
         ) {
             Row(
                 Modifier
-                    .padding(top = 14.dp)
+                    .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(c.okSoft)
-                    .padding(16.dp),
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(c.well)
+                    .padding(14.dp),
                 verticalAlignment = Alignment.Top,
             ) {
-                Icon(Icons.Outlined.Sync, contentDescription = null, tint = c.ok, modifier = Modifier.size(22.dp))
+                Icon(Icons.Outlined.Sync, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Nothing recorded yet today", style = HubType.bodyStrong, color = c.ink)
+                    Text("Nothing recorded yet today", style = RowTitle, color = c.ink)
                     Text(
                         "If you track with Fitbit or Google Fit, turn on Health Connect sync in that app. Until then, everything here stays at 0.",
                         style = HubType.small,
@@ -674,23 +714,6 @@ private fun MetricsBlock(activity: DailyActivity?, modifier: Modifier = Modifier
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun MetricCell(value: String, unit: String, label: String, color: Color, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    Column(modifier) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            RollingText(value, style = MetricFigure, color = c.ink)
-            Text(unit, style = HubType.small, color = c.inkMuted, modifier = Modifier.padding(start = 3.dp, bottom = 4.dp))
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Dot(color, size = 8.dp)
-            Spacer(Modifier.width(6.dp))
-            Text(label, style = HubType.small, color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -709,7 +732,16 @@ private fun updatedText(context: Context, asOf: Instant, now: Long): String {
 @Composable
 private fun WeekSection(history: List<DayActivity>?, today: DailyActivity?, goal: Long, modifier: Modifier = Modifier) {
     val c = Hub.colors
-    Column(modifier.fillMaxWidth().padding(horizontal = Gutter)) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = Gutter)
+            .padding(top = 16.dp)
+            .hubCard(c.raised)
+            .padding(horizontal = 18.dp, vertical = 16.dp),
+    ) {
+        Text("Last 7 days", style = HubType.section, color = c.ink)
+        Spacer(Modifier.height(8.dp))
         when {
             history == null -> Spacer(Modifier.fillMaxWidth().height(300.dp))
             history.isEmpty() -> Text(
@@ -756,7 +788,7 @@ private fun WeekSection(history: List<DayActivity>?, today: DailyActivity?, goal
                 WeekChart(days, goal)
                 Spacer(Modifier.height(14.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(width = 18.dp, height = 8.dp).clip(CircleShape).background(c.raised2))
+                    Box(Modifier.size(width = 18.dp, height = 8.dp).clip(CircleShape).background(c.well))
                     Spacer(Modifier.width(8.dp))
                     Text("Your goal", style = HubType.small, color = c.inkMuted)
                     Spacer(Modifier.width(18.dp))
@@ -803,8 +835,8 @@ private fun WeekChart(days: List<DayActivity>, goal: Long) {
         if (reduced) return@LaunchedEffect
         rises.forEachIndexed { i, a ->
             launch {
-                delay(220L + i * 75L)
-                a.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 240f))
+                delay(120L + i * 40L)
+                a.animateTo(1f, tween(280, easing = Motion.EaseOut))
             }
         }
     }
@@ -814,7 +846,7 @@ private fun WeekChart(days: List<DayActivity>, goal: Long) {
         animateFloatAsState(if (i == sel || i == todayIndex) 1f else 0.45f, tween(240), label = "barAlpha")
     }
     val widths = List(n) { i ->
-        animateFloatAsState(if (i == sel && !reduced) 1.16f else 1f, Motion.bouncy(), label = "barWidth")
+        animateFloatAsState(if (i == sel && !reduced) 1.16f else 1f, Motion.snappy(), label = "barWidth")
     }
     val anchor by animateFloatAsState(
         (sel + 0.5f) / n,
@@ -844,7 +876,7 @@ private fun WeekChart(days: List<DayActivity>, goal: Long) {
             val band = 12.dp.toPx()
             val goalY = h - (goal / top) * h
             drawRoundRect(
-                c.raised2,
+                c.well,
                 topLeft = Offset(0f, goalY - band / 2f),
                 size = Size(size.width, band),
                 cornerRadius = CornerRadius(band / 2f),
@@ -934,7 +966,7 @@ private fun BarLabel(day: DayActivity, isToday: Boolean) {
     Column(
         Modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(c.raised)
+            .background(c.well)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -964,104 +996,6 @@ private fun BarLabel(day: DayActivity, isToday: Boolean) {
     }
 }
 
-/* ---------------------------------------- The step goal ----------------------------------- */
-
-@Composable
-private fun StepGoalControl(goal: Long, onChange: (Long) -> Unit, modifier: Modifier = Modifier) {
-    val c = Hub.colors
-    Row(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = Gutter)
-            .clip(RoundedCornerShape(28.dp))
-            .background(c.raised)
-            .padding(horizontal = 12.dp, vertical = 18.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        StepButton(
-            icon = Icons.Outlined.Remove,
-            label = "Lower the goal by 500 steps",
-            enabled = goal > GOAL_MIN,
-            onStep = { onChange((goal - GOAL_STEP).coerceIn(GOAL_MIN, GOAL_MAX)) },
-        )
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            RollingText(grouped(goal), style = HubType.clockLarge, color = c.ink)
-            Text("steps a day", style = HubType.small, color = c.inkMuted)
-        }
-        StepButton(
-            icon = Icons.Outlined.Add,
-            label = "Raise the goal by 500 steps",
-            enabled = goal < GOAL_MAX,
-            onStep = { onChange((goal + GOAL_STEP).coerceIn(GOAL_MIN, GOAL_MAX)) },
-        )
-    }
-}
-
-/**
- * A − or + pill. A tap steps once; holding repeats, faster than you could tap. Springs in
- * while held, like every other press in the app.
- */
-@Composable
-private fun StepButton(icon: ImageVector, label: String, enabled: Boolean, onStep: () -> Unit) {
-    val c = Hub.colors
-    val reduced = LocalReducedMotion.current
-    val haptics = LocalHapticFeedback.current
-    val scope = rememberCoroutineScope()
-    val step by rememberUpdatedState(onStep)
-    val isEnabled by rememberUpdatedState(enabled)
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(
-        if (pressed && !reduced) 0.9f else 1f,
-        if (pressed) spring(dampingRatio = 0.9f, stiffness = 1400f) else Motion.snappy(),
-        label = "stepPress",
-    )
-    val bg by animateColorAsState(if (pressed) c.okSoft.compositeOver(c.raised2) else c.raised2, tween(120), label = "stepBg")
-    val tint by animateColorAsState(if (enabled) c.ink else c.inkMuted.copy(alpha = 0.45f), tween(160), label = "stepTint")
-    Box(
-        Modifier
-            .size(width = 64.dp, height = 56.dp)
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(CircleShape)
-            .background(bg)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    if (!isEnabled) return@awaitEachGesture
-                    pressed = true
-                    var repeated = false
-                    val repeater = scope.launch {
-                        delay(450)
-                        while (isEnabled) {
-                            repeated = true
-                            step()
-                            haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
-                            delay(80)
-                        }
-                    }
-                    val up = waitForUpOrCancellation()
-                    repeater.cancel()
-                    pressed = false
-                    if (up != null && !repeated) {
-                        step()
-                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                    }
-                }
-            }
-            .semantics(mergeDescendants = true) {
-                role = Role.Button
-                contentDescription = label
-                onClick(label = label) {
-                    if (isEnabled) step()
-                    isEnabled
-                }
-                if (!enabled) disabled()
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = null, tint = tint)
-    }
-}
-
 /* ------------------------------------------- Nudges --------------------------------------- */
 
 private fun metricIcon(metric: NudgeMetric): ImageVector = when (metric) {
@@ -1086,8 +1020,75 @@ private fun daysCaption(mask: Int): String =
     if ((mask and Days.ALL) == 0) "Every day" else Days.label(mask)
 
 /**
- * One nudge: a badge in the metric's colour, "Steps under 6,000 at 18:00" with its days
- * beneath, and a switch. Switching off dims the row and settles the badge back.
+ * The nudges in one card: a line on what they do, a warning when background reading is off,
+ * a row per nudge with its switch, and "Add" at the top (or a first row to add one).
+ */
+@Composable
+private fun NudgesCard(
+    nudges: List<HealthNudge>?,
+    backgroundDenied: Boolean,
+    onToggle: (HealthNudge, Boolean) -> Unit,
+    onEdit: (HealthNudge) -> Unit,
+    onAdd: () -> Unit,
+    onManage: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Hub.colors
+    val list = nudges.orEmpty()
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = Gutter)
+            .padding(top = 16.dp)
+            .hubCard(c.raised)
+            .padding(top = 10.dp, bottom = 8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Nudges", style = HubType.section, color = c.ink, modifier = Modifier.weight(1f))
+            Text(
+                "Add",
+                style = HubType.small.copy(fontWeight = FontWeight.Medium),
+                color = c.inkMuted,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .pressable(onClick = onAdd, onClickLabel = "Add nudge")
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 10.dp, vertical = 11.dp),
+            )
+        }
+        Text(
+            "A notification at a time you choose, sent only if you're behind by then.",
+            style = HubType.small,
+            color = c.inkMuted,
+            modifier = Modifier.padding(horizontal = 18.dp).padding(bottom = 6.dp),
+        )
+        if (list.isNotEmpty() && backgroundDenied) {
+            BackgroundNotice(onManage = onManage, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+        }
+        list.forEach { n ->
+            key(n.id) {
+                NudgeRow(
+                    nudge = n,
+                    onToggle = { on -> onToggle(n, on) },
+                    onClick = { onEdit(n) },
+                )
+            }
+        }
+        if (nudges != null && list.isEmpty()) {
+            HubListRow(
+                icon = Icons.Outlined.Add,
+                title = "Add your first nudge",
+                meta = "Steps under 6,000 at 18:00 is a good start",
+                modifier = Modifier.padding(horizontal = 6.dp),
+                onClick = onAdd,
+            )
+        }
+    }
+}
+
+/**
+ * One nudge: a well in the metric's colour, "Steps under 6,000 at 18:00" with its days
+ * beneath, and a switch. Switching off dims the row and greys the well.
  */
 @Composable
 private fun NudgeRow(nudge: HealthNudge, onToggle: (Boolean) -> Unit, onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -1096,43 +1097,35 @@ private fun NudgeRow(nudge: HealthNudge, onToggle: (Boolean) -> Unit, onClick: (
     var on by remember(nudge.enabled) { mutableStateOf(nudge.enabled) }
     val accent = c.metric(nudge.metric)
     val text = NudgeMath.describe(nudge, Fmt.time(context, LocalTime.of(nudge.hour, nudge.minute)))
-    val textColor by animateColorAsState(if (on) c.ink else c.inkMuted, tween(240), label = "nudgeText")
-    val badgeBg by animateColorAsState(
-        if (on) accent.copy(alpha = if (c.isDark) 0.18f else 0.13f) else c.raised2,
-        tween(240),
-        label = "nudgeBadge",
+    val textColor by animateColorAsState(if (on) c.ink else c.inkMuted, tween(200), label = "nudgeText")
+    val wellBg by animateColorAsState(
+        if (on) accent.copy(alpha = if (c.isDark) 0.18f else 0.13f) else c.well,
+        tween(200),
+        label = "nudgeWell",
     )
-    val badgeTint by animateColorAsState(if (on) accent else c.inkMuted, tween(240), label = "nudgeTint")
-    val badgeScale by animateFloatAsState(if (on) 1f else 0.9f, Motion.bouncy(), label = "nudgeScale")
+    val wellTint by animateColorAsState(if (on) accent else c.inkMuted, tween(200), label = "nudgeTint")
 
     Row(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .pressable(onClick = onClick, pressedScale = 0.98f, onClickLabel = "Edit nudge")
-            .padding(start = Gutter - 8.dp, end = Gutter - 12.dp, top = 10.dp, bottom = 10.dp),
+            .padding(horizontal = 6.dp)
+            .pressable(onClick = onClick, pressedScale = 0.98f, showRipple = false, onClickLabel = "Edit nudge")
+            .clip(RoundedCornerShape(18.dp))
+            .padding(start = 12.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .size(44.dp)
-                .graphicsLayer { scaleX = badgeScale; scaleY = badgeScale }
-                .clip(CircleShape)
-                .background(badgeBg),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(metricIcon(nudge.metric), contentDescription = null, tint = badgeTint, modifier = Modifier.size(22.dp))
+        Box(Modifier.size(42.dp).clip(CircleShape).background(wellBg), contentAlignment = Alignment.Center) {
+            Icon(metricIcon(nudge.metric), contentDescription = null, tint = wellTint, modifier = Modifier.size(20.dp))
         }
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(text, style = HubType.bodyStrong, color = textColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(daysCaption(nudge.daysMask), style = HubType.small, color = c.inkMuted)
+            Text(text, style = RowTitle, color = textColor, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(daysCaption(nudge.daysMask), style = RowMeta, color = c.inkMuted, maxLines = 1)
         }
         HubSwitch(
             checked = on,
             onCheckedChange = { on = it; onToggle(it) },
-            accent = c.ok,
+            accent = c.ink,
             contentDescription = text,
         )
     }
@@ -1144,17 +1137,15 @@ private fun BackgroundNotice(onManage: () -> Unit, modifier: Modifier = Modifier
     Column(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = Gutter)
-            .padding(bottom = 10.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(c.dangerSoft)
-            .padding(16.dp),
+            .padding(14.dp),
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = c.danger, modifier = Modifier.size(22.dp))
+            Icon(Icons.Outlined.ErrorOutline, contentDescription = null, tint = c.danger, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("Nudges can't check on time", style = HubType.bodyStrong, color = c.ink)
+                Text("Nudges can't check on time", style = RowTitle, color = c.ink)
                 Text(
                     "Allow PixelHub to read activity in the background in Health Connect. Without it, nudges stay quiet.",
                     style = HubType.small,
@@ -1162,7 +1153,7 @@ private fun BackgroundNotice(onManage: () -> Unit, modifier: Modifier = Modifier
                 )
             }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
         QuietButton("Manage access", onClick = onManage, icon = Icons.AutoMirrored.Outlined.OpenInNew)
     }
 }
@@ -1184,12 +1175,12 @@ private fun NudgeEditor(
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
     val stagger = rememberStagger()
-    var metric by remember { mutableStateOf(initial.metric) }
-    var goalText by remember { mutableStateOf(initial.goal.toString()) }
-    var goalTouched by remember { mutableStateOf(!isNew) }
-    var time by remember { mutableStateOf(LocalTime.of(initial.hour, initial.minute)) }
-    var mask by remember { mutableIntStateOf(initial.daysMask and Days.ALL) }
-    var picking by remember { mutableStateOf(false) }
+    var metric by rememberSaveable { mutableStateOf(initial.metric) }
+    var goalText by rememberSaveable { mutableStateOf(initial.goal.toString()) }
+    var goalTouched by rememberSaveable { mutableStateOf(!isNew) }
+    var time by rememberSaveable { mutableStateOf(LocalTime.of(initial.hour, initial.minute)) }
+    var mask by rememberSaveable { mutableIntStateOf(initial.daysMask and Days.ALL) }
+    var picking by rememberSaveable { mutableStateOf(false) }
     val goal = goalText.toLongOrNull()?.takeIf { it > 0 }
     val timeText = Fmt.time(context, time)
 
@@ -1310,8 +1301,6 @@ private fun NudgeEditor(
                 PrimaryButton(
                     text = "Save nudge",
                     enabled = goal != null,
-                    container = c.ok,
-                    content = c.ground,
                     onClick = {
                         val g = goal ?: return@PrimaryButton
                         onSave(
@@ -1321,7 +1310,8 @@ private fun NudgeEditor(
                                 hour = time.hour,
                                 minute = time.minute,
                                 daysMask = mask,
-                                enabled = true,
+                                // Editing keeps a switched-off nudge off; only a new one starts on.
+                                enabled = if (isNew) true else initial.enabled,
                             ),
                         )
                     },

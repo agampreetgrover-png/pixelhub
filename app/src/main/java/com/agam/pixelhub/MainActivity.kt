@@ -27,8 +27,16 @@ class MainActivity : ComponentActivity() {
             val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 PackageManager.PERMISSION_GRANTED
             if (!granted) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            // Rotation, a dark-mode switch or a font change recreates the activity; stay on the same page.
+            tabNamed(savedInstanceState.getString(EXTRA_TAB))?.let { tab.value = it }
         }
         setContent { PixelHubTheme { PixelHubRoot(tab) } }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(EXTRA_TAB, tab.value.name)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -36,8 +44,9 @@ class MainActivity : ComponentActivity() {
         tabFrom(intent)?.let { tab.value = it }
     }
 
-    private fun tabFrom(intent: Intent?): Tab? =
-        intent?.getStringExtra(EXTRA_TAB)?.let { name -> Tab.entries.firstOrNull { it.name == name } }
+    private fun tabFrom(intent: Intent?): Tab? = tabNamed(intent?.getStringExtra(EXTRA_TAB))
+
+    private fun tabNamed(name: String?): Tab? = name?.let { n -> Tab.entries.firstOrNull { it.name == n } }
 
     companion object {
         const val EXTRA_TAB = "com.agam.pixelhub.extra.TAB"

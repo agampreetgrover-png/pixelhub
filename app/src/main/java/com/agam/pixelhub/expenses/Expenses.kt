@@ -35,7 +35,12 @@ object Money {
 
     /** Parses "250", "1,250.5", "₹ 99.99" into paise; null if not a positive amount. */
     fun parse(text: String): Long? {
-        val cleaned = text.replace("₹", "").replace(",", "").replace("Rs", "", ignoreCase = true).trim()
+        // A keyboard whose decimal key is "," types "1500,50": a final comma followed by one or two
+        // digits (and no ".") is the decimal point, not grouping.
+        val t = text.trim()
+        val decimalComma = !t.contains('.') && Regex(""",\d{1,2}$""").containsMatchIn(t)
+        val normal = if (decimalComma) t.substring(0, t.lastIndexOf(',')) + "." + t.substringAfterLast(',') else t
+        val cleaned = normal.replace("₹", "").replace(",", "").replace("Rs", "", ignoreCase = true).trim()
         val value = cleaned.toBigDecimalOrNull()?.stripTrailingZeros() ?: return null
         if (value.signum() <= 0 || value.scale() > 2) return null
         return runCatching { value.movePointRight(2).longValueExact() }.getOrNull()
@@ -104,6 +109,11 @@ class ExpenseRepository(
     }
 
     suspend fun get(id: Long): Expense? = expenses.get(id)
+
+    /** Puts back an expense that was just deleted (Undo), with its old id and no budget alert. */
+    suspend fun restore(expense: Expense) {
+        expenses.insert(expense)
+    }
 
     /** Inserts (id = 0) or updates, then alerts if this pushed a budget past 80% or 100%. */
     suspend fun save(expense: Expense): Expense {

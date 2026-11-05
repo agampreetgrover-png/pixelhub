@@ -44,6 +44,7 @@ class TriggerReceiver : BroadcastReceiver() {
                         AlarmRingService.start(context, it)
                         c.alarms.onFired(id)
                     }
+                Scheduler.ACTION_ALARM_SNOOZE_CANCEL -> c.scheduler.cancelAlarmSnooze(id)
                 Scheduler.ACTION_ALARM_SNOOZE ->
                     c.alarms.get(id)?.let { AlarmRingService.start(context, it) }
                 Scheduler.ACTION_HEALTH_NUDGE ->

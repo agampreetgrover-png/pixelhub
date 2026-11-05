@@ -17,6 +17,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 /** [httpCode] is set when the API answered with an error status (429 = rate/quota limit). */
 class GeminiException(message: String, val httpCode: Int? = null) : Exception(message)
@@ -31,6 +32,8 @@ class GeminiClient(private val http: OkHttpClient) {
         systemPrompt: String,
         userText: String,
         schema: JsonObject,
+        /** Whole-call limit; overloaded models can take a minute just to say so. */
+        timeoutSeconds: Long = 60,
     ): String = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             putJsonObject("systemInstruction") {
@@ -53,7 +56,9 @@ class GeminiClient(private val http: OkHttpClient) {
             .header("x-goog-api-key", apiKey.trim())
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        http.newCall(request).execute().use { response ->
+        val call = http.newCall(request)
+        call.timeout().timeout(timeoutSeconds, TimeUnit.SECONDS)
+        call.execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw GeminiException(errorMessage(raw) ?: "HTTP ${response.code}", response.code)

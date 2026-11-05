@@ -6,64 +6,86 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 
 /**
- * PixelHub's own palette. Two hues carry meaning everywhere in the app:
- * dawn = alarms (and the primary action), sky = reminders.
- * Surfaces are separated by tone steps, never by lines or shadows.
+ * PixelHub's palette: a neutral ground, white (or near-black) cards, black chrome, and two
+ * saturated card colours that carry meaning everywhere in the app:
+ * violet = alarms, sun = reminders. Surfaces are separated by tone steps, not lines or shadows.
  */
 @Immutable
 data class HubColors(
     val isDark: Boolean,
     /** The page. */
     val ground: Color,
-    /** One step up from the ground: sheets, the tab bar, input fields. */
+    /** Cards, sheets, input fields. */
     val raised: Color,
-    /** Two steps up: pressed states, chips, the dial track. */
+    /** Chips, tracks, pressed and disabled fills. */
     val raised2: Color,
+    /** The round wells inside a card that hold an icon (quick actions, list rows). */
+    val well: Color,
     val ink: Color,
     val inkMuted: Color,
-    /** Alarms, and the primary action. */
+    /** Alarms and the violet card. */
     val dawn: Color,
     val onDawn: Color,
-    /** Reminders. */
+    /** Reminders, as text or an icon tint (stays legible on the page). */
     val sky: Color,
     val onSky: Color,
+    /** Reminders, as a filled card. */
+    val sun: Color,
+    val onSun: Color,
+    /** The black pill: the tab bar and the main action of a screen. */
+    val chrome: Color,
+    val onChrome: Color,
+    /** Round buttons sitting inside the chrome pill. */
+    val chromeWell: Color,
     val ok: Color,
     val danger: Color,
     val onDanger: Color,
 ) {
-    val dawnSoft: Color get() = dawn.copy(alpha = if (isDark) 0.16f else 0.12f)
-    val skySoft: Color get() = sky.copy(alpha = if (isDark) 0.16f else 0.12f)
+    val dawnSoft: Color get() = dawn.copy(alpha = if (isDark) 0.20f else 0.12f)
+    val skySoft: Color get() = sun.copy(alpha = if (isDark) 0.18f else 0.30f)
     val dangerSoft: Color get() = danger.copy(alpha = if (isDark) 0.16f else 0.10f)
 }
 
 val NightColors = HubColors(
     isDark = true,
-    ground = Color(0xFF0E1525),
-    raised = Color(0xFF172036),
-    raised2 = Color(0xFF212C46),
-    ink = Color(0xFFEDF0F7),
-    inkMuted = Color(0xFF98A2BA),
-    dawn = Color(0xFFFFB36B),
-    onDawn = Color(0xFF2B1500),
-    sky = Color(0xFF86BFFF),
-    onSky = Color(0xFF04213F),
-    ok = Color(0xFF8FD6A8),
+    ground = Color(0xFF000000),
+    raised = Color(0xFF1A1A1A),
+    raised2 = Color(0xFF2A2A2A),
+    well = Color(0xFF050505),
+    ink = Color(0xFFF5F5F5),
+    inkMuted = Color(0xFF9C9C9C),
+    dawn = Color(0xFF9D4EDD),
+    onDawn = Color(0xFFFFFFFF),
+    sky = Color(0xFFFFD15C),
+    onSky = Color(0xFF1A1400),
+    sun = Color(0xFFFFD15C),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF262626),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF3D3D3D),
+    ok = Color(0xFF7FD6A0),
     danger = Color(0xFFFF8A80),
     onDanger = Color(0xFF3B0603),
 )
 
 val DayColors = HubColors(
     isDark = false,
-    ground = Color(0xFFEEF1F7),
+    ground = Color(0xFFEDEDED),
     raised = Color(0xFFFFFFFF),
-    raised2 = Color(0xFFE1E6EF),
-    ink = Color(0xFF121A2B),
-    inkMuted = Color(0xFF556079),
-    dawn = Color(0xFFB25500),
+    raised2 = Color(0xFFF0F0F0),
+    well = Color(0xFFF0F0F0),
+    ink = Color(0xFF111111),
+    inkMuted = Color(0xFF636363),
+    dawn = Color(0xFF9A35E0),
     onDawn = Color(0xFFFFFFFF),
-    sky = Color(0xFF1D63C4),
+    sky = Color(0xFF8C6200),
     onSky = Color(0xFFFFFFFF),
-    ok = Color(0xFF2E7D4F),
+    sun = Color(0xFFFFD15C),
+    onSun = Color(0xFF141414),
+    chrome = Color(0xFF111111),
+    onChrome = Color(0xFFFFFFFF),
+    chromeWell = Color(0xFF2B2B2B),
+    ok = Color(0xFF1E7B46),
     danger = Color(0xFFC0362C),
     onDanger = Color(0xFFFFFFFF),
 )
@@ -71,7 +93,7 @@ val DayColors = HubColors(
 val LocalHubColors = staticCompositionLocalOf { NightColors }
 
 /**
- * The colour of the sky at a given hour, used by the 24-hour dial. It is data
+ * The colour of the sky at a given hour, used behind the ring screen. It is data
  * (where daylight falls), not decoration.
  */
 object Sky {

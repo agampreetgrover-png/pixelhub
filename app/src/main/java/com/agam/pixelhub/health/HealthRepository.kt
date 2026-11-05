@@ -143,19 +143,26 @@ class HealthRepository(private val context: Context) {
 
     /** Re-reads today's totals every [periodMillis] while collected. Emits null when not connected. */
     fun todayFlow(periodMillis: Long = 60_000): Flow<DailyActivity?> = flow {
+        // A failed read keeps the last good figures on screen instead of dropping them to zero.
+        var last: DailyActivity? = null
         while (true) {
-            emit(
-                try {
-                    today()
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.w("PixelHub", "Health Connect read failed", e)
-                    null
-                },
-            )
+            try {
+                last = today()
+                readFailedState.value = false
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w("PixelHub", "Health Connect read failed", e)
+                readFailedState.value = true
+            }
+            emit(last)
             delay(periodMillis)
         }
     }.flowOn(Dispatchers.IO)
+
+    private val readFailedState = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** True when the latest read of today's totals failed; the screens say so instead of "Reading…". */
+    val readFailed: kotlinx.coroutines.flow.StateFlow<Boolean> = readFailedState
 
     /** Background check for a nudge (called from the alarm receiver). */
     suspend fun check(nudge: HealthNudge): NudgeCheck {

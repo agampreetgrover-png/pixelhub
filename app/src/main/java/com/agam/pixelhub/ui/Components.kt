@@ -38,17 +38,24 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -86,6 +93,17 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.ripple
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.core.net.toUri
 import androidx.graphics.shapes.Morph
 import com.agam.pixelhub.container
@@ -107,9 +125,27 @@ import java.util.Locale
 /** Side margin used by every screen. */
 val Gutter = 20.dp
 
+/** Corner radius of every card. */
+val CardRadius = 26.dp
+
 /**
- * A screen with a large title that collapses as you scroll. Title in the wide heading face.
- * The content must be scrollable (LazyColumn or verticalScroll) for the collapse to work.
+ * Height the floating tab bar takes at the bottom of the window (bar, its margin and the
+ * system navigation bar). Screens add it to their bottom padding so nothing hides under it.
+ * Zero on pages that open above the tabs.
+ */
+val LocalNavInset = compositionLocalOf { 0.dp }
+
+/** Paints a round tone behind its content only when there is content to sit on. */
+private fun Modifier.roundToneIfAny(color: Color) = drawBehind {
+    if (size.width > 0f && size.height > 0f) {
+        drawRoundRect(color, cornerRadius = CornerRadius(size.height / 2))
+    }
+}
+
+/**
+ * A screen with a large title that collapses as you scroll. The back button and actions sit
+ * in round wells like the header on Home. The content must be scrollable (LazyColumn or
+ * verticalScroll) for the collapse to work; its padding already clears the floating tab bar.
  */
 @Composable
 fun ScreenScaffold(
@@ -118,9 +154,11 @@ fun ScreenScaffold(
     actions: @Composable RowScope.() -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     floatingActionButton: @Composable () -> Unit = {},
+    snackbarHost: SnackbarHostState? = null,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val c = Hub.colors
+    val navInset = LocalNavInset.current
     val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
@@ -129,8 +167,16 @@ fun ScreenScaffold(
         topBar = {
             LargeTopAppBar(
                 title = { Text(title, style = HubType.title, maxLines = 1) },
-                navigationIcon = navigationIcon,
-                actions = actions,
+                navigationIcon = {
+                    Box(Modifier.padding(start = 8.dp).roundToneIfAny(c.raised)) { navigationIcon() }
+                },
+                actions = {
+                    Row(
+                        Modifier.padding(end = 12.dp).roundToneIfAny(c.raised),
+                        verticalAlignment = Alignment.CenterVertically,
+                        content = actions,
+                    )
+                },
                 scrollBehavior = scroll,
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = c.ground,
@@ -142,20 +188,155 @@ fun ScreenScaffold(
             )
         },
         bottomBar = bottomBar,
-        floatingActionButton = floatingActionButton,
-        content = content,
-    )
+        floatingActionButton = { Box(Modifier.padding(bottom = navInset)) { floatingActionButton() } },
+        snackbarHost = {
+            if (snackbarHost != null) {
+                SnackbarHost(snackbarHost, Modifier.padding(bottom = navInset)) { data ->
+                    Snackbar(
+                        data,
+                        shape = RoundedCornerShape(18.dp),
+                        containerColor = c.chrome,
+                        contentColor = c.onChrome,
+                        actionColor = c.onChrome,
+                    )
+                }
+            }
+        },
+    ) { inner ->
+        val dir = LocalLayoutDirection.current
+        content(
+            PaddingValues(
+                start = inner.calculateStartPadding(dir),
+                top = inner.calculateTopPadding(),
+                end = inner.calculateEndPadding(dir),
+                bottom = inner.calculateBottomPadding() + navInset,
+            ),
+        )
+    }
 }
 
-/** A heading inside a screen. */
+/** A heading inside a screen, with an optional quiet action at the far end ("View all"). */
 @Composable
-fun SectionHeader(text: String, modifier: Modifier = Modifier, color: Color = Hub.colors.ink) {
-    Text(
-        text,
-        style = HubType.section,
-        color = color,
-        modifier = modifier.padding(start = Gutter, end = Gutter, top = 28.dp, bottom = 10.dp),
-    )
+fun SectionHeader(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: Color = Hub.colors.ink,
+    action: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Row(
+        modifier.fillMaxWidth().padding(start = Gutter, end = Gutter - 8.dp, top = 28.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = HubType.section, color = color, modifier = Modifier.weight(1f))
+        if (action != null && onAction != null) {
+            Text(
+                action,
+                style = HubType.small,
+                color = Hub.colors.inkMuted,
+                modifier = Modifier.minimumInteractiveComponentSize().clip(CircleShape).pressable(onClick = onAction).padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/** A card: the raised tone with the shared radius. */
+fun Modifier.hubCard(color: Color, radius: Dp = CardRadius): Modifier =
+    clip(RoundedCornerShape(radius)).background(color)
+
+/**
+ * A round icon button on a tone: the header's menu, bell and back buttons, and the wells
+ * inside cards. 48dp to the touch.
+ */
+@Composable
+fun CircleIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tone: Color = Hub.colors.raised,
+    tint: Color = Hub.colors.ink,
+    size: Dp = 48.dp,
+    iconSize: Dp = 22.dp,
+) {
+    Box(
+        modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(tone)
+            .pressable(onClick = onClick, pressedScale = 0.92f, onClickLabel = contentDescription)
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(iconSize))
+    }
+}
+
+/** One quick action: an icon in a round well with its name under it. */
+@Composable
+fun QuickAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tone: Color = Hub.colors.well,
+    tint: Color = Hub.colors.ink,
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(20.dp))
+            .pressable(onClick = onClick, pressedScale = 0.94f, showRipple = false, onClickLabel = label)
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(54.dp).clip(CircleShape).background(tone), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(label, style = HubType.small.copy(fontWeight = FontWeight.Medium), color = Hub.colors.ink, maxLines = 1)
+    }
+}
+
+/**
+ * A list row as on the reference cards: an icon in a round well, a title with a muted line
+ * under it, and a value at the far end.
+ */
+@Composable
+fun HubListRow(
+    icon: ImageVector,
+    title: String,
+    meta: String?,
+    modifier: Modifier = Modifier,
+    trailing: String? = null,
+    trailingColor: Color = Hub.colors.ink,
+    iconTint: Color = Hub.colors.ink,
+    iconTone: Color = Hub.colors.well,
+    onClick: (() -> Unit)? = null,
+) {
+    val c = Hub.colors
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .then(if (onClick != null) Modifier.pressable(onClick = onClick, pressedScale = 0.98f) else Modifier)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(42.dp).clip(CircleShape).background(iconTone), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = HubType.bodyStrong.copy(fontSize = 14.sp, lineHeight = 20.sp), color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (meta != null) {
+                Text(meta, style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp), color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(trailing, style = HubType.clockSmall.copy(fontSize = 14.sp), color = trailingColor, maxLines = 1)
+        }
+    }
 }
 
 @Composable
@@ -200,8 +381,8 @@ fun EmptyState(title: String, body: String, accent: Color, modifier: Modifier = 
 }
 
 /**
- * The primary action of a screen: a round button whose shape morphs from a circle into a
- * scalloped cookie and turns a little while pressed.
+ * The primary action of a screen: a black pill holding a white disc with the icon, and the
+ * action's name. The icon turns a quarter while pressed.
  */
 @Composable
 fun HubFab(
@@ -209,27 +390,31 @@ fun HubFab(
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    container: Color = Hub.colors.dawn,
-    content: Color = Hub.colors.onDawn,
-    size: Dp = 68.dp,
+    container: Color = Hub.colors.chrome,
+    content: Color = Hub.colors.onChrome,
+    label: String = contentDescription,
 ) {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val reduced = LocalReducedMotion.current
-    val morph = remember { Morph(HubShapes.circle, HubShapes.cookie) }
-    val progress by animateFloatAsState(if (pressed && !reduced) 1f else 0f, Motion.bouncy(), label = "fabMorph")
-    val turn by animateFloatAsState(if (pressed && !reduced) 40f else 0f, Motion.gentle(), label = "fabTurn")
-    Box(
+    val turn by animateFloatAsState(if (pressed && !reduced) 90f else 0f, Motion.snappy(), label = "fabTurn")
+    val scale by animateFloatAsState(if (pressed && !reduced) 0.95f else 1f, Motion.snappy(), label = "fabScale")
+    Row(
         modifier
-            .size(size)
-            .graphicsLayer { rotationZ = 0f }
-            .clip(MorphShape(morph, progress, turn))
+            .height(56.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(CircleShape)
             .background(container)
-            .pressable(onClick = onClick, pressedScale = 0.92f, onClickLabel = contentDescription)
-            .semantics { this.contentDescription = contentDescription },
-        contentAlignment = Alignment.Center,
+            .clickable(interactionSource = source, indication = ripple(), onClickLabel = contentDescription, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
+            .padding(start = 8.dp, end = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = content, modifier = Modifier.size(28.dp).graphicsLayer { rotationZ = -turn * 0.5f })
+        Box(Modifier.size(40.dp).clip(CircleShape).background(content), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = container, modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = turn })
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(label, style = HubType.button, color = content, maxLines = 1)
     }
 }
 
@@ -240,8 +425,8 @@ fun PrimaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    container: Color = Hub.colors.dawn,
-    content: Color = Hub.colors.onDawn,
+    container: Color = Hub.colors.ink,
+    content: Color = Hub.colors.ground,
     icon: ImageVector? = null,
 ) {
     val bg by animateColorAsState(if (enabled) container else Hub.colors.raised2, label = "btnBg")
@@ -444,6 +629,8 @@ fun HubSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit)
         contentColor = c.ink,
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
         scrimColor = Color.Black.copy(alpha = 0.45f),
+        // Fully open, the sheet stops below the status bar instead of sliding under it.
+        modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Gutter).padding(bottom = 16.dp).navigationBarsPadding(),
@@ -563,3 +750,11 @@ fun CountBadge(count: Int, color: Color = Hub.colors.dawn, modifier: Modifier = 
     }
 }
 
+
+/** The back arrow used in screen headers. */
+@Composable
+fun BackButton(onBack: () -> Unit) {
+    androidx.compose.material3.IconButton(onClick = onBack) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    }
+}

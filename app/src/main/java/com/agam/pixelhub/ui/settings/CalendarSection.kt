@@ -1,5 +1,11 @@
 package com.agam.pixelhub.ui.settings
 
+import android.content.Intent
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.LocalActivity
+import androidx.core.net.toUri
+import com.agam.pixelhub.ui.openSafely
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -12,18 +18,17 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.EventBusy
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,15 +41,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.calendar.CalendarInfo
 import com.agam.pixelhub.container
-import com.agam.pixelhub.ui.Gutter
 import com.agam.pixelhub.ui.PrimaryButton
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.theme.Hub
@@ -53,7 +59,7 @@ import kotlinx.coroutines.launch
 
 /**
  * One-way copy of reminders into a phone calendar (Google's own sync takes them to Google
- * Calendar). "Off" plus a radio list of the calendars on the phone.
+ * Calendar). A card with "Off" and a row per calendar on the phone; tap one to pick it.
  */
 @Composable
 fun CalendarSyncSection(modifier: Modifier = Modifier) {
@@ -80,82 +86,99 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
             }
         }
     }
+    val activity = LocalActivity.current
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         hasPermission = result.values.all { it }
+        if (!hasPermission) {
+            enableAfterGrant = false
+            // Denied twice: Android no longer asks, so the button would do nothing. Open the app's
+            // settings page, where calendar access can be turned on.
+            val blocked = c.calendar.permissions.none { activity?.shouldShowRequestPermissionRationale(it) == true }
+            if (blocked) {
+                Toast.makeText(context, "Turn on Calendar under Permissions", Toast.LENGTH_LONG).show()
+                openSafely(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
+            }
+        }
     }
 
-    Column(modifier.padding(horizontal = Gutter), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            "Copies your reminders into a calendar on this phone. Pick a Google calendar and they show up in Google Calendar too.",
-            style = HubType.body, color = colors.inkMuted,
+    SettingsCard(modifier) {
+        SettingRow(
+            icon = Icons.Outlined.CalendarMonth,
+            title = "Copy reminders to a calendar",
+            meta = "Pick a Google calendar and they show up in Google Calendar too.",
         )
         if (!hasPermission) {
+            SettingRow(
+                icon = Icons.Outlined.Lock,
+                title = "Calendar access is off",
+                meta = "PixelHub only adds and updates its own events.",
+            )
             PrimaryButton(
                 "Allow calendar access",
                 onClick = { enableAfterGrant = true; ask.launch(c.calendar.permissions) },
-                container = colors.sky, content = colors.onSky,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(6.dp),
             )
-            return@Column
-        }
-        Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(colors.raised).selectableGroup().padding(vertical = 6.dp),
-        ) {
-            CalendarOption(
-                title = "Off",
-                subtitle = "Reminders stay in PixelHub only",
-                dot = colors.raised2,
-                selected = selected == null,
-                onSelect = { c.appScope.launch { c.reminders.setCalendar(null) } },
-            )
-            calendars.forEach { cal ->
+        } else {
+            Column(Modifier.fillMaxWidth().selectableGroup()) {
                 CalendarOption(
-                    title = cal.name,
-                    subtitle = cal.accountName,
-                    dot = Color(cal.color),
-                    selected = selected == cal.id,
-                    onSelect = { c.appScope.launch { c.reminders.setCalendar(cal.id) } },
+                    title = "Off",
+                    subtitle = "Reminders stay in PixelHub only",
+                    dot = null,
+                    selected = selected == null,
+                    onSelect = { c.appScope.launch { c.reminders.setCalendar(null) } },
+                )
+                calendars.forEach { cal ->
+                    CalendarOption(
+                        title = cal.name,
+                        subtitle = cal.accountName,
+                        dot = Color(cal.color),
+                        selected = selected == cal.id,
+                        onSelect = { c.appScope.launch { c.reminders.setCalendar(cal.id) } },
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = selected != null,
+                enter = expandVertically(tween(240, easing = Motion.EaseOut)) + fadeIn(tween(160)),
+                exit = shrinkVertically(tween(200)) + fadeOut(tween(120)),
+            ) {
+                Text(
+                    "Turning sync off keeps the events already copied.",
+                    style = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                    color = colors.inkMuted,
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 10.dp),
                 )
             }
-        }
-        AnimatedVisibility(
-            visible = selected != null,
-            enter = expandVertically(tween(260, easing = Motion.EaseOut)) + fadeIn(),
-            exit = shrinkVertically(tween(200)) + fadeOut(),
-        ) {
-            Text(
-                "Turning sync off keeps the events already copied.",
-                style = HubType.small, color = colors.inkMuted,
-            )
         }
     }
 }
 
+/** A calendar as a row: its colour in the well, the account under the name, a radio at the end. */
 @Composable
-private fun CalendarOption(title: String, subtitle: String, dot: Color, selected: Boolean, onSelect: () -> Unit) {
+private fun CalendarOption(title: String, subtitle: String, dot: Color?, selected: Boolean, onSelect: () -> Unit) {
     val colors = Hub.colors
     val fill by animateFloatAsState(if (selected) 1f else 0f, Motion.bouncy(), label = "radio")
     val ring by animateColorAsState(if (selected) colors.sky else colors.inkMuted, tween(180), label = "ring")
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 60.dp)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Canvas(Modifier.size(12.dp)) { drawCircle(dot) }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
-            Text(title, style = HubType.bodyStrong, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (subtitle.isNotBlank()) {
-                Text(subtitle, style = HubType.small, color = colors.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    SettingRow(
+        icon = Icons.Outlined.EventBusy,
+        title = title,
+        meta = subtitle.takeIf { it.isNotBlank() },
+        iconTint = colors.inkMuted,
+        onClick = onSelect,
+        role = Role.RadioButton,
+        modifier = Modifier.semantics { this.selected = selected },
+        // A calendar shows its own colour in the well instead of an icon.
+        wellContent = if (dot != null) {
+            { Box(Modifier.size(14.dp).clip(CircleShape).background(dot)) }
+        } else null,
+        trailing = {
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.size(22.dp)) {
+                    val s = 2.dp.toPx()
+                    drawCircle(ring, radius = size.minDimension / 2 - s / 2, style = Stroke(s))
+                    if (fill > 0f) drawCircle(colors.sky, radius = (size.minDimension / 2 - 5.dp.toPx()) * fill)
+                }
             }
-        }
-        Canvas(Modifier.size(22.dp)) {
-            val s = 2.dp.toPx()
-            drawCircle(ring, radius = size.minDimension / 2 - s / 2, style = Stroke(s))
-            if (fill > 0f) drawCircle(colors.sky, radius = (size.minDimension / 2 - 5.dp.toPx()) * fill)
-        }
-    }
+        },
+    )
 }

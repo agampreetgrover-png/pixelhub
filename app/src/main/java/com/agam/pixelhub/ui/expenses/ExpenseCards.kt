@@ -1,30 +1,35 @@
 package com.agam.pixelhub.ui.expenses
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.DirectionsBus
@@ -39,46 +44,60 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.ExpenseCategory
 import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.expenses.MonthSummary
-import com.agam.pixelhub.ui.motion.HubShapes
+import com.agam.pixelhub.ui.CardRadius
+import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
-import com.agam.pixelhub.ui.motion.PolygonShape
 import com.agam.pixelhub.ui.motion.RollingText
-import com.agam.pixelhub.ui.motion.easeOutBack
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubColors
 import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.YearMonth
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 
 /*
  * Money keeps ink as its accent. Each category has its own hue from a set of nine, spaced
@@ -113,7 +132,7 @@ fun ExpenseCategory.color(c: HubColors): Color = if (c.isDark) {
     }
 }
 
-/** A quiet wash of the category colour, for badges and selected backgrounds. */
+/** A quiet wash of the category colour, for wells and selected backgrounds. */
 fun ExpenseCategory.soft(c: HubColors): Color = color(c).copy(alpha = if (c.isDark) 0.18f else 0.13f)
 
 val ExpenseCategory.icon: ImageVector
@@ -129,23 +148,34 @@ val ExpenseCategory.icon: ImageVector
         ExpenseCategory.OTHER -> Icons.Outlined.Category
     }
 
+/** Icon colour on a well filled with the category colour: dark on the pale night hues, white on the deep day ones. */
+internal fun ExpenseCategory.onColor(c: HubColors): Color = if (c.isDark) Color(0xFF141414) else Color.White
+
+/** "Food", "Bills", "Groceries": the label without its "& …" tail, for chips under a well. */
+internal val ExpenseCategory.shortLabel: String get() = label.substringBefore(" &")
+
 /** Text styles with tabular figures, for captions that carry amounts. */
 internal val SmallFigures = HubType.small.copy(fontFeatureSettings = "tnum")
 internal val BodyFigures = HubType.body.copy(fontFeatureSettings = "tnum")
 internal val BodyStrongFigures = HubType.bodyStrong.copy(fontFeatureSettings = "tnum")
 
-/** The category's icon on a soft scalloped badge in its own colour. */
+/** Row title and meta, as on the reference list rows. */
+internal val RowTitle = HubType.bodyStrong.copy(fontSize = 14.sp, lineHeight = 20.sp)
+internal val RowMeta = HubType.small.copy(fontSize = 11.sp, lineHeight = 16.sp, fontFeatureSettings = "tnum")
+
+/** The category's icon in a round well washed with its colour; [selected] fills the well. */
 @Composable
-fun CategoryBadge(category: ExpenseCategory, modifier: Modifier = Modifier, size: Dp = 44.dp) {
+internal fun CategoryWell(
+    category: ExpenseCategory,
+    modifier: Modifier = Modifier,
+    size: Dp = 42.dp,
+    selected: Boolean = false,
+) {
     val c = Hub.colors
-    val shape = remember { PolygonShape(HubShapes.cookie) }
-    val wash by animateColorAsState(category.soft(c), tween(220), label = "badgeWash")
-    val tint by animateColorAsState(category.color(c), tween(220), label = "badgeTint")
-    Box(
-        modifier.size(size).clip(shape).background(wash),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(category.icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.46f))
+    val bg by animateColorAsState(if (selected) category.color(c) else category.soft(c), tween(200), label = "wellBg")
+    val tint by animateColorAsState(if (selected) category.onColor(c) else category.color(c), tween(200), label = "wellTint")
+    Box(modifier.size(size).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
+        Icon(category.icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.48f))
     }
 }
 
@@ -171,182 +201,267 @@ internal fun rememberRolledIn(text: String?, delayMs: Long = 140, enabled: Boole
 private fun zeroed(s: String) = s.map { if (it.isDigit()) '0' else it }.joinToString("")
 
 // ---------------------------------------------------------------------------------------------
-// The spend ring
+// Bars
 // ---------------------------------------------------------------------------------------------
 
-/**
- * What the ring shows. Without a budget the ring is the month's spending, shared out by
- * category. With a budget the ring is the budget: categories fill the used part and the
- * rest is bare track. Past the budget the ring becomes the spending again, the budgeted part
- * in category colours and the overspend in danger.
- */
-internal class RingModel(
-    val order: List<ExpenseCategory>,
-    val fracs: Map<ExpenseCategory, Float>,
-    val danger: Float,
-    /** Where the budget stands on the ring (0..1), or null without a budget. */
-    val knob: Float?,
-    val over: Boolean,
+/** A rounded progress bar on a track. Grows in from nothing, then follows changes (280ms). */
+@Composable
+internal fun ProgressTrack(
+    fraction: Float,
+    color: Color,
+    track: Color,
+    modifier: Modifier = Modifier,
+    height: Dp = 6.dp,
 ) {
-    companion object {
-        fun of(s: MonthSummary): RingModel {
-            val total = s.totalPaise.coerceAtLeast(0L)
-            val budget = s.budgetPaise?.takeIf { it > 0L }
-            val over = budget != null && total > budget
-            val span = when {
-                total <= 0L -> 0f
-                budget == null -> 1f
-                over -> budget.toFloat() / total
-                else -> total.toFloat() / budget
-            }
-            val spending = s.byCategory.filter { it.spentPaise > 0L }
-            val fracs = spending.associate { t ->
-                t.category to if (total > 0L) t.spentPaise.toFloat() / total * span else 0f
-            }
-            return RingModel(
-                order = spending.map { it.category },
-                fracs = fracs,
-                danger = if (over) 1f - span else 0f,
-                knob = budget?.let { span },
-                over = over,
-            )
-        }
+    val reduced = LocalReducedMotion.current
+    val target = fraction.coerceIn(0f, 1f)
+    val progress = remember { Animatable(if (reduced) target else 0f) }
+    LaunchedEffect(target, reduced) {
+        if (reduced) progress.snapTo(target) else progress.animateTo(target, tween(280, easing = Motion.EaseOut))
+    }
+    val fill by animateColorAsState(color, tween(200), label = "trackFill")
+    Canvas(modifier.fillMaxWidth().height(height).clearAndSetSemantics { }) {
+        val h = size.height
+        drawRoundRect(track, cornerRadius = CornerRadius(h / 2f))
+        val w = size.width * progress.value
+        if (w > 0.5f) drawRoundRect(fill, size = Size(maxOf(w, h), h), cornerRadius = CornerRadius(h / 2f))
     }
 }
 
-private const val RING_DONE = 100_000f
-
 /**
- * The segmented ring, drawn in the language of the Home dial: a thick groove on raised2 with
- * category segments laid round it from twelve o'clock, separated by hairline gaps.
- * On entry the segments sweep in one after another and the budget knob rides the sweep to
- * its place; afterwards every change glides on a spring. [highlight] dims the other segments.
+ * The month's spending as one bar shared out by category, on a track that stands for the
+ * budget (or the total, without one). [highlight] dims the other categories.
  */
 @Composable
-internal fun SpendRing(
+internal fun CategoryBar(
     summary: MonthSummary,
     modifier: Modifier = Modifier,
-    stroke: Dp = 22.dp,
-    gap: Dp = 3.dp,
-    knobRadius: Dp = 9.dp,
-    inset: Dp = 8.dp,
+    track: Color = Hub.colors.well,
     highlight: ExpenseCategory? = null,
-    ticks: Boolean = false,
-    stepMs: Int = 90,
-    segmentMs: Int = 560,
-    playIntro: Boolean = true,
-    onIntroStarted: () -> Unit = {},
+    height: Dp = 10.dp,
 ) {
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
-    val model = remember(summary) { RingModel.of(summary) }
-    val spec: AnimationSpec<Float> = if (reduced) snap() else Motion.gentle()
-
-    // One animated share per category; the count never changes so the calls stay stable.
-    val fracs = ExpenseCategory.entries.map { cat ->
-        animateFloatAsState(model.fracs[cat] ?: 0f, spec, label = "segment").value
-    }
+    val parts = summary.byCategory.filter { it.spentPaise > 0L }
+    val total = summary.totalPaise.coerceAtLeast(0L)
+    val budget = summary.budgetPaise?.takeIf { it > 0L }
+    val span = maxOf(total, budget ?: total, 1L).toFloat()
+    val grow = remember { Animatable(if (reduced) 1f else 0f) }
+    LaunchedEffect(Unit) { grow.animateTo(1f, tween(if (reduced) 0 else 300, easing = Motion.EaseOut)) }
     val alphas = ExpenseCategory.entries.map { cat ->
-        animateFloatAsState(
-            if (highlight == null || highlight == cat) 1f else 0.26f,
-            tween(if (reduced) 0 else 280),
-            label = "segmentAlpha",
-        ).value
+        animateFloatAsState(if (highlight == null || highlight == cat) 1f else 0.28f, tween(200), label = "barAlpha").value
     }
-    val danger by animateFloatAsState(model.danger, spec, label = "danger")
-    val knob by animateFloatAsState(model.knob ?: 0f, spec, label = "knob")
-    val hasKnob = model.knob != null
-
-    // Intro clock in milliseconds; jumps to "done" afterwards so later segments draw at once.
-    val sweepMs = remember { stepMs * (model.order.size - 1).coerceAtLeast(0) + segmentMs }
-    val clock = remember { Animatable(if (reduced || !playIntro) RING_DONE else 0f) }
-    LaunchedEffect(Unit) {
-        onIntroStarted()
-        if (clock.value < RING_DONE) {
-            val end = sweepMs + 420
-            clock.animateTo(end.toFloat(), tween(end, easing = LinearEasing))
-            clock.snapTo(RING_DONE)
-        }
-    }
-    val halo: State<Float>? = if (model.over && !reduced) {
-        rememberInfiniteTransition(label = "overPulse").animateFloat(
-            0f, 1f, infiniteRepeatable(tween(2200, easing = Motion.EaseOut), RepeatMode.Restart), label = "halo",
-        )
-    } else null
-
-    Canvas(modifier.clearAndSetSemantics { }) {
-        val t = clock.value
-        val sw = stroke.toPx()
-        val r = size.minDimension / 2f - sw / 2f - inset.toPx()
-        val topLeft = Offset(center.x - r, center.y - r)
-        val arc = Size(r * 2, r * 2)
-        val gapDeg = (gap.toPx() / r) * (180f / PI.toFloat())
-
-        drawCircle(c.raised2, radius = r, center = center, style = Stroke(sw))
-
-        if (ticks) {
-            val detail = ((t - 160f) / 420f).coerceIn(0f, 1f)
-            val tr = r - sw / 2f - 11.dp.toPx()
-            for (k in 0 until 40) {
-                val major = k % 10 == 0
-                val p = ringPoint(center, tr, -90f + k * 9f)
-                drawCircle(
-                    (if (major) c.inkMuted else c.raised2).copy(alpha = detail),
-                    radius = if (major) 2.4.dp.toPx() else 1.4.dp.toPx(),
-                    center = p,
+    Canvas(modifier.fillMaxWidth().height(height).clearAndSetSemantics { }) {
+        val h = size.height
+        val gap = 3.dp.toPx()
+        drawRoundRect(track, cornerRadius = CornerRadius(h / 2f))
+        var x = 0f
+        parts.forEach { t ->
+            val w = size.width * (t.spentPaise / span) * grow.value
+            val drawn = w - gap
+            if (drawn > 0.5f) {
+                drawRoundRect(
+                    t.category.color(c).copy(alpha = alphas[t.category.ordinal]),
+                    topLeft = Offset(x, 0f),
+                    size = Size(drawn, h),
+                    cornerRadius = CornerRadius(minOf(drawn, h) / 2f),
                 )
             }
-        }
-
-        // Category segments, each growing from its own start, one after another.
-        val drawn = model.order + ExpenseCategory.entries.filter { it !in model.order && fracs[it.ordinal] > 0.0005f }
-        var start = -90f
-        drawn.forEachIndexed { i, cat ->
-            val full = fracs[cat.ordinal] * 360f
-            val local = Motion.EaseOut.transform(((t - i * stepMs) / segmentMs).coerceIn(0f, 1f))
-            val sweep = (full - gapDeg).coerceAtLeast(0f) * local
-            if (sweep > 0.15f) {
-                drawArc(
-                    cat.color(c).copy(alpha = alphas[cat.ordinal]),
-                    startAngle = start + gapDeg / 2f, sweepAngle = sweep, useCenter = false,
-                    topLeft = topLeft, size = arc, style = Stroke(sw, cap = StrokeCap.Butt),
-                )
-            }
-            start += full
-        }
-
-        // Overspend: the rest of the ring in danger.
-        if (danger > 0.0005f) {
-            val local = Motion.EaseOut.transform(((t - sweepMs * 0.8f) / segmentMs).coerceIn(0f, 1f))
-            val sweep = (danger * 360f - gapDeg).coerceAtLeast(0f) * local
-            if (sweep > 0.15f) {
-                drawArc(
-                    c.danger, startAngle = start + gapDeg / 2f, sweepAngle = sweep, useCenter = false,
-                    topLeft = topLeft, size = arc, style = Stroke(sw, cap = StrokeCap.Butt),
-                )
-            }
-        }
-
-        // The budget knob rides the sweep, then pops into place.
-        if (hasKnob) {
-            val ride = Motion.EaseOut.transform((t / sweepMs.toFloat()).coerceIn(0f, 1f))
-            val popLocal = (t / 340f).coerceIn(0f, 1f)
-            val s = if (reduced) 1f else 0.55f + 0.45f * easeOutBack(popLocal)
-            val p = ringPoint(center, r, -90f + knob * 360f * ride)
-            val kr = knobRadius.toPx()
-            val color = if (model.over) c.danger else c.ink
-            halo?.value?.let { h ->
-                drawCircle(c.danger.copy(alpha = 0.26f * (1f - h)), radius = kr * (1.3f + 1.6f * h), center = p)
-            }
-            drawCircle(c.ground, radius = (kr + 4.dp.toPx()) * s, center = p)
-            drawCircle(color, radius = kr * s, center = p)
+            x += w
         }
     }
 }
 
-private fun DrawScope.ringPoint(center: Offset, radius: Float, angleDeg: Float): Offset {
-    val a = Math.toRadians(angleDeg.toDouble())
-    return Offset(center.x + radius * cos(a).toFloat(), center.y + radius * sin(a).toFloat())
+// ---------------------------------------------------------------------------------------------
+// The hero card: a colour card with its bottom-right corner cut away to seat a black pill,
+// and optionally a second card peeking out behind it, like the reference wallet.
+// ---------------------------------------------------------------------------------------------
+
+internal val HeroHeight = 204.dp
+internal val HeroPeek = 54.dp
+internal val HeroNotchHeight = 64.dp
+private val HeroNotchGap = 6.dp
+
+/**
+ * [content] fills the card (20dp side padding); keep its last line clear of the notch with
+ * `padding(end = notchWidth)`. [pill] lays out inside the black pill seated in the notch.
+ * [peek] is the strip of the card behind; tapping it runs [onPeek] when given.
+ */
+@Composable
+internal fun NotchedHero(
+    color: Color,
+    notchWidth: Dp,
+    modifier: Modifier = Modifier,
+    peekColor: Color = Color.Transparent,
+    peek: (@Composable RowScope.() -> Unit)? = null,
+    onPeek: (() -> Unit)? = null,
+    peekLabel: String? = null,
+    pill: @Composable RowScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val c = Hub.colors
+    val notch = remember(notchWidth) { HeroNotchShape(CardRadius, 18.dp, notchWidth, HeroNotchHeight) }
+    val top = if (peek != null) HeroPeek else 0.dp
+    Box(modifier.fillMaxWidth().height(top + HeroHeight)) {
+        if (peek != null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(HeroPeek + CardRadius)
+                    .then(
+                        if (onPeek != null) {
+                            Modifier.pressable(onClick = onPeek, pressedScale = 0.98f, showRipple = false, onClickLabel = peekLabel)
+                        } else Modifier,
+                    )
+                    .clip(RoundedCornerShape(CardRadius))
+                    .background(peekColor)
+                    .padding(start = 20.dp, end = 20.dp, bottom = CardRadius),
+                verticalAlignment = Alignment.CenterVertically,
+                content = peek,
+            )
+        }
+        Column(
+            Modifier
+                .padding(top = top)
+                .fillMaxWidth()
+                .height(HeroHeight)
+                .clip(notch)
+                .background(color)
+                .padding(horizontal = 20.dp),
+            content = content,
+        )
+        Row(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .width(notchWidth - HeroNotchGap)
+                .height(HeroNotchHeight - HeroNotchGap)
+                .clip(CircleShape)
+                .background(c.chrome)
+                .padding(horizontal = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = pill,
+        )
+    }
+}
+
+/**
+ * A white disc inside the black pill. A tap steps once; with [repeat], holding keeps
+ * stepping, faster than you could tap. Springs in while held.
+ */
+@Composable
+internal fun PillDisc(
+    icon: ImageVector,
+    description: String,
+    enabled: Boolean,
+    onStep: () -> Unit,
+    repeat: Boolean = false,
+) {
+    val c = Hub.colors
+    val reduced = LocalReducedMotion.current
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val step by rememberUpdatedState(onStep)
+    val isEnabled by rememberUpdatedState(enabled)
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        if (pressed && !reduced) 0.86f else 1f,
+        if (pressed) spring(dampingRatio = 0.9f, stiffness = 1400f) else Motion.snappy(),
+        label = "discPress",
+    )
+    val bg by animateColorAsState(if (enabled) c.onChrome else c.chromeWell, tween(160), label = "discBg")
+    val tint by animateColorAsState(if (enabled) c.chrome else c.onChrome.copy(alpha = 0.45f), tween(160), label = "discTint")
+    Box(
+        Modifier
+            .size(48.dp)
+            .pointerInput(repeat) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    if (!isEnabled) return@awaitEachGesture
+                    pressed = true
+                    var repeated = false
+                    val repeater = if (repeat) {
+                        scope.launch {
+                            delay(450)
+                            while (isEnabled) {
+                                repeated = true
+                                step()
+                                haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+                                delay(80)
+                            }
+                        }
+                    } else null
+                    val up = waitForUpOrCancellation()
+                    repeater?.cancel()
+                    pressed = false
+                    if (up != null && !repeated) {
+                        up.consume()
+                        step()
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    }
+                }
+            }
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                contentDescription = description
+                onClick(label = description) {
+                    if (isEnabled) step()
+                    isEnabled
+                }
+                if (!enabled) disabled()
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .graphicsLayer { scaleX = scale; scaleY = scale }
+                .clip(CircleShape)
+                .background(bg),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        }
+    }
+}
+
+/**
+ * A rounded card with its bottom-right corner cut away: convex corners where the card meets
+ * the cut, a pill-round inner corner that hugs the button seated there.
+ */
+private class HeroNotchShape(
+    private val radius: Dp,
+    private val fillet: Dp,
+    private val notchWidth: Dp,
+    private val notchHeight: Dp,
+) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        with(density) {
+            val w = size.width
+            val h = size.height
+            val r = radius.toPx()
+            val f = fillet.toPx()
+            val nw = notchWidth.toPx()
+            val nh = notchHeight.toPx()
+            val inner = nh / 2f
+            val p = Path().apply {
+                moveTo(r, 0f)
+                lineTo(w - r, 0f)
+                arcTo(Rect(w - 2 * r, 0f, w, 2 * r), -90f, 90f, false)
+                lineTo(w, h - nh - f)
+                arcTo(Rect(w - 2 * f, h - nh - 2 * f, w, h - nh), 0f, 90f, false)
+                lineTo(w - nw + inner, h - nh)
+                arcTo(Rect(w - nw, h - nh, w - nw + 2 * inner, h - nh + 2 * inner), -90f, -90f, false)
+                lineTo(w - nw, h - f)
+                arcTo(Rect(w - nw - 2 * f, h - 2 * f, w - nw, h), 0f, 90f, false)
+                lineTo(r, h)
+                arcTo(Rect(0f, h - 2 * r, 2 * r, h), 90f, 90f, false)
+                lineTo(0f, r)
+                arcTo(Rect(0f, 0f, 2 * r, 2 * r), 180f, 90f, false)
+                close()
+            }
+            return Outline.Generic(p)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -354,14 +469,21 @@ private fun DrawScope.ringPoint(center: Offset, radius: Float, angleDeg: Float):
 // ---------------------------------------------------------------------------------------------
 
 /**
- * This month's spending on Home: a small segmented ring, the total rolling into place, how it
- * stands against the budget and where most of it went. The whole card opens the Expenses page.
+ * This month's spending on Home: a violet wallet well with the line under it saying how it
+ * stands, the total rolling into place, and the month shared out by category on one bar.
+ * The whole card opens the Expenses page.
  */
 @Composable
 fun ExpenseHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val container = LocalContext.current.container
     val c = Hub.colors
-    val month = remember { YearMonth.now() }
+    val reduced = LocalReducedMotion.current
+    // Moves on to the new month if Home stays open past midnight on the last day.
+    var month by remember { mutableStateOf(YearMonth.now()) }
+    LifecycleResumeEffect(Unit) {
+        month = YearMonth.now()
+        onPauseOrDispose { }
+    }
     val flow = remember(month) { container.expenses.month(month) }
     val summary by flow.collectAsStateWithLifecycle<MonthSummary?>(initialValue = null)
     val s = summary
@@ -371,59 +493,66 @@ fun ExpenseHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val top = s?.byCategory?.firstOrNull { it.spentPaise > 0L }
 
     val caption = when {
-        s == null -> ""
+        s == null -> "This month"
         over -> "${Money.format(total - (budget ?: 0L))} over budget"
-        budget != null -> "of ${Money.format(budget)} budget"
-        total == 0L -> "Nothing spent this month"
-        else -> "spent this month"
+        budget != null -> "${Money.format(budget - total)} left of ${Money.format(budget)}"
+        top != null -> "Most on ${top.category.label.lowercase()}"
+        else -> "Nothing spent this month"
     }
-    val captionColor by animateColorAsState(if (over) c.danger else c.inkMuted, tween(240), label = "cardCaption")
+    val captionColor by animateColorAsState(if (over) c.danger else c.inkMuted, tween(220), label = "cardCaption")
 
-    Row(
+    Column(
         modifier
             .fillMaxWidth()
             .pressable(onClick = onOpen, pressedScale = 0.97f, showRipple = false, onClickLabel = "Open expenses")
-            .clip(RoundedCornerShape(28.dp))
-            .background(c.raised)
-            .padding(start = 16.dp, end = 12.dp, top = 16.dp, bottom = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .hubCard(c.raised)
+            .padding(18.dp),
     ) {
-        Box(Modifier.size(76.dp), contentAlignment = Alignment.Center) {
-            if (s != null) {
-                SpendRing(
-                    s, Modifier.fillMaxSize(),
-                    stroke = 9.dp, gap = 2.dp, knobRadius = 4.5.dp, inset = 4.dp,
-                    stepMs = 70, segmentMs = 460,
-                )
-            } else {
-                Canvas(Modifier.fillMaxSize()) {
-                    val sw = 9.dp.toPx()
-                    drawCircle(c.raised2, radius = size.minDimension / 2f - sw / 2f - 4.dp.toPx(), style = Stroke(sw))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(42.dp).clip(CircleShape).background(c.dawn), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.AccountBalanceWallet, contentDescription = null, tint = c.onDawn, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Spent this month", style = RowTitle, color = c.ink, maxLines = 1)
+                AnimatedContent(
+                    targetState = caption,
+                    transitionSpec = {
+                        fadeIn(tween(if (reduced) 120 else 200)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false)
+                    },
+                    label = "homeCaption",
+                ) { t ->
+                    Text(t, style = RowMeta, color = captionColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            Box(Modifier.size(36.dp).clip(CircleShape).background(c.well), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = c.ink, modifier = Modifier.size(20.dp))
+            }
         }
-        Spacer(Modifier.width(18.dp))
-        Column(Modifier.weight(1f)) {
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
             RollingText(
                 rememberRolledIn(s?.let { Money.format(it.totalPaise) }),
                 style = HubType.clockMedium,
                 color = c.ink,
+                modifier = Modifier.weight(1f, fill = false),
             )
-            Spacer(Modifier.height(4.dp))
-            Text(caption, style = SmallFigures, color = captionColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (top != null) {
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(top.category.color(c)))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "Most on ${top.category.label.lowercase()}",
-                        style = HubType.small, color = c.inkMuted,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                }
+            Spacer(Modifier.weight(1f))
+            if (budget != null) {
+                Text(
+                    "of ${Money.format(budget)}",
+                    style = SmallFigures,
+                    color = c.inkMuted,
+                    maxLines = 1,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
             }
         }
-        Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = c.inkMuted)
+        Spacer(Modifier.height(12.dp))
+        if (s != null) {
+            CategoryBar(s, track = c.well, height = 8.dp)
+        } else {
+            Box(Modifier.fillMaxWidth().height(8.dp).clip(CircleShape).background(c.well))
+        }
     }
 }

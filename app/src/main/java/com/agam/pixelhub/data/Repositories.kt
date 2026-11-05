@@ -60,6 +60,13 @@ class ReminderRepository(
         }
     }
 
+    /** Puts back a reminder that was just deleted (Undo). It gets a new id and calendar event. */
+    suspend fun restore(r: Reminder): Reminder {
+        val saved = save(0, r.title, r.notes, r.anchor, r.recurrence)
+        if (r.done) setDone(saved, true)
+        return saved
+    }
+
     suspend fun delete(reminder: Reminder) {
         scheduler.cancelReminder(reminder.id)
         dao.delete(reminder)
@@ -203,8 +210,14 @@ class ShortcutRepository(private val dao: ShortcutDao) {
 
     suspend fun list(): List<AppShortcut> = dao.all()
 
-    suspend fun add(shortcut: AppShortcut): Long =
-        dao.insert(shortcut.copy(id = 0, position = (dao.maxPosition() ?: -1) + 1))
+    /** Adds a shortcut; an app that is already pinned isn't added twice (a quick double tap). */
+    suspend fun add(shortcut: AppShortcut): Long {
+        if (shortcut.kind == ShortcutKind.APP) {
+            dao.all().firstOrNull { it.kind == ShortcutKind.APP && it.packageName == shortcut.packageName }
+                ?.let { return it.id }
+        }
+        return dao.insert(shortcut.copy(id = 0, position = (dao.maxPosition() ?: -1) + 1))
+    }
 
     suspend fun delete(shortcut: AppShortcut) = dao.delete(shortcut)
 }
