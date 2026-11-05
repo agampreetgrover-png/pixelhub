@@ -10,7 +10,7 @@ A personal all-in-one Android app for a Google Pixel 9a. Everything works by han
 - **Calendar**: shows your upcoming Google Calendar events, read from the calendars synced to the phone, so no sign-in is needed. It can also write your reminders and alarms into a calendar you pick.
 - **Assistant**: type or speak "remind me to call mom at 6pm", "spent 250 on lunch", "add 30 to food" or Hinglish like "kal subah 7 baje dawai yaad dilana". Keyword rules on the phone turn it into a draft card that you confirm before anything is created, in well under a millisecond and with no internet or AI service. It also opens apps ("open spotify", "whatsapp kholo"), dials numbers, navigates and searches. If a request isn't understood, it says so straight away. Every request is logged under **Settings → Assistant log**.
 
-**Home** gathers it all:
+**Home** greets you by name and gathers it all:
 - a swipeable alarm and reminder card deck;
 - quick actions;
 - today's items, upcoming events and the month's money and health;
@@ -34,7 +34,7 @@ It is built with Kotlin, Jetpack Compose, Material 3, Room, DataStore and Health
 From the command line, point `JAVA_HOME` at a JDK 17–21 first. On this machine that is `%LOCALAPPDATA%\Android\jdk-21`. Then:
 
 ```
-gradlew test           # unit tests: recurrence, assistant parsing, expenses, calendar, nudges, themes
+gradlew test           # unit tests: recurrence, assistant parsing (English and Hinglish), expenses, People ledger, calendar, nudges, themes
 gradlew installDebug   # build and install on the connected phone
 ```
 
@@ -56,13 +56,14 @@ gradlew installDebug   # build and install on the connected phone
 - **Doze**: with USB connected, run `adb shell dumpsys deviceidle force-idle`. A reminder should still fire on time.
 - **Reboot**: restart the phone. `adb shell dumpsys alarm | findstr pixelhub` should still list the scheduled items.
 - **Assistant**: try "wake me up at 6:30 on weekdays", "spent 250 on lunch", "kal subah 7 baje dawai yaad dilana" and "open spotify". Each should show a confirmation card at once. "what is the weather" should get an immediate "I didn't understand that". Both show up under **Settings → Assistant log**, with the rule that matched and how long it took. Type "help" for everything it understands.
+- **People**: in **Money → People**, add someone, tap **I paid** for ₹30 and then **they paid** for ₹30. The balance should go to ₹30 and then "All square". In the assistant, "paid Naruna 30" should show a card, and "naruna ka hisaab" should answer at once. Your Expenses totals shouldn't change.
 - **Open a tab directly**:
 
   ```
   adb shell am start -f 0x14000000 -n com.agam.pixelhub/.MainActivity --es com.agam.pixelhub.extra.TAB EXPENSES
   ```
 
-  The tabs are `HOME`, `REMINDERS`, `ALARMS`, `EXPENSES`, `HEALTH`, `CALENDAR`, `ASSISTANT` and `SETTINGS`.
+  The tabs are `HOME`, `REMINDERS`, `ALARMS`, `EXPENSES`, `PEOPLE`, `HEALTH`, `CALENDAR`, `ASSISTANT` and `SETTINGS`.
 
 ## Accessibility
 
