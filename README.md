@@ -9,7 +9,7 @@ A personal all-in-one Android app for a Google Pixel 9a. Everything works by han
 - **Health**: reads steps, distance, active calories and exercise from Health Connect, shows today and the past week against a daily step goal, and can send nudges, e.g. a reminder to walk when you're behind.
 - **Calendar**: shows your upcoming Google Calendar events, read from the calendars synced to the phone, so no sign-in is needed. It can also write your reminders and alarms into a calendar you pick.
 - **Assistant**: type or speak "remind me to call mom at 6pm", "spent 250 on lunch", "add 30 to food" or Hinglish like "kal subah 7 baje dawai yaad dilana". Keyword rules on the phone turn it into a draft card that you confirm before anything is created, in well under a millisecond and with no internet or AI service. It also opens apps ("open spotify", "whatsapp kholo"), dials numbers, navigates and searches. If a request isn't understood, it says so straight away. Every request is logged under **Settings → Assistant log**.
-- **Widgets**: home-screen widgets for Health, Reminders, Alarms, Money and Calendar, each with a layout for every size from 1×1 to 4×4. They use your PixelHub theme. You can tick off a reminder and switch an alarm on or off straight from the home screen; tapping anywhere else opens that section. They update the moment their data changes while PixelHub is running, and every 30 minutes otherwise.
+- **Widgets**: home-screen widgets for Health, Reminders, Alarms, Money and Calendar, each with a layout for every size from 1×1 to 4×4. They use your PixelHub theme. You can tick off a reminder and switch an alarm on or off straight from the home screen; tapping anywhere else opens that section. They update the moment their data changes while PixelHub is running, and every 30 minutes otherwise. A **Now playing** widget shows what Spotify or any other player is playing, with live times and controls, and follows song changes as they happen.
 
 **Home** greets you by name and gathers it all:
 - a swipeable alarm and reminder card deck;
@@ -58,7 +58,7 @@ gradlew installDebug   # build and install on the connected phone
 - **Reboot**: restart the phone. `adb shell dumpsys alarm | findstr pixelhub` should still list the scheduled items.
 - **Assistant**: try "wake me up at 6:30 on weekdays", "spent 250 on lunch", "kal subah 7 baje dawai yaad dilana" and "open spotify". Each should show a confirmation card at once. "what is the weather" should get an immediate "I didn't understand that". Both show up under **Settings → Assistant log**, with the rule that matched and how long it took. Type "help" for everything it understands.
 - **People**: in **Money → People**, add someone, tap **I paid** for ₹30 and then **they paid** for ₹30. The balance should go to ₹30 and then "All square". In the assistant, "paid Naruna 30" should show a card, and "naruna ka hisaab" should answer at once. Your Expenses totals shouldn't change.
-- **Widgets**: long-press the home screen, open **Widgets → PixelHub** and add each one. Resize them: the layout should change at each size. Tick a reminder and switch an alarm from the widget, then open the app: both should match.
+- **Widgets**: long-press the home screen, open **Widgets → PixelHub** and add each one. Resize them: the layout should change at each size. Tick a reminder and switch an alarm from the widget, then open the app: both should match. With music playing, skip a song in the player: **Now playing** should change within a second or two.
 - **Open a tab directly**:
 
   ```

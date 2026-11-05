@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A dark round control with a faint rim. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#FF2A2A2A" />
+    <stroke android:width="1dp" android:color="#33FFFFFF" />
+</shape>

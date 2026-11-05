@@ -11,4 +11,6 @@
     <string name="widget_money_description">This month\'s spending against your budget</string>
     <string name="widget_calendar_label">Calendar</string>
     <string name="widget_calendar_description">What\'s next today and tomorrow</string>
+    <string name="widget_music_label">Now playing</string>
+    <string name="widget_music_description">What\'s playing, with controls</string>
 </resources>

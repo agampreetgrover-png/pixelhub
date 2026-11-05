@@ -1,10 +1,12 @@
 package com.agam.pixelhub.widget
 
 import android.content.Context
+import android.os.PowerManager
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.updateAll
 import com.agam.pixelhub.AppContainer
 import com.agam.pixelhub.calendar.CalendarEvents
+import com.agam.pixelhub.media.NowPlaying
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -12,9 +14,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.time.YearMonth
 
@@ -58,7 +62,33 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
             // The window only signals "something changed"; the widget re-reads with the current time.
             calendar.observe(now, now + 2 * DAY_MS).drop(1).collect { CalendarWidget().updateAll(context) }
         }
+        // Music: redraw the moment the track, artist, art or play/pause changes, from any app
+        // (Spotify, YT Music, a Bluetooth button, the lock screen…). PixelHub's media listener
+        // keeps the process alive while notification access is on, so this runs with the app closed.
+        if (NowPlaying.hasAccess(context)) {
+            scope.launch {
+                NowPlaying.flow(context)
+                    .distinctUntilChangedBy { s -> listOf(s?.pkg, s?.title, s?.artist, s?.playing, s?.art?.generationId) }
+                    .collect { MusicWidget().updateAll(context) }
+            }
+            // While music plays and the screen is on, redraw every 5 s so the progress bar moves.
+            // Stops when paused or the screen is off, so it costs nothing while idle.
+            val power = context.getSystemService(PowerManager::class.java)
+            scope.launch {
+                NowPlaying.flow(context).map { it?.playing == true }.distinctUntilChanged()
+                    .flatMapLatest { playing -> if (playing) every(5_000L) else emptyFlow() }
+                    .collect { if (power.isInteractive) MusicWidget().updateAll(context) }
+            }
+        }
         scope.launch { publishPreviews() }
+    }
+
+    /** Ticks every [ms] while collected. */
+    private fun every(ms: Long): Flow<Unit> = flow {
+        while (true) {
+            delay(ms)
+            emit(Unit)
+        }
     }
 
     /** [value] now, and again every hour. */
@@ -76,7 +106,7 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
         // One record per widget, so a widget added in a later build still gets its preview.
         val receivers = listOf(
             HealthWidgetReceiver::class, RemindersWidgetReceiver::class, AlarmsWidgetReceiver::class,
-            MoneyWidgetReceiver::class, CalendarWidgetReceiver::class,
+            MoneyWidgetReceiver::class, CalendarWidgetReceiver::class, MusicWidgetReceiver::class,
         )
         for (receiver in receivers) {
             val key = "preview_${receiver.simpleName}"
