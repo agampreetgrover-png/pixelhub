@@ -2,7 +2,8 @@ package com.agam.pixelhub.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -10,6 +11,9 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,6 +27,7 @@ import com.agam.pixelhub.ai.AssistantLogEntry
 import com.agam.pixelhub.container
 import com.agam.pixelhub.ui.QuietButton
 import com.agam.pixelhub.ui.theme.Hub
+import com.agam.pixelhub.ui.theme.HubType
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -37,12 +42,14 @@ private val TIME = DateTimeFormatter.ofPattern("d MMM, h:mm a", Locale.ENGLISH)
  * The assistant's request log: every message, whether a rule understood it, what it became,
  * and whether the draft was then saved, cancelled or failed. Kept on the phone, newest first.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AssistantLogSection(modifier: Modifier = Modifier) {
     val c = LocalContext.current.container
     val entries by c.assistantLog.entries.collectAsStateWithLifecycle()
     var open by rememberSaveable { mutableStateOf(false) }
     var showAll by rememberSaveable { mutableStateOf(false) }
+    var confirmClear by rememberSaveable { mutableStateOf(false) }
     val understood = entries.count { it.ok }
 
     SettingsCard(modifier) {
@@ -61,25 +68,43 @@ fun AssistantLogSection(modifier: Modifier = Modifier) {
         Expandable(open && entries.isNotEmpty()) {
             Column(Modifier.fillMaxWidth()) {
                 (if (showAll) entries else entries.take(PREVIEW)).forEach { LogRow(it) }
-                Row(
+                // Wraps at large font sizes instead of squeezing the second button.
+                FlowRow(
                     Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (entries.size > PREVIEW) {
                         QuietButton(if (showAll) "Show fewer" else "Show all ${entries.size}", onClick = { showAll = !showAll })
                     }
-                    QuietButton(
-                        "Clear log",
-                        onClick = {
-                            c.assistantLog.clear()
-                            open = false
-                            showAll = false
-                        },
-                        color = Hub.colors.danger,
-                    )
+                    QuietButton("Clear log", onClick = { confirmClear = true }, color = Hub.colors.danger)
                 }
             }
         }
+    }
+
+    // Up to 200 entries, gone for good: one tap shouldn't do it.
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            containerColor = Hub.colors.raised,
+            shape = RoundedCornerShape(32.dp),
+            title = { Text("Clear the assistant log?", style = HubType.section, color = Hub.colors.ink) },
+            text = { Text("All ${entries.size} entries will be deleted. This can't be undone.", style = HubType.body, color = Hub.colors.inkMuted) },
+            confirmButton = {
+                QuietButton(
+                    "Clear",
+                    onClick = {
+                        c.assistantLog.clear()
+                        confirmClear = false
+                        open = false
+                        showAll = false
+                    },
+                    color = Hub.colors.danger,
+                )
+            },
+            dismissButton = { QuietButton("Cancel", onClick = { confirmClear = false }, color = Hub.colors.inkMuted) },
+        )
     }
 }
 
@@ -113,5 +138,7 @@ private fun LogRow(e: AssistantLogEntry) {
         title = "“${e.input}”",
         meta = "${e.summary}\n$details",
         role = null,
+        // A wrapped summary must not push the rule and outcome line out of sight.
+        metaMaxLines = 6,
     )
 }

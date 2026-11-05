@@ -34,11 +34,29 @@ class CommandParserTest {
 
     @Test fun bareHourPicksTheNextOne() = assertEquals(reminder("Call Rahul", at(11, 5, 18)), parse("remind me to call Rahul at 6"))
 
+    @Test fun todayBareHourPicksTheOneStillAhead() =
+        assertEquals(reminder("Call mom", at(11, 5, 20)), parse("remind me to call mom today at 8"))
+
+    @Test fun dailyBareHourDoesNotDependOnTheClock() = assertEquals(
+        reminder("Take pills", at(11, 6, 8), Recurrence(RepeatType.DAILY)),
+        parse("remind me to take pills every day at 8"),
+    )
+
+    @Test fun midnightOnANamedNightIsTheNextDay() =
+        assertEquals(reminder("Lock the door", at(11, 7, 0)), parse("remind me to lock the door tomorrow night at 12"))
+
     @Test fun inTwoHours() = assertEquals(reminder("Pay rent", at(11, 5, 12)), parse("remind me to pay rent in 2 hours"))
 
     @Test fun inTwentyMinutesBeforeTitle() = assertEquals(reminder("Check the oven", at(11, 5, 10, 20)), parse("remind me in 20 min to check the oven"))
 
     @Test fun halfAnHour() = assertEquals(reminder("Stretch", at(11, 5, 10, 30)), parse("remind me to stretch in half an hour"))
+
+    @Test fun decimalHours() = assertEquals(reminder("Stretch", at(11, 5, 11, 30)), parse("remind me to stretch in 1.5 hours"))
+
+    @Test fun typedFillerPairStaysInTitle() =
+        assertEquals(reminder("Go to the gym", at(11, 6, 7)), parse("remind me to go to the gym tomorrow at 7am"))
+
+    @Test fun setIsPartOfTheTask() = assertEquals(reminder("Set the table", at(11, 5, 20)), parse("remind me to set the table at 8pm"))
 
     @Test fun dailyAtNight() = assertEquals(
         reminder("Take vitamins", at(11, 5, 21), Recurrence(RepeatType.DAILY)),
@@ -56,6 +74,11 @@ class CommandParserTest {
     )
 
     @Test fun namedWeekdayAfternoon() = assertEquals(reminder("Meeting", at(11, 6, 15)), parse("remind me about the meeting on friday at 3"))
+
+    @Test fun ordinalThisMonthStillAhead() = assertEquals(reminder("Pay rent", at(11, 30, 9)), parse("remind me on the 30th to pay rent"))
+
+    @Test fun ordinalMissingFromThisMonthRollsToTheNextThatHasIt() =
+        assertEquals(reminder("Pay rent", at(12, 31, 9)), parse("remind me on the 31st to pay rent"))
 
     @Test fun dayAndMonth() = assertEquals(reminder("Submit assignment", at(11, 12, 9)), parse("remind me on 12 nov to submit assignment"))
 
@@ -153,6 +176,9 @@ class CommandParserTest {
     @Test fun addAReminderIsStillAReminder() = assertTrue(parse("add a reminder to call mom at 6pm") is ParsedCommand.CreateReminder)
 
     @Test fun addAlarmIsStillAnAlarm() = assertTrue(parse("add alarm at 7am") is ParsedCommand.CreateAlarm)
+
+    @Test fun priceAfterForBeatsTheCount() =
+        assertEquals(spent(500, ExpenseCategory.OTHER, "2 tickets"), parse("bought 2 tickets for 500"))
 
     @Test fun moneyWithoutAmountFails() = invalid("paid rent")
 
@@ -254,6 +280,11 @@ class CommandParserTest {
     @Test fun website() = assertEquals(ParsedCommand.OpenLink("https://youtube.com"), parse("open youtube.com"))
 
     @Test fun sms() = assertEquals(ParsedCommand.OpenLink("sms:9876543210?body=running%20late"), parse("text 9876543210 running late"))
+
+    @Test fun smsKeepsCaseAndPunctuation() = assertEquals(
+        ParsedCommand.OpenLink("sms:9876543210?body=I%27ll%20be%20late%21"),
+        parse("text 9876543210 saying I'll be late!"),
+    )
 
     // ---- Everything else ----
 

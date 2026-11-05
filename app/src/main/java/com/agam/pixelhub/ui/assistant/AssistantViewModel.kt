@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.sync.withLock
 import com.agam.pixelhub.data.Expense
 import com.agam.pixelhub.expenses.Money
@@ -65,7 +66,18 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
         val message = text.trim()
         if (message.isEmpty()) return
         add(ChatItem.User(newId(), message))
-        viewModelScope.launch { order.withLock { handle(message) } }
+        viewModelScope.launch {
+            order.withLock {
+                try {
+                    handle(message)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // A rule bug must never take the whole app down: answer like any unreadable request.
+                    add(ChatItem.Bot(newId(), CommandParser.NOT_UNDERSTOOD, isError = true))
+                }
+            }
+        }
     }
 
     /**
@@ -150,7 +162,16 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
         if (item.status != ChatItem.Status.PENDING || !inFlight.add(id)) return
         viewModelScope.launch {
             try {
-                finish(id, work())
+                // A failed save (database, scheduling) shows on the card instead of crashing the app;
+                // the card stays pending so Confirm can be tried again.
+                val outcome = try {
+                    work()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Outcome(false, "Couldn't save that. Try again.")
+                }
+                finish(id, outcome)
             } finally {
                 inFlight.remove(id)
             }
@@ -168,7 +189,8 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cancel(id: Long) {
-        if (id in inFlight) return
+        // The buttons stay tappable while they animate out: a late Cancel must not undo a save.
+        if (id in inFlight || find(id)?.status != ChatItem.Status.PENDING) return
         find(id)?.logId?.let { c.assistantLog.setOutcome(it, null, "Cancelled") }
         updateAction(id) { it.copy(status = ChatItem.Status.CANCELLED, note = "") }
     }

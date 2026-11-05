@@ -70,7 +70,8 @@ internal object DateTimeRules {
         "january|february|march|april|may|june|july|august|september|october|november|december" +
             "|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec"
     private const val MER = """(am|pm|a\.?m\.?|p\.?m\.?)"""
-    private const val NUM = """\d+|an?|one|ek|two|do|three|teen|four|char|chaar|five|paanch|half\s+an?|half|aadhe|aadha|adha|adhe"""
+    // Decimals too: "in 1.5 hours" was left in the title with the reminder at the default time.
+    private const val NUM = """\d+(?:\.\d+)?|an?|one|ek|two|do|three|teen|four|char|chaar|five|paanch|half\s+an?|half|aadhe|aadha|adha|adhe"""
     private const val UNIT = """minutes?|mins?|m|hours?|hrs?|h|days?|weeks?"""
 
     fun dayOf(word: String): DayOfWeek? = when (word.take(3)) {
@@ -209,12 +210,14 @@ internal object DateTimeRules {
         }
         sc.take(ORDINAL)?.let { m ->
             val day = m.groupValues[1].toInt()
-            val thisMonth = runCatching { today.withDayOfMonth(day) }.getOrNull() ?: return null
-            val date = when {
-                past && thisMonth.isAfter(today) -> thisMonth.minusMonths(1)
-                !past && thisMonth.isBefore(today) -> runCatching { today.plusMonths(1).withDayOfMonth(day) }.getOrNull() ?: return null
-                else -> thisMonth
-            }
+            // The nearest month that has this day, ahead (or behind, for spending): "the 31st"
+            // said in November is 31 December, not dropped; "the 30th" in March looking back is
+            // 30 January, not a clamped 28 February.
+            val date = generateSequence(today.withDayOfMonth(1)) { if (past) it.minusMonths(1) else it.plusMonths(1) }
+                .take(13)
+                .mapNotNull { runCatching { it.withDayOfMonth(day) }.getOrNull() }
+                .firstOrNull { if (past) !it.isAfter(today) else !it.isBefore(today) }
+                ?: return null
             return DateHit(date)
         }
         return null
@@ -275,7 +278,7 @@ internal object DateTimeRules {
     /** 24-hour time from what was written, or null if it isn't a real time ("at 27"). */
     fun resolve(t: ClockTime, part: DayPart?): HourMinute? {
         val h = t.hour
-        if (h > 23 || t.minute > 59) return null
+        if (h !in 0..23 || t.minute !in 0..59) return null
         if (h == 0 || h >= 13) return HourMinute(h, t.minute, certain = true)
         if (t.meridiem == 'p') return HourMinute(if (h == 12) 12 else h + 12, t.minute, true)
         if (t.meridiem == 'a') return HourMinute(if (h == 12) 0 else h, t.minute, true)

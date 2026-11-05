@@ -58,7 +58,7 @@ object CommandParser {
         if (reminderAt != null && (alarmAt == null || reminderAt <= alarmAt)) return ParseResult(reminder(s, text, now), "reminder")
         if (alarmAt != null) return ParseResult(alarm(s, text, now), "alarm")
 
-        link(s)?.let { return it }
+        link(s, text)?.let { return it }
         openApp(s, text)?.let { return ParseResult(it, "open_app") }
         ledger(s, text, now, people)?.let { return it }
         money(s, text, now)?.let { return it }
@@ -88,9 +88,18 @@ object CommandParser {
             val day = date?.date ?: rel?.days?.let { now.toLocalDate().plusDays(it) }
             val clock = time?.let { DateTimeRules.resolve(it, part) }
             if (time != null && clock == null) return ParsedCommand.Invalid("That time doesn't look right. Try \"at 6:30 pm\".")
+            val timePart = time?.part ?: part
             at = when {
                 clock == null -> (day ?: now.toLocalDate()).atTime(part?.defaultHour ?: DEFAULT_HOUR, 0)
+                // "tonight at 12", "kal raat 2 baje": the small hours after that night, not before it.
+                clock.certain && day != null && clock.hour < 6 && timePart == DayPart.NIGHT ->
+                    day.plusDays(1).atTime(clock.hour, clock.minute)
                 clock.certain -> (day ?: now.toLocalDate()).atTime(clock.hour, clock.minute)
+                // "every day at 8": the same hour whenever it's said, not am or pm by the clock.
+                repeat != null -> (day ?: now.toLocalDate()).atTime(DateTimeRules.likelyHour(clock.hour), clock.minute)
+                // "today at 8" said at 9am: 8pm, the one still ahead today.
+                day == now.toLocalDate() -> DateTimeRules.nextOccurrence(clock.hour, clock.minute, nowLocal)
+                    .takeIf { it.toLocalDate() == day } ?: day.atTime(DateTimeRules.likelyHour(clock.hour), clock.minute)
                 day != null -> day.atTime(DateTimeRules.likelyHour(clock.hour), clock.minute)
                 else -> DateTimeRules.nextOccurrence(clock.hour, clock.minute, nowLocal)
             }
@@ -138,6 +147,9 @@ object CommandParser {
             """(?:\s*(rs|rupees?|rupaye|rupay|rupaiye|rupiya|inr|bucks|/-))?(?![a-z\d])""",
     )
 
+    /** Words that put a price right after them, so a bare number there is the amount. */
+    private val AMOUNT_CUE = Regex("""\b(?:spent|spend|paid|pay|payed|cost|costs|gave|add|added|for|worth|of)\s+$""")
+
     /** An expense or income, or null if the message isn't about money at all. */
     private fun money(s: String, original: String, now: ZonedDateTime): ParseResult? {
         val incomeWord = Lexicon.INCOME.containsMatchIn(s)
@@ -147,6 +159,9 @@ object CommandParser {
         val date = DateTimeRules.date(sc, now.toLocalDate(), past = true)
         val matches = AMOUNT.findAll(sc.rest).toList()
         val m = matches.firstOrNull { it.groupValues[1].isNotEmpty() || it.groupValues[3].isNotEmpty() || it.groupValues[4].isNotEmpty() }
+            // "bought 2 tickets for 500": the number after "for" (or "spent", "paid") is the price,
+            // not the count before it.
+            ?: matches.firstOrNull { AMOUNT_CUE.containsMatchIn(sc.rest.substring(0, it.range.first)) }
             ?: matches.firstOrNull()
         if (m == null) {
             if (!incomeWord && !expenseWord) return null
@@ -297,7 +312,13 @@ object CommandParser {
         return if (name.isEmpty()) null else ParsedCommand.OpenApp(name)
     }
 
-    private fun link(s: String): ParseResult? {
+    /** Lexicon.SMS, read against the raw text so the body keeps its case and punctuation. */
+    private val SMS_BODY = Regex(
+        """^\s*(?:text|sms|message|msg)\s+(?:to\s+)?\+?\d[\d\s-]{5,}\d\s+(?:saying\s+|that\s+)?(.+)$""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
+
+    private fun link(s: String, original: String): ParseResult? {
         Lexicon.URL_ONLY.matchEntire(s)?.let { m ->
             val url = m.groupValues[1]
             return ParseResult(ParsedCommand.OpenLink(if (url.startsWith("http")) url else "https://$url"), "url")
@@ -307,7 +328,8 @@ object CommandParser {
         }
         Lexicon.SMS.matchEntire(s)?.let { m ->
             val number = digits(m.groupValues[1])
-            val body = m.groupValues[2].trim()
+            // The message as typed: the normalised text is lower-case and has lost its ! and ?.
+            val body = SMS_BODY.find(original)?.groupValues?.get(1)?.trim() ?: m.groupValues[2].trim()
             val uri = if (body.isEmpty()) "sms:$number" else "sms:$number?body=${encode(body)}"
             return ParseResult(ParsedCommand.OpenLink(uri), "sms")
         }
@@ -343,8 +365,13 @@ object CommandParser {
             .filter { it.isNotEmpty() }
         while (words.isNotEmpty() && words.first() in fillers) words = words.drop(1)
         while (words.isNotEmpty() && words.last() in fillers) words = words.dropLast(1)
-        // Taking out the amount can leave two fillers side by side ("refund of from amazon").
-        words = words.filterIndexed { i, w -> !(w in fillers && words.getOrNull(i + 1) in fillers) }
+        // Taking out the amount can leave two fillers side by side ("refund of from amazon"). A pair
+        // the user typed themselves stays: "go to the gym" must not become "Go the gym".
+        val said = " ${Lexicon.normalize(original)} "
+        words = words.filterIndexed { i, w ->
+            val next = words.getOrNull(i + 1)
+            !(w in fillers && next in fillers && " $w $next " !in said)
+        }
         return words.joinToString(" ") { w ->
             Regex("""(?i)(?<![\p{L}\p{N}])${Regex.escape(w)}(?![\p{L}\p{N}])""").find(original)?.value ?: w
         }.replaceFirstChar { it.titlecase() }

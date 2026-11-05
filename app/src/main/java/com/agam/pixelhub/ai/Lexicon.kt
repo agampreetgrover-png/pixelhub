@@ -194,7 +194,9 @@ internal object Lexicon {
 
     val REMINDER_FILLERS = setOf(
         "to", "that", "about", "for", "at", "on", "by", "me", "mujhe", "muje", "mujhko", "ki", "ko", "ke", "liye", "se",
-        "please", "pls", "plz", "hai", "hain", "h", "karna", "karo", "kar", "dena", "de", "na", "the", "a", "an", "set",
+        // No "set": REMINDER already takes "set a reminder", and as a filler it ate the task in
+        // "remind me to set the table" (leaving "Table").
+        "please", "pls", "plz", "hai", "hain", "h", "karna", "karo", "kar", "dena", "de", "na", "the", "a", "an",
         "and", "is", "of", "i", "oclock", "later", "now", "abhi", "bhi", "wala", "wali", "in",
     )
     val ALARM_FILLERS = setOf(

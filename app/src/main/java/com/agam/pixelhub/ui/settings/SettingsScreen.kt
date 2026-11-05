@@ -229,6 +229,8 @@ internal fun SettingRow(
     /** Drawn in the well instead of [icon], e.g. a calendar's colour. */
     wellContent: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    /** Lines [meta] may take; the assistant log's two-part lines need more than the usual 2. */
+    metaMaxLines: Int = 2,
 ) {
     val c = Hub.colors
     Row(
@@ -267,7 +269,7 @@ internal fun SettingRow(
                         m,
                         style = HubType.small.copy(fontSize = 12.sp, lineHeight = 16.sp),
                         color = c.inkMuted,
-                        maxLines = 2,
+                        maxLines = metaMaxLines,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

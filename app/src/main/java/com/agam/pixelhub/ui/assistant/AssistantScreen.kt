@@ -182,7 +182,9 @@ fun AssistantScreen(vm: AssistantViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val items by vm.items.collectAsStateWithLifecycle()
     var input by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
-    var editing by remember { mutableStateOf<ChatItem.Action?>(null) }
+    // The id, not the item: an id can be saved, so an open editor survives rotation (the chat
+    // itself lives in the activity-scoped view model).
+    var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
     var listening by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
@@ -287,7 +289,7 @@ fun AssistantScreen(vm: AssistantViewModel, onBack: () -> Unit) {
                         item = item,
                         onConfirm = { vm.confirm(item.id) },
                         onEdit = when (item.command) {
-                            is ParsedCommand.CreateReminder, is ParsedCommand.CreateAlarm -> ({ editing = item })
+                            is ParsedCommand.CreateReminder, is ParsedCommand.CreateAlarm -> ({ editingId = item.id })
                             else -> null
                         },
                         onCancel = { vm.cancel(item.id) },
@@ -299,23 +301,23 @@ fun AssistantScreen(vm: AssistantViewModel, onBack: () -> Unit) {
         }
     }
 
-    editing?.let { item ->
+    (items.firstOrNull { it.id == editingId } as? ChatItem.Action)?.let { item ->
         when (val cmd = item.command) {
             is ParsedCommand.CreateReminder -> ReminderEditorDialog(
                 initial = ReminderDraft(cmd.title, cmd.notes, cmd.at, cmd.recurrence),
                 isNew = true,
-                onDismiss = { editing = null },
+                onDismiss = { editingId = null },
                 onSave = { draft ->
-                    editing = null
+                    editingId = null
                     vm.saveReminder(item.id, draft)
                 },
             )
             is ParsedCommand.CreateAlarm -> AlarmEditorDialog(
                 initial = Alarm(hour = cmd.hour, minute = cmd.minute, daysMask = cmd.daysMask, label = cmd.label),
                 isNew = true,
-                onDismiss = { editing = null },
+                onDismiss = { editingId = null },
                 onSave = { alarm ->
-                    editing = null
+                    editingId = null
                     vm.saveAlarm(item.id, alarm)
                 },
                 onDelete = null,
