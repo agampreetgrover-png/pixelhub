@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -37,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -123,7 +125,8 @@ fun CalendarScreen(onBack: () -> Unit) {
     val next = remember(live, now) { live?.let { CalendarAgenda.nextEvent(it, now) } }
 
     // Null shows every day; a date filters the agenda to it. Resets at midnight.
-    var selected by remember(today) { mutableStateOf<LocalDate?>(null) }
+    // Saveable, so a rotation keeps the day filter (LocalDate is Serializable).
+    var selected by rememberSaveable(today) { mutableStateOf<LocalDate?>(null) }
     val shownDays: List<LocalDate> = selected?.let { listOf(it) } ?: byDay.keys.toList()
 
     val stagger = rememberStagger()
@@ -491,7 +494,8 @@ private fun DayWell(day: LocalDate, isToday: Boolean, isSelected: Boolean, count
     val figure by animateColorAsState(if (isSelected) c.ground else c.ink, tween(180), label = "dayFigure")
     Column(
         Modifier
-            .width(50.dp)
+            // At least 50dp, wider when a large font needs it, so "Today" isn't cut to "Toda".
+            .widthIn(min = 50.dp)
             .clip(CircleShape)
             .pressable(onClick = onClick, pressedScale = 0.92f, showRipple = false, role = null)
             .semantics(mergeDescendants = true) {

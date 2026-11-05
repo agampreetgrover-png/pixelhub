@@ -69,17 +69,24 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         val selection = "${Calendars.VISIBLE} = 1 AND ${Calendars.CALENDAR_ACCESS_LEVEL} >= ?"
         val args = arrayOf(Calendars.CAL_ACCESS_CONTRIBUTOR.toString())
         val result = mutableListOf<CalendarInfo>()
-        resolver.query(Calendars.CONTENT_URI, projection, selection, args, null)?.use { c ->
-            while (c.moveToNext()) {
-                result += CalendarInfo(
-                    id = c.getLong(0),
-                    name = c.getString(1).orEmpty(),
-                    accountName = c.getString(2).orEmpty(),
-                    accountType = c.getString(3).orEmpty(),
-                    color = c.getInt(4),
-                    isPrimary = !c.isNull(5) && c.getInt(5) == 1,
-                )
+        // Access can be revoked between the check above and the query; Settings collects this
+        // from a composition, where a throw would close the app.
+        try {
+            resolver.query(Calendars.CONTENT_URI, projection, selection, args, null)?.use { c ->
+                while (c.moveToNext()) {
+                    result += CalendarInfo(
+                        id = c.getLong(0),
+                        name = c.getString(1).orEmpty(),
+                        accountName = c.getString(2).orEmpty(),
+                        accountType = c.getString(3).orEmpty(),
+                        color = c.getInt(4),
+                        isPrimary = !c.isNull(5) && c.getInt(5) == 1,
+                    )
+                }
             }
+        } catch (e: Exception) {
+            Log.w("PixelHub", "Listing calendars failed", e)
+            return@withContext emptyList()
         }
         result.sortedWith(compareByDescending<CalendarInfo> { it.isGoogle }.thenByDescending { it.isPrimary }.thenBy { it.name })
     }

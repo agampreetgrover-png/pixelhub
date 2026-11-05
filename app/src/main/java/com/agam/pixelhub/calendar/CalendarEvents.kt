@@ -124,7 +124,7 @@ class CalendarEvents(context: Context) {
         }.build()
         val result = ArrayList<CalendarEvent>()
         try {
-            resolver.query(uri, PROJECTION, "${Instances.VISIBLE} = 1", null, "${Instances.BEGIN} ASC")?.use { c ->
+            resolver.query(uri, PROJECTION, SELECTION, null, "${Instances.BEGIN} ASC")?.use { c ->
                 while (c.moveToNext()) {
                     if (CalendarAgenda.isFromPixelHub(c.getString(COL_DESCRIPTION))) continue
                     val allDay = !c.isNull(COL_ALL_DAY) && c.getInt(COL_ALL_DAY) == 1
@@ -159,6 +159,12 @@ class CalendarEvents(context: Context) {
         const val HOUR_MS = 3_600_000L
         const val DAY_MS = 86_400_000L
         const val NO_TITLE = "(No title)"
+
+        // Visible calendars only, and not what the user won't attend: a cancelled event or a
+        // meeting they declined would otherwise headline Home as their "next event".
+        val SELECTION = "${Instances.VISIBLE} = 1" +
+            " AND (${Instances.STATUS} IS NULL OR ${Instances.STATUS} != ${Events.STATUS_CANCELED})" +
+            " AND (${Instances.SELF_ATTENDEE_STATUS} IS NULL OR ${Instances.SELF_ATTENDEE_STATUS} != ${CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED})"
 
         val PROJECTION = arrayOf(
             Instances.EVENT_ID,

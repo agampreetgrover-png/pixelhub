@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -71,20 +72,25 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
     val colors = Hub.colors
     val selected by c.calendar.selectedCalendarId.collectAsStateWithLifecycle(initialValue = null)
     var hasPermission by remember { mutableStateOf(c.calendar.hasPermission()) }
-    var calendars by remember { mutableStateOf<List<CalendarInfo>>(emptyList()) }
+    // Null until the phone's calendars have been read, so a missing calendar isn't reported early.
+    var calendars by remember { mutableStateOf<List<CalendarInfo>?>(null) }
     // Set when the user asked to turn sync on before granting access.
     var enableAfterGrant by remember { mutableStateOf(false) }
+    // Bumped on every resume: an account added or removed in system settings changes the list.
+    var resumes by remember { mutableIntStateOf(0) }
 
     LifecycleResumeEffect(Unit) {
         hasPermission = c.calendar.hasPermission()
+        resumes++
         onPauseOrDispose { }
     }
-    LaunchedEffect(hasPermission) {
+    LaunchedEffect(hasPermission, resumes) {
         if (hasPermission) {
-            calendars = c.calendar.listCalendars()
+            val found = c.calendar.listCalendars()
+            calendars = found
             if (enableAfterGrant && selected == null) {
                 enableAfterGrant = false
-                (calendars.firstOrNull { it.isGoogle && it.isPrimary } ?: calendars.firstOrNull())
+                (found.firstOrNull { it.isGoogle && it.isPrimary } ?: found.firstOrNull())
                     ?.let { cal -> c.appScope.launch { c.reminders.setCalendar(cal.id) } }
             }
         }
@@ -111,7 +117,7 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
 
     // The calendar list opens under the row; it starts closed so the card is one line.
     var open by rememberSaveable { mutableStateOf(false) }
-    val current = calendars.firstOrNull { it.id == selected }
+    val current = calendars?.firstOrNull { it.id == selected }
 
     // One row either way: when access is granted only its line and its end control change.
     val tint by animateColorAsState(if (hasPermission && selected != null) colors.ok else colors.ink, Motion.toggleSpec(), label = "syncTint")
@@ -120,9 +126,14 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
             icon = Icons.Outlined.CalendarMonth,
             title = "Calendar sync",
             meta = when {
+                // Access revoked in system settings while a calendar is still chosen: copying has
+                // stopped, so say so instead of looking like sync was never set up.
+                !hasPermission && selected != null -> "Paused · calendar access was turned off"
                 !hasPermission -> "Copy reminders into Google Calendar"
                 selected == null -> "Off"
                 current != null -> listOf(current.name, current.accountName).filter { it.isNotBlank() }.distinct().joinToString(" · ")
+                // Its account was removed or the calendar hidden: copies go nowhere until another is picked.
+                calendars != null -> "Calendar not found · pick another"
                 else -> "On"
             },
             iconTint = tint,
@@ -149,7 +160,7 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
                         selected = selected == null,
                         onSelect = { c.appScope.launch { c.reminders.setCalendar(null) } },
                     )
-                    calendars.forEach { cal ->
+                    calendars.orEmpty().forEach { cal ->
                         CalendarOption(
                             title = cal.name,
                             subtitle = cal.accountName,
