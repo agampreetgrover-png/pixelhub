@@ -176,6 +176,7 @@ class HealthRepository(private val context: Context) {
         var last: DailyActivity? = null
         while (true) {
             try {
+                // WidgetSync watches [latest] (set by today()) and keeps the Health widget current.
                 last = today()
                 readFailedState.value = false
             } catch (e: Exception) {

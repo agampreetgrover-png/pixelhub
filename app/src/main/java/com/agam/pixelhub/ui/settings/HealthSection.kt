@@ -16,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
-import com.agam.pixelhub.data.SettingsStore
 import com.agam.pixelhub.health.HealthStatus
 import com.agam.pixelhub.ui.health.grouped
 import com.agam.pixelhub.ui.health.manageAccess
@@ -41,7 +40,8 @@ fun HealthSettingsCard(onOpenHealth: () -> Unit, modifier: Modifier = Modifier) 
     val context = LocalContext.current
     val access = rememberHealthAccess()
     val connect = rememberConnectAction(access)
-    val goal by context.container.settings.stepGoal.collectAsStateWithLifecycle(SettingsStore.DEFAULT_STEP_GOAL)
+    // The app-wide hot copy: the cold DataStore flow would show 8,000 for a frame on every visit.
+    val goal by context.container.stepGoal.collectAsStateWithLifecycle()
     val connected = access.connected
     val background = access.background
     // "Allow" on background reading asks again; if the sheet comes back without the background
@@ -110,13 +110,20 @@ fun HealthSettingsCard(onOpenHealth: () -> Unit, modifier: Modifier = Modifier) 
             },
         )
         Expandable(connected == true) {
+            // On a Health Connect without background reads, "Allow" would only loop through a
+            // sheet that can't grant it; say so instead.
+            val canAsk = background == false && access.status == HealthStatus.AVAILABLE && access.backgroundSupported
             SettingRow(
                 icon = Icons.Outlined.Sync,
                 title = "Background reading",
-                meta = if (background == true) "On · nudges work while PixelHub is closed" else "Off · nudges need it",
-                onClick = if (background == false && access.status == HealthStatus.AVAILABLE) allowBackground else null,
+                meta = when {
+                    background == true -> "On · nudges work while PixelHub is closed"
+                    !access.backgroundSupported -> "Not supported by this phone's Health Connect"
+                    else -> "Off · nudges need it"
+                },
+                onClick = if (canAsk) allowBackground else null,
                 onClickLabel = "Allow background reading",
-                trailing = if (background == false && access.status == HealthStatus.AVAILABLE) {
+                trailing = if (canAsk) {
                     { RowAction("Allow", onClick = allowBackground, onClickLabel = "Allow background reading") }
                 } else null,
             )

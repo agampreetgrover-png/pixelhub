@@ -73,7 +73,6 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.NudgeMetric
-import com.agam.pixelhub.data.SettingsStore
 import com.agam.pixelhub.health.DailyActivity
 import com.agam.pixelhub.health.HealthPrivacyActivity
 import com.agam.pixelhub.health.HealthRepository
@@ -154,6 +153,10 @@ internal class HealthAccess(private val repo: HealthRepository, private val scop
     var background by mutableStateOf<Boolean?>(null)
         private set
 
+    /** False on a Health Connect too old to offer background reads: asking for them can't work. */
+    var backgroundSupported by mutableStateOf(true)
+        private set
+
     /** The last permission request came back without the read permissions. */
     var denied by mutableStateOf(false)
 
@@ -163,9 +166,12 @@ internal class HealthAccess(private val repo: HealthRepository, private val scop
             status = s
             // A failed check (Health Connect briefly unreachable) keeps the last answer instead of
             // flipping a connected user to "Connect".
-            val on = if (s == HealthStatus.AVAILABLE) safely { repo.isConnected() } ?: connected else false
+            // A failure on the very first check has no last answer to keep: show "Connect" rather
+            // than an empty page that only retries on the next resume.
+            val on = if (s == HealthStatus.AVAILABLE) safely { repo.isConnected() } ?: connected ?: false else false
             connected = on
             background = if (on == true) safely { repo.canReadInBackground() } ?: background else false
+            if (on == true) backgroundSupported = safely { repo.supportsBackgroundReads() } ?: backgroundSupported
             if (on == true) denied = false
         }
     }
@@ -340,7 +346,7 @@ fun HealthHomeCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
     val reduced = LocalReducedMotion.current
     val access = rememberHealthAccess()
     val today by rememberToday(access)
-    val goal by context.container.settings.stepGoal.collectAsStateWithLifecycle(SettingsStore.DEFAULT_STEP_GOAL)
+    val goal by context.container.stepGoal.collectAsStateWithLifecycle()
     val data = today
 
     val kind = when {

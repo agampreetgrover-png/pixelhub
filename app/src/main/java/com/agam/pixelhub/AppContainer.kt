@@ -18,6 +18,9 @@ import com.agam.pixelhub.scheduling.Scheduler
 import com.agam.pixelhub.widget.WidgetSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
@@ -31,6 +34,10 @@ class AppContainer(context: Context) {
 
     private val db = AppDatabase.build(appContext)
     val settings = SettingsStore(appContext)
+
+    /** The step goal, read once and kept: screens open on the real goal instead of rolling up from 8,000. */
+    val stepGoal: StateFlow<Long> =
+        settings.stepGoal.stateIn(appScope, SharingStarted.Eagerly, SettingsStore.DEFAULT_STEP_GOAL)
     val scheduler = Scheduler(appContext)
     val calendar = CalendarSync(appContext, settings)
     val reminders = ReminderRepository(db.reminderDao(), scheduler, calendar)

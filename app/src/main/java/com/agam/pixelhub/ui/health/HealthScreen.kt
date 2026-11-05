@@ -110,9 +110,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
+import com.agam.pixelhub.widget.HealthWidgetSync
 import com.agam.pixelhub.data.HealthNudge
 import com.agam.pixelhub.data.NudgeMetric
-import com.agam.pixelhub.data.SettingsStore
 import com.agam.pixelhub.health.DailyActivity
 import com.agam.pixelhub.health.DayActivity
 import com.agam.pixelhub.health.HealthStatus
@@ -185,18 +185,18 @@ fun HealthScreen() {
     val stagger = rememberStagger()
 
     // The goal answers every tap at once; the save waits until the taps stop.
-    val storedGoal by c.settings.stepGoal.collectAsStateWithLifecycle(SettingsStore.DEFAULT_STEP_GOAL)
+    val storedGoal by c.stepGoal.collectAsStateWithLifecycle()
     var draftGoal by remember { mutableStateOf<Long?>(null) }
     val goal = draftGoal ?: storedGoal
     LaunchedEffect(draftGoal) {
         val d = draftGoal ?: return@LaunchedEffect
         delay(650)
-        c.appScope.launch { c.settings.setStepGoal(d) }
+        c.appScope.launch { c.settings.setStepGoal(d); HealthWidgetSync.refresh(context) }
     }
     LaunchedEffect(storedGoal) { if (draftGoal == storedGoal) draftGoal = null }
     val pendingGoal by rememberUpdatedState(draftGoal)
     DisposableEffect(Unit) {
-        onDispose { pendingGoal?.let { d -> c.appScope.launch { c.settings.setStepGoal(d) } } }
+        onDispose { pendingGoal?.let { d -> c.appScope.launch { c.settings.setStepGoal(d); HealthWidgetSync.refresh(context) } } }
     }
 
     val connected = access.connected == true
@@ -1110,6 +1110,7 @@ private fun NudgesCard(
                     .clip(CircleShape)
                     .pressable(onClick = onAdd, onClickLabel = "Add nudge")
                     .heightIn(min = 48.dp)
+                    .widthIn(min = 48.dp)
                     .padding(horizontal = 10.dp, vertical = 11.dp),
             )
         }

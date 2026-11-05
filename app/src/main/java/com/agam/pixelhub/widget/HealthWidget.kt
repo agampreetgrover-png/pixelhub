@@ -1,6 +1,7 @@
 package com.agam.pixelhub.widget
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
@@ -16,6 +17,7 @@ import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -48,6 +50,7 @@ import com.agam.pixelhub.widget.kit.openTab
 import com.agam.pixelhub.widget.kit.ringBitmap
 import com.agam.pixelhub.widget.kit.shapeOf
 import kotlinx.coroutines.flow.first
+import kotlin.coroutines.cancellation.CancellationException
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -91,9 +94,14 @@ class HealthWidget : GlanceAppWidget() {
  */
 private suspend fun load(context: Context): HealthState {
     val c = context.container
-    val connected = c.health.status() == HealthStatus.AVAILABLE &&
-        runCatching { c.health.isConnected() }.getOrDefault(false)
-    if (!connected) return HealthState.NotConnected
+    // null: the check itself failed (Health Connect briefly unreachable). Only a definite "no"
+    // shows "Connect Health"; otherwise fall through to the cached figures.
+    val connected = if (c.health.status() == HealthStatus.AVAILABLE) {
+        runCatching { c.health.isConnected() }.getOrNull()
+    } else {
+        false
+    }
+    if (connected == false) return HealthState.NotConnected
     val fresh = runCatching { c.health.today() }.getOrNull()?.also { HealthCache.save(context, it) }
     val today = (fresh ?: HealthCache.load(context))
         ?.takeIf { it.asOf.atZone(ZoneId.systemDefault()).toLocalDate() == LocalDate.now() }
@@ -130,6 +138,23 @@ internal object HealthCache {
     }
 }
 
+/**
+ * New figures reach the widget through WidgetSync; a new step goal doesn't, so the Health page
+ * redraws the widget itself when the goal changes.
+ */
+internal object HealthWidgetSync {
+    /** Redraws every placed Health widget; a no-op when none is on the home screen. */
+    suspend fun refresh(context: Context) {
+        try {
+            HealthWidget().updateAll(context.applicationContext)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("PixelHub", "Health widget refresh failed", e)
+        }
+    }
+}
+
 @Composable
 private fun HealthContent(context: Context, state: HealthState) {
     val palette = WidgetPalette.of(context, CardTone.SUN)
@@ -144,12 +169,22 @@ private fun HealthContent(context: Context, state: HealthState) {
             WidgetCard(palette, open, f.description, padding = if (shape == WidgetShape.TINY) 10.dp else 14.dp) {
                 when (shape) {
                     WidgetShape.TINY -> Tiny(context, palette, f, size)
-                    WidgetShape.STRIP_S -> Strip(context, palette, f, size, stats = 0)
-                    WidgetShape.STRIP_M -> Strip(context, palette, f, size, stats = 2)
-                    WidgetShape.STRIP_L -> Strip(context, palette, f, size, stats = 3)
+                    // Stats by real width, not the shared strip sizes: below these the weighted
+                    // steps column was squeezed to nothing and the step count vanished.
+                    WidgetShape.STRIP_S, WidgetShape.STRIP_M, WidgetShape.STRIP_L -> Strip(
+                        context, palette, f, size,
+                        stats = when {
+                            size.width < 300.dp -> 0
+                            size.width < 390.dp -> 2
+                            else -> 3
+                        },
+                    )
                     WidgetShape.SQUARE -> Square(context, palette, f, size)
-                    WidgetShape.PANEL -> Panel(context, palette, f, size.height - 28.dp, wide = size.width >= 260.dp)
-                    WidgetShape.LARGE -> {
+                    WidgetShape.PANEL -> Panel(context, palette, f, panelRing(size), wide = size.width >= 260.dp)
+                    // Without the week (no background reading) the chart would leave half the card empty.
+                    WidgetShape.LARGE -> if (f.week.isEmpty()) {
+                        Panel(context, palette, f, panelRing(size), wide = true)
+                    } else {
                         Panel(context, palette, f, 96.dp, wide = true)
                         Spacer(GlanceModifier.height(12.dp))
                         WeekBars(palette, f, chart = (size.height - 28.dp - 96.dp - 12.dp - 18.dp).coerceAtLeast(24.dp))
@@ -159,6 +194,9 @@ private fun HealthContent(context: Context, state: HealthState) {
         }
     }
 }
+
+/** The panel's ring: as tall as the card allows, but never so wide the step count gets cut. */
+private fun panelRing(size: DpSize): Dp = minOf(size.height - 28.dp, (size.width - 28.dp) * 0.35f)
 
 /** Everything a layout prints, worked out once. */
 private class Figures(context: Context, s: HealthState.Ready) {
