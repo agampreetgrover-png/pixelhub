@@ -144,6 +144,9 @@ private class MusicView(
     )
 }
 
+/** How often the times and progress bar move while a song plays with the screen on. */
+private const val TICK_MS = 1_000L
+
 private sealed interface MusicState {
     data class Playing(val view: MusicView) : MusicState
     data object Nothing : MusicState
@@ -200,7 +203,7 @@ private fun live(context: Context): Flow<MusicState> =
             flow {
                 while (true) {
                     if (power.isInteractive) emit(MusicState.Playing(view.now()))
-                    delay(5_000L)
+                    delay(TICK_MS)
                 }
             }
         }
@@ -214,7 +217,8 @@ private fun viewOf(context: Context, s: NowPlayingState): MusicView {
     val icon = runCatching { context.packageManager.getApplicationIcon(s.pkg).toBitmap(144, 144) }.getOrNull()
     val audio = context.getSystemService(AudioManager::class.java)
     return MusicView(
-        title = s.title, artist = s.artist, appLabel = s.appLabel, pkg = s.pkg, art = s.art, appIcon = icon,
+        // Scaled once per song: every redraw sends the bitmaps to the launcher again.
+        title = s.title, artist = s.artist, appLabel = s.appLabel, pkg = s.pkg, art = s.art?.let { fit(it, 192) }, appIcon = icon,
         playing = s.playing, durationMs = s.durationMs, positionMs = s.positionMs, positionAt = s.positionAt,
         speed = s.speed,
         shuffle = find("shuffle"),
@@ -472,7 +476,7 @@ private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
 private fun Player(context: Context, v: MusicView, size: DpSize) {
     Box(GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(28.dp).semantics { contentDescription = describe(v) }) {
         Image(
-            ImageProvider(glow(context, size, v.art)),
+            ImageProvider(glow(v.art)),
             contentDescription = null,
             contentScale = ContentScale.FillBounds,
             modifier = GlanceModifier.fillMaxSize(),
@@ -544,14 +548,22 @@ private fun PlayerIcon(b: PlayerButton, size: Dp) {
     }
 }
 
+/** [b] scaled down so its longer side is at most [max] px. */
+private fun fit(b: Bitmap, max: Int): Bitmap {
+    val scale = max.toFloat() / maxOf(b.width, b.height)
+    if (scale >= 1f) return b
+    return Bitmap.createScaledBitmap(b, (b.width * scale).toInt().coerceAtLeast(1), (b.height * scale).toInt().coerceAtLeast(1), true)
+}
+
 /**
  * The background of the big player: black at the top, the album's main colour glowing up from
  * the bottom. The colour is darkened until white text on it keeps 4.5:1.
  */
-private fun glow(context: Context, size: DpSize, art: Bitmap?): Bitmap {
-    val d = context.resources.displayMetrics.density
-    val w = (size.width.value * d).toInt().coerceAtLeast(1)
-    val h = (size.height.value * d).toInt().coerceAtLeast(1)
+private fun glow(art: Bitmap?): Bitmap {
+    // A 1×128 strip, stretched over the widget (FillBounds): the gradient is vertical only, so it
+    // looks the same as a full-size bitmap at a fraction of a percent of the size.
+    val w = 1
+    val h = 128
     var tint = art?.let { Color(Bitmap.createScaledBitmap(it, 1, 1, true).getPixel(0, 0)) } ?: Color(0xFF3A3A40)
     tint = lerp(tint, M.Black, 0.35f)
     while (tint.luminance() > 0.18f) tint = lerp(tint, M.Black, 0.15f)
