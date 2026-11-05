@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Glance's widget lists (the Calendar's scrolling cards) take this style; Glance leaves it
+      empty so apps can set it. No scroll bar: the cards still scroll by swipe.
+    -->
+    <style name="Glance.AppWidget.List" parent="">
+        <item name="android:scrollbars">none</item>
+    </style>
+</resources>

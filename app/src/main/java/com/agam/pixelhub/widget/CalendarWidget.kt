@@ -20,6 +20,8 @@ import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.SizeMode
+import androidx.glance.appwidget.lazy.LazyColumn
+import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
@@ -237,12 +239,12 @@ private fun CalendarContent(context: Context, state: CalendarState) {
                     EventCard(context, events, second, second == highlight, GlanceModifier.defaultWeight())
                 }
             }
-            WidgetShape.SQUARE -> Cards(context, events, ready.soon, highlight, size.height.value - 32f)
+            WidgetShape.SQUARE -> CardList(context, events, ready.soon, highlight)
             else -> Row(GlanceModifier.fillMaxSize()) {
-                LeftColumn(context, ready, countdown, (size.width.value * 0.28f).coerceIn(64f, 96f).dp)
-                Spacer(GlanceModifier.width(12.dp))
+                LeftColumn(context, ready, countdown, (size.width.value * 0.19f).coerceIn(56f, 68f).dp)
+                Spacer(GlanceModifier.width(6.dp))
                 Column(GlanceModifier.defaultWeight()) {
-                    Cards(context, events, ready.soon, highlight, size.height.value - 32f)
+                    CardList(context, events, ready.soon, highlight)
                 }
             }
         }
@@ -265,7 +267,7 @@ private fun Countdown(text: String) {
             modifier = GlanceModifier.size(13.dp),
         )
         Spacer(GlanceModifier.width(3.dp))
-        Label(text, Cal.SoftText, 12.sp, FontWeight.Medium)
+        Label(text, Cal.SoftText, 12.sp, FontWeight.Medium, maxLines = 2)
     }
 }
 
@@ -294,17 +296,19 @@ private fun LeftColumn(context: Context, ready: CalendarState.Ready, countdown: 
     }
 }
 
-/** A card is two lines plus padding; the gap between cards. Cards that don't fit whole aren't drawn. */
-private const val CARD_DP = 52f
+/** The gap between cards. */
 private const val CARD_GAP_DP = 6f
 
-/** As many whole cards as fit in [heightDp], stacked. */
+/** Every event today and tomorrow, as a scrollable list (Glance's LazyColumn). */
 @Composable
-private fun Cards(context: Context, events: CalendarEvents, list: List<CalendarEvent>, highlight: CalendarEvent?, heightDp: Float) {
-    val count = ((heightDp + CARD_GAP_DP) / (CARD_DP + CARD_GAP_DP)).toInt().coerceIn(1, list.size)
-    list.take(count).forEachIndexed { i, e ->
-        if (i > 0) Spacer(GlanceModifier.height(CARD_GAP_DP.dp))
-        EventCard(context, events, e, e == highlight, GlanceModifier.fillMaxWidth())
+private fun CardList(context: Context, events: CalendarEvents, list: List<CalendarEvent>, highlight: CalendarEvent?) {
+    LazyColumn(GlanceModifier.fillMaxSize()) {
+        // Stable ids keep scrolling smooth when the list redraws.
+        items(list, itemId = { it.eventId * 31 + it.begin }) { e ->
+            Column(GlanceModifier.fillMaxWidth().padding(bottom = CARD_GAP_DP.dp)) {
+                EventCard(context, events, e, e == highlight, GlanceModifier.fillMaxWidth())
+            }
+        }
     }
 }
 
