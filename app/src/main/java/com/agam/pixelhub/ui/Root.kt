@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Alarm
@@ -58,6 +59,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -106,6 +108,7 @@ import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.toggleSpec
 import com.agam.pixelhub.ui.reminders.RemindersScreen
+import com.agam.pixelhub.ui.people.PeopleScreen
 import com.agam.pixelhub.ui.settings.SettingsScreen
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
@@ -120,6 +123,7 @@ enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: Image
     HEALTH("Health", Icons.Outlined.FavoriteBorder, Icons.Filled.Favorite),
     EXPENSES("Money", Icons.Outlined.AccountBalanceWallet, Icons.Filled.AccountBalanceWallet),
     CALENDAR("Calendar", Icons.Outlined.CalendarMonth, Icons.Filled.CalendarMonth),
+    PEOPLE("People", Icons.Outlined.People, Icons.Filled.People),
 }
 
 /** The five places you work in day to day, in bar order. */
@@ -222,7 +226,8 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
                     Tab.ASSISTANT -> AssistantScreen(assistant, onBack = { back() })
                     Tab.SETTINGS -> SettingsScreen(onBack = { back() }, onOpen = { go(it) })
                     Tab.HEALTH -> HealthScreen()
-                    Tab.EXPENSES -> ExpensesScreen()
+                    Tab.EXPENSES -> ExpensesScreen(onOpenPeople = { go(Tab.PEOPLE) })
+                    Tab.PEOPLE -> PeopleScreen(onBack = { back() })
                     Tab.CALENDAR -> CalendarScreen(onBack = { back() })
                 }
               }

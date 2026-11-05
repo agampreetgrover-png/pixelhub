@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Savings
+import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -108,6 +109,7 @@ import androidx.compose.ui.unit.sp
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Expense
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.data.ExpenseCategory
 import com.agam.pixelhub.data.ExpenseKind
 import com.agam.pixelhub.expenses.CategoryTotal
@@ -190,9 +192,12 @@ private val MonthPillWidth = 176.dp
  * another way in.
  */
 @Composable
-fun ExpensesScreen() {
+fun ExpensesScreen(onOpenPeople: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.container
+    // Who owes whom, for the People row. Separate from the month's money.
+    val peopleFlow = remember { app.ledger.balances() }
+    val people by peopleFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val c = Hub.colors
     val reduced = LocalReducedMotion.current
     // Today and this month move on if the screen stays open past midnight (checked on every resume).
@@ -315,8 +320,31 @@ fun ExpensesScreen() {
                     onRepeatIncome = { repeatLast(ExpenseKind.INCOME) },
                     onFilter = { picking = true },
                     onBudgets = { budgetsOpen = true },
+                    onPeople = onOpenPeople,
                     modifier = hubAnimateItem(fadeIn = false).staggerIn(stagger, "actions", 1),
                 )
+            }
+            if (people.isNotEmpty()) {
+                item(key = "people") {
+                    val owed = people.sumOf { it.balancePaise.coerceAtLeast(0) }
+                    val owe = people.sumOf { (-it.balancePaise).coerceAtLeast(0) }
+                    Box(
+                        hubAnimateItem(fadeIn = false)
+                            .staggerIn(stagger, "people", 2)
+                            .fillMaxWidth()
+                            .padding(horizontal = Gutter)
+                            .padding(top = 12.dp)
+                            .hubCard(c.raised)
+                            .padding(4.dp),
+                    ) {
+                        HubListRow(
+                            icon = Icons.Outlined.People,
+                            title = "People",
+                            meta = "Owed to you ${Money.format(owed)} · You owe ${Money.format(owe)}",
+                            onClick = onOpenPeople,
+                        )
+                    }
+                }
             }
             if (s == null) return@LazyColumn
 
@@ -722,6 +750,7 @@ private fun QuickActionsCard(
     onRepeatIncome: () -> Unit,
     onFilter: () -> Unit,
     onBudgets: () -> Unit,
+    onPeople: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val c = Hub.colors
@@ -785,6 +814,7 @@ private fun QuickActionsCard(
             tint = filterTint,
         )
         QuickAction(Icons.Outlined.Tune, "Budgets", onClick = onBudgets, modifier = Modifier.weight(1f))
+        QuickAction(Icons.Outlined.People, "People", onClick = onPeople, modifier = Modifier.weight(1f))
     }
 }
 

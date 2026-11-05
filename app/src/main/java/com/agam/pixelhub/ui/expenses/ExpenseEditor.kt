@@ -661,7 +661,7 @@ private fun ValuePill(text: String, icon: ImageVector, description: String, onCl
 
 /** The date picker in ink: an ink selection, no divider. */
 @Composable
-private fun inkDatePickerColors(): DatePickerColors {
+internal fun inkDatePickerColors(): DatePickerColors {
     val c = Hub.colors
     return DatePickerDefaults.colors(
         containerColor = c.raised,

@@ -16,8 +16,11 @@ class Converters {
 }
 
 @Database(
-    entities = [Reminder::class, Alarm::class, AppShortcut::class, HealthNudge::class, Expense::class, Budget::class],
-    version = 5,
+    entities = [
+        Reminder::class, Alarm::class, AppShortcut::class, HealthNudge::class, Expense::class, Budget::class,
+        Person::class, LedgerRecord::class,
+    ],
+    version = 6,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -28,6 +31,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun healthNudgeDao(): HealthNudgeDao
     abstract fun expenseDao(): ExpenseDao
     abstract fun budgetDao(): BudgetDao
+    abstract fun peopleDao(): PeopleDao
+    abstract fun ledgerDao(): LedgerDao
 
     companion object {
         /** v2 adds health nudges and calendar sync. Existing reminders, alarms and shortcuts are kept. */
@@ -94,9 +99,32 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v6 adds the people ledger (who owes whom). Nothing existing changes. */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `people` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`nameKey` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_people_nameKey` ON `people` (`nameKey`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ledger_entries` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`personId` INTEGER NOT NULL, " +
+                        "`amountPaise` INTEGER NOT NULL, " +
+                        "`note` TEXT NOT NULL, " +
+                        "`at` INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_ledger_entries_personId` ON `ledger_entries` (`personId`)")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "pixelhub.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
     }
 }

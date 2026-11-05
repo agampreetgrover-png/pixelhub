@@ -56,6 +56,7 @@ import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Stop
@@ -708,6 +709,26 @@ private fun lookOf(item: ChatItem.Action): ActionLook {
                     cmd.category.label,
                     cmd.note.takeIf { it.isNotBlank() },
                     cmd.at?.let { Fmt.whenText(context, it) },
+                ),
+            )
+        }
+        is ParsedCommand.LedgerEntry -> {
+            val owed = cmd.signedPaise >= 0
+            ActionLook(
+                kind = if (owed) "${cmd.name} owes you" else "You owe ${cmd.name}",
+                icon = Icons.Outlined.People,
+                palette = if (owed) {
+                    plainPalette(c, well = c.incomeSoft(), iconTint = c.ok)
+                } else {
+                    plainPalette(c, well = c.dangerSoft, iconTint = c.danger)
+                },
+                title = Money.format(kotlin.math.abs(cmd.signedPaise)),
+                titleStyle = HubType.clockMedium,
+                details = listOfNotNull(
+                    if (owed) "You paid ${cmd.name}" else "${cmd.name} paid you",
+                    cmd.note.takeIf { it.isNotBlank() },
+                    cmd.at?.let { Fmt.whenText(context, it) },
+                    "New person: ${cmd.name}".takeIf { cmd.isNewPerson },
                 ),
             )
         }

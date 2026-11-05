@@ -13,6 +13,7 @@ import com.agam.pixelhub.expenses.ExpenseRepository
 import com.agam.pixelhub.health.HealthRepository
 import com.agam.pixelhub.notify.BudgetNotifier
 import com.agam.pixelhub.launcher.InstalledApps
+import com.agam.pixelhub.ledger.LedgerRepository
 import com.agam.pixelhub.scheduling.Scheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,9 @@ class AppContainer(context: Context) {
         onBudgetAlert = { BudgetNotifier.show(appContext, it) },
     )
     val installedApps = InstalledApps(appContext)
+
+    /** Who owes whom: people and the money between you. Kept apart from expenses. */
+    val ledger = LedgerRepository(db.peopleDao(), db.ledgerDao())
 
     /** Every assistant request and how the rules handled it, shown in Settings. */
     val assistantLog = AssistantLog(File(appContext.filesDir, "assistant_log.json"), appScope)

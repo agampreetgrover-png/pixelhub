@@ -29,6 +29,7 @@ object CommandParser {
             "• Reminders: \"remind me to call mom at 6pm\", \"kal subah 7 baje dawai yaad dilana\"\n" +
             "• Alarms: \"wake me up at 6:30 on weekdays\", \"subah 6 baje utha dena\"\n" +
             "• Money: \"spent 250 on lunch\", \"add 30 to food\", \"salary 50000 mili\"\n" +
+            "• People: \"paid naruna 30\", \"rahul ko 50 diye\", \"naruna paid me 30\", \"naruna ka hisaab\"\n" +
             "• Apps: \"open spotify\", \"whatsapp kholo\"\n" +
             "• Calls and links: \"call 9876543210\", \"navigate to india gate\", \"search cricket score\""
 
@@ -38,9 +39,15 @@ object CommandParser {
 
     /**
      * Reads [text] as of [now]. [appNames] (installed apps and saved shortcuts) lets a bare app
-     * name like "spotify" open that app.
+     * name like "spotify" open that app; [people] (the People ledger's names) lets any phrasing
+     * about them become a ledger entry.
      */
-    fun parse(text: String, now: ZonedDateTime = ZonedDateTime.now(), appNames: List<String> = emptyList()): ParseResult {
+    fun parse(
+        text: String,
+        now: ZonedDateTime = ZonedDateTime.now(),
+        appNames: List<String> = emptyList(),
+        people: List<String> = emptyList(),
+    ): ParseResult {
         val s = Lexicon.normalize(text)
         if (s.isEmpty()) return ParseResult(ParsedCommand.Invalid("Type or say something first."), "empty")
         if (Lexicon.HELP.matches(s)) return ParseResult(ParsedCommand.Answer(HELP_TEXT), "help")
@@ -53,6 +60,7 @@ object CommandParser {
 
         link(s)?.let { return it }
         openApp(s, text)?.let { return ParseResult(it, "open_app") }
+        ledger(s, text, now, people)?.let { return it }
         money(s, text, now)?.let { return it }
         appNames.firstOrNull { s == it.lowercase() || s == "${it.lowercase()} app" }
             ?.let { return ParseResult(ParsedCommand.OpenApp(it), "app_name") }
@@ -181,6 +189,104 @@ object CommandParser {
             .mapNotNull { (category, re) -> re.find(s)?.let { it.range.first to category } }
             .minByOrNull { it.first }
             ?.second
+    }
+
+    // ---- People ledger ------------------------------------------------------------------
+
+    /** A ledger phrase: § is the person; [sign] +1 they owe you, -1 you owe them. */
+    private class LedgerRule(pattern: String, val sign: Int, val anyName: Boolean) {
+        val re = Regex(pattern.replace("§", NAME))
+    }
+
+    private const val NAME = """([a-z][a-z'.-]*)"""
+
+    /** Stands in for a saved person's (possibly multi-word) name so every rule sees one word. */
+    private const val SAVED = "zqsavedperson"
+
+    private const val AMOUNT_NEXT = """(?=\s*(?:rs\.?\s*)?\d)"""
+
+    /**
+     * Rules with [LedgerRule.anyName] also accept a name that isn't saved yet ("paid rahul 50"),
+     * so they stay strict. The others only fire for saved people, so "mummy se 2000 mile" stays
+     * income unless Mummy is in People.
+     */
+    private val LEDGER_RULES = listOf(
+        LedgerRule("""\b(?:paid|gave|lent|lend|sent|transferred)\s+§$AMOUNT_NEXT""", +1, anyName = true),
+        LedgerRule("""\b§\s+owes\s+me\b""", +1, anyName = true),
+        LedgerRule("""\b§\s+ko\s+(?:.*\s)?(?:de\s+diye|de\s+diya|diye|diya|udhaar|udhar|bheje|bheja)\b""", +1, anyName = true),
+        LedgerRule("""\bborrowed\s+(?:.*\s)?from\s+§\b""", -1, anyName = true),
+        LedgerRule("""\bi\s+owe\s+§\b""", -1, anyName = true),
+        LedgerRule("""\b§\s+se\s+(?:.*\s)?(?:udhaar|udhar)\b""", -1, anyName = true),
+        LedgerRule("""\b§\s+(?:paid|gave|lent|sent|transferred)\s+(?:me|mujhe)\b""", -1, anyName = false),
+        LedgerRule("""\b§\s+paid\s+(?:.*\s)?for\s+me\b""", -1, anyName = false),
+        LedgerRule("""\b§\s+ne\s+(?:.*\s)?(?:de\s+diye|diye|diya|paid|bheje|bheja|pay\s+kiye|kiye)\b""", -1, anyName = false),
+        LedgerRule("""\b(?:got|received|recieved)\s+(?:.*\s)?from\s+§\b""", -1, anyName = false),
+        LedgerRule("""\b§\s+se\s+(?:.*\s)?(?:mile|mila|mili|le\s+liye|liye|liya|aaye|aaya)\b""", -1, anyName = false),
+        LedgerRule("""\b(?:paid|gave|lent|sent|spent)\s+(?:.*\s)?(?:to|for)\s+§\b""", +1, anyName = false),
+        LedgerRule("""\b§\s+ke\s+liye\b""", +1, anyName = false),
+    )
+
+    private val BALANCE_RULES = listOf(
+        """^§\s+(?:ka|ki|ke|se)\s+(?:hisaab|hisab|balance|kitna(?:\s+(?:lena|dena|baaki|baki))?)(?:\s+(?:hai|batao|bata|kya\s+hai))?$""",
+        """^how\s+much\s+(?:does\s+)?§\s+owes?(?:\s+me)?$""",
+        """^how\s+much\s+do\s+i\s+owe\s+§$""",
+        """^(?:balance|hisaab|hisab)\s+(?:with\s+|of\s+|for\s+)?§$""",
+        """^§\s+balance$""",
+    ).map { Regex(it.replace("§", NAME)) }
+
+    private fun isNameWord(w: String) = w.length >= 2 && w.all { it.isLetter() } && w !in Lexicon.NOT_A_NAME
+
+    /** A ledger entry or balance question, or null when the message isn't about a person. */
+    private fun ledger(s: String, original: String, now: ZonedDateTime, people: List<String>): ParseResult? {
+        // A saved name anywhere in the message: the longest match wins ("Naruna S" over "Naruna").
+        val match = people.sortedByDescending { it.length }.firstNotNullOfOrNull { p ->
+            Regex("""\b${Regex.escape(Lexicon.normalize(p))}\b""").takeIf { it.containsMatchIn(s) }?.let { p to it }
+        }
+        val saved: String? = match?.first
+        val text = match?.second?.replace(s, SAVED) ?: s
+        fun nameOf(word: String): String? = when {
+            saved != null -> saved.takeIf { word == SAVED }
+            isNameWord(word) -> phrase(word, emptySet(), original)
+            else -> null
+        }
+
+        for (re in BALANCE_RULES) {
+            val m = re.find(text) ?: continue
+            val name = nameOf(m.groupValues[1]) ?: continue
+            return ParseResult(ParsedCommand.LedgerBalance(name), "ledger_balance")
+        }
+
+        var name: String? = null
+        var sign = 0
+        for (rule in LEDGER_RULES) {
+            if (saved == null && !rule.anyName) continue
+            val word = rule.re.find(text)?.groupValues?.get(1) ?: continue
+            name = nameOf(word) ?: continue
+            sign = rule.sign
+            break
+        }
+        if (name == null) return null
+
+        // Take the person out, then read the date, the amount and what it was for.
+        val nameWord = if (saved != null) SAVED else name.lowercase()
+        val sc = Scan(Regex("""\b${Regex.escape(nameWord)}\b""").replaceFirst(text, " "))
+        val date = DateTimeRules.date(sc, now.toLocalDate(), past = true)
+        val m = AMOUNT.findAll(sc.rest).toList().let { all ->
+            all.firstOrNull { it.groupValues[1].isNotEmpty() || it.groupValues[3].isNotEmpty() || it.groupValues[4].isNotEmpty() }
+                ?: all.firstOrNull()
+        } ?: return ParseResult(ParsedCommand.Invalid("How much? Try \"paid $name 30\"."), "ledger")
+        val multiplier = when {
+            m.groupValues[3].isEmpty() -> 1.0
+            m.groupValues[3].startsWith("la") -> 1_00_000.0
+            else -> 1_000.0
+        }
+        val paise = Money.fromRupees(m.groupValues[2].toDouble() * multiplier)?.takeIf { it < MAX_EXPENSE_PAISE }
+            ?: return ParseResult(ParsedCommand.Invalid("That amount doesn't look right."), "ledger")
+        sc.cut(m.range)
+        sc.takeAll(Lexicon.LEDGER_WORDS)
+        val note = phrase(sc.rest, Lexicon.LEDGER_FILLERS, original)
+        val at = date?.date?.takeIf { it != now.toLocalDate() }?.atTime(now.toLocalTime().truncatedTo(ChronoUnit.MINUTES))
+        return ParseResult(ParsedCommand.LedgerEntry(name, sign * paise, note, at, isNewPerson = saved == null), "ledger")
     }
 
     // ---- Apps and links -----------------------------------------------------------------

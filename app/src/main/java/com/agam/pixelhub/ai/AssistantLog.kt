@@ -109,6 +109,14 @@ class AssistantLog(private val file: File, private val scope: CoroutineScope) {
                 if (cmd.isIncome) "Income" else "Expense", Money.format(cmd.amountPaise), cmd.category.label,
                 cmd.note.takeIf { it.isNotEmpty() }, cmd.at?.format(WHEN),
             ).joinToString(" · ")
+            is ParsedCommand.LedgerEntry -> listOfNotNull(
+                "People",
+                if (cmd.signedPaise >= 0) "${cmd.name} owes you ${Money.format(cmd.signedPaise)}" else "You owe ${cmd.name} ${Money.format(-cmd.signedPaise)}",
+                cmd.note.takeIf { it.isNotEmpty() },
+                cmd.at?.format(WHEN),
+                "new person".takeIf { cmd.isNewPerson },
+            ).joinToString(" · ")
+            is ParsedCommand.LedgerBalance -> "Balance with ${cmd.name}"
             is ParsedCommand.OpenApp -> "Open app · ${cmd.query}"
             is ParsedCommand.OpenLink -> "Open · ${cmd.uri}"
             is ParsedCommand.Answer -> "Help"

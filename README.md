@@ -5,6 +5,7 @@ A personal all-in-one Android app for a Google Pixel 9a. Everything works by han
 - **Reminders**: one-off or repeating (daily, chosen weekdays, every N days or weeks), with Done and Snooze buttons on the notification. Swipe to delete, with Undo.
 - **Alarms**: exact alarms that ring full-screen over the lock screen, even in silent mode. Snooze, repeat days, ringtone and vibration are configurable. Swipe an alarm left to delete it (or use Delete in its editor), with Undo.
 - **Money**: log expenses and income, set a monthly budget and per-category budgets, filter by category, and see where the money went each month. Hold **Add** (or **Income**) to repeat the last entry.
+- **People**: who owes whom, under **Money → People**. Record "I paid" or "they paid" for each person and PixelHub keeps the running balance, with history, swipe-to-delete with Undo, and a **Send a reminder** button that opens WhatsApp or SMS with what they owe. Or tell the assistant "paid Naruna 30", "rahul ko 50 diye", "Naruna paid me 30" or "naruna ka hisaab". It is kept apart from Expenses, so lending or being paid back never changes your spending or budgets.
 - **Health**: reads steps, distance, active calories and exercise from Health Connect, shows today and the past week against a daily step goal, and can send nudges, e.g. a reminder to walk when you're behind.
 - **Calendar**: shows your upcoming Google Calendar events, read from the calendars synced to the phone, so no sign-in is needed. It can also write your reminders and alarms into a calendar you pick.
 - **Assistant**: type or speak "remind me to call mom at 6pm", "spent 250 on lunch", "add 30 to food" or Hinglish like "kal subah 7 baje dawai yaad dilana". Keyword rules on the phone turn it into a draft card that you confirm before anything is created, in well under a millisecond and with no internet or AI service. It also opens apps ("open spotify", "whatsapp kholo"), dials numbers, navigates and searches. If a request isn't understood, it says so straight away. Every request is logged under **Settings → Assistant log**.
@@ -81,7 +82,8 @@ gradlew installDebug   # build and install on the connected phone
 | `.../health/` | Health Connect reads, nudge rules, and the privacy-policy activity Health Connect requires. |
 | `.../calendar/` | Reading upcoming events (`CalendarEvents.kt`) and writing reminders and alarms to a calendar (`CalendarSync.kt`). |
 | `.../launcher/` | The installed-app list and launching apps for the assistant. |
+| `.../ledger/` | The People ledger: `LedgerRepository` and `LedgerMath` (balances, history and the share message). |
 | `.../ai/` | The rule-based assistant. `Lexicon.kt` holds every English and Hinglish keyword (add new words there). `DateTimeRules.kt` reads times, dates and repeats. `CommandParser.kt` picks the action. `AssistantLog.kt` keeps the request log. |
-| `.../ui/` | Compose screens: Home, Reminders, Alarms, Money, Health, Calendar, Assistant and Settings. |
+| `.../ui/` | Compose screens: Home, Reminders, Alarms, Money, People, Health, Calendar, Assistant and Settings. |
 | `.../ui/theme/` | Colour tokens (`HubColors`), the 10 themes, and Poppins type. |
 | `.../ui/motion/` | One shared motion vocabulary: press feedback, springs, entrance stagger, rolling numbers, shape morphs and the small helpers in `Micro.kt`. |

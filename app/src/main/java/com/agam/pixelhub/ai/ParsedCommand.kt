@@ -27,6 +27,22 @@ sealed interface ParsedCommand {
         val isIncome: Boolean get() = kind == ExpenseKind.INCOME
     }
 
+    /**
+     * Money between you and [name] for the People ledger. [signedPaise] is positive when they
+     * owe you more (you paid or lent), negative when you owe them more. [isNewPerson]: [name]
+     * isn't saved yet and is added when this is confirmed.
+     */
+    data class LedgerEntry(
+        val name: String,
+        val signedPaise: Long,
+        val note: String = "",
+        val at: LocalDateTime? = null,
+        val isNewPerson: Boolean = false,
+    ) : ParsedCommand
+
+    /** "naruna ka hisaab": answered at once from the ledger, no card. */
+    data class LedgerBalance(val name: String) : ParsedCommand
+
     data class OpenApp(val query: String) : ParsedCommand
     data class OpenLink(val uri: String) : ParsedCommand
 

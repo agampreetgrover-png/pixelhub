@@ -100,6 +100,30 @@ internal object Lexicon {
             """|mil[aei]|aay?[aei]|kamaye?|kamai|hue|huye|ho\s+gaye)\b""",
     )
 
+    // ---- People ledger (who owes whom) ---------------------------------------------------
+
+    /** Ledger words removed from the note ("paid naruna 30 for lunch" → "lunch"). */
+    val LEDGER_WORDS = Regex(
+        """\b(?:paid|gave|lent|lend|sent|transferred|owes|owe|borrowed|got|received|recieved|spent""" +
+            """|de\s+diye|de\s+diya|diye|diya|udhaar|udhar|le\s+liye|liye|liya|mile|mila|mili|aaye|aaya""" +
+            """|bheje|bheja|pay\s+kiye|kiye|kiya)\b""",
+    )
+
+    val LEDGER_FILLERS = setOf(
+        "i", "me", "mujhe", "mere", "to", "for", "from", "ko", "se", "ne", "ke", "ka", "ki", "liye", "on", "at", "the",
+        "a", "an", "rs", "rupees", "of", "in", "mein", "pe", "par", "and", "back", "wapas", "hai", "h", "tha", "my",
+    )
+
+    /** Words that are never a person's name, so "paid rent 500" or "paid swiggy 300" stays an expense. */
+    val NOT_A_NAME: Set<String> by lazy {
+        setOf(
+            "rs", "inr", "rupees", "me", "him", "her", "them", "you", "someone", "somebody", "it", "back", "bill", "bills",
+            "fees", "fee", "emi", "tax", "cash", "money", "paisa", "paise", "mera", "meri", "mere", "my", "myself",
+            "everyone", "all", "total", "amount", "upi", "online", "card", "advance", "deposit", "kharcha", "the",
+            "today", "tomorrow", "yesterday", "kal", "parso", "month", "week", "mahine", "aaj", "sab", "pura",
+        ) + CATEGORY_WORDS.values.flatten() + MONEY_FILLERS + REMINDER_FILLERS
+    }
+
     // ---- Opening things -----------------------------------------------------------------
 
     val OPEN = Regex("""^(?:(?:please|pls)\s+)?(?:open|launch|start|run|go\s+to)\s+(?:the\s+|my\s+)?(.+?)(?:\s+app)?$""")

@@ -13,6 +13,7 @@ import com.agam.pixelhub.data.AppShortcut
 import com.agam.pixelhub.data.ShortcutKind
 import com.agam.pixelhub.launcher.AppEntry
 import com.agam.pixelhub.launcher.ShortcutLauncher
+import com.agam.pixelhub.ledger.LedgerMath
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.reminders.ReminderDraft
@@ -74,13 +75,22 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun handle(message: String) {
         val shortcuts = c.shortcuts.list()
         val apps = c.installedApps.list()
+        val people = c.ledger.names()
         val started = System.nanoTime()
-        val result = CommandParser.parse(message, ZonedDateTime.now(), shortcuts.map { it.label } + apps.map { it.label })
+        val result = CommandParser.parse(message, ZonedDateTime.now(), shortcuts.map { it.label } + apps.map { it.label }, people)
         val micros = (System.nanoTime() - started) / 1_000
         val logId = c.assistantLog.add(message, result, micros)
         when (val cmd = result.command) {
             is ParsedCommand.Answer -> add(ChatItem.Bot(newId(), cmd.text))
             is ParsedCommand.Invalid -> add(ChatItem.Bot(newId(), cmd.reason, isError = true))
+            is ParsedCommand.LedgerBalance -> {
+                val person = c.ledger.find(cmd.name)
+                if (person == null) {
+                    add(ChatItem.Bot(newId(), "I don't have ${cmd.name} in People yet. Try \"paid ${cmd.name} 30\" to start.", isError = true))
+                } else {
+                    add(ChatItem.Bot(newId(), LedgerMath.balanceText(person.name, c.ledger.balance(person.id))))
+                }
+            }
             is ParsedCommand.OpenApp -> {
                 // Fresh, so an app installed since the list was cached can be opened.
                 val fresh = c.installedApps.list(refresh = true)
@@ -118,6 +128,13 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
                     )
                     if (cmd.isIncome) Outcome(true, "Added ${Money.format(cmd.amountPaise)} income from ${cmd.category.label}")
                     else Outcome(true, "Logged ${Money.format(cmd.amountPaise)} for ${cmd.category.label}")
+                }
+                is ParsedCommand.LedgerEntry -> {
+                    val at = cmd.at?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+                        ?: System.currentTimeMillis()
+                    val balance = c.ledger.record(cmd.name, cmd.signedPaise, cmd.note, at)
+                    val name = c.ledger.find(cmd.name)?.name ?: cmd.name
+                    Outcome(true, LedgerMath.balanceText(name, balance).let { if (balance == 0L) it else "Now: $it" })
                 }
                 else -> Outcome(false, "Nothing to do")
             }
