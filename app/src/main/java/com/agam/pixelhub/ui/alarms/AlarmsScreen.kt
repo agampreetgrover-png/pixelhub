@@ -36,18 +36,26 @@ import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Snooze
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,10 +70,16 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -246,6 +260,7 @@ fun AlarmsScreen() {
                     now = now,
                     onToggle = { on -> save(a.copy(enabled = on)) },
                     onClick = { editingId = a.id },
+                    onDelete = { delete(a) },
                     // Only the first screenful takes part in the entrance; the rest are just there.
                     modifier = if (i + 3 <= 5) {
                         hubAnimateItem(fadeIn = false).staggerIn(stagger, a.id, i + 3)
@@ -563,9 +578,10 @@ private fun ListHead(total: Int, on: Int, modifier: Modifier = Modifier) {
 
 /**
  * One alarm inside the card: the time large, the label and repeat days muted under it with
- * when it rings (or "Off"), and the switch. Tap anywhere else on the row to edit. The switch
- * answers at once and the save follows.
+ * when it rings (or "Off"), and the switch. Tap anywhere else on the row to edit, swipe it
+ * left to delete (Undo follows). The switch answers at once and the save follows.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AlarmRow(
     alarm: Alarm,
@@ -573,6 +589,7 @@ private fun AlarmRow(
     now: Long,
     onToggle: (Boolean) -> Unit,
     onClick: () -> Unit,
+    onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -588,6 +605,28 @@ private fun AlarmRow(
     // The card's bottom corners and margin ease in and out as this row becomes, or stops being, the last.
     val bottomRadius = animatedEdge(if (last) CardRadius else 0.dp)
     val bottomPad = animatedEdge(if (last) 10.dp else 0.dp)
+    val rowShape = RoundedCornerShape(20.dp)
+
+    // Swipe left to delete, as on Reminders. Not saved state: an alarm brought back by Undo
+    // must come back settled, not already swiped.
+    val density = LocalDensity.current
+    val dismiss = remember(density) {
+        SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, density, positionalThreshold = { it * 0.45f })
+    }
+    val latestDelete by rememberUpdatedState(onDelete)
+    LaunchedEffect(dismiss.currentValue) {
+        if (dismiss.currentValue == SwipeToDismissBoxValue.EndToStart) latestDelete()
+    }
+    LaunchedEffect(dismiss.targetValue) {
+        if (dismiss.targetValue == SwipeToDismissBoxValue.EndToStart) {
+            haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+        }
+    }
+    var widthPx by remember { mutableIntStateOf(1) }
+    // 0 at rest, 1 when the row has travelled its full width to the left. Read only while drawing.
+    val swipe: () -> Float = {
+        runCatching { (-dismiss.requireOffset() / widthPx).coerceIn(0f, 1f) }.getOrDefault(0f)
+    }
 
     Box(
         modifier
@@ -596,61 +635,97 @@ private fun AlarmRow(
             .cardSlice(c.raised, top = 0.dp, bottom = bottomRadius)
             .padding(start = 8.dp, end = 8.dp, bottom = bottomPad),
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .pressable(onClick = onClick, pressedScale = 0.98f, onClickLabel = "Edit alarm")
-                .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(digits, style = HubType.clockMedium, color = timeColor)
-                    if (period != null) {
-                        Text(
-                            period,
-                            style = HubType.bodyStrong.copy(fontSize = 14.sp),
-                            color = timeColor,
-                            modifier = Modifier.padding(start = 5.dp, bottom = 6.dp),
-                        )
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        meta,
-                        style = metaStyle,
-                        color = c.inkMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+        SwipeToDismissBox(
+            state = dismiss,
+            modifier = Modifier.onSizeChanged { widthPx = it.width.coerceAtLeast(1) },
+            enableDismissFromStartToEnd = false,
+            backgroundContent = {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        // Invisible at rest so it never peeks round the row's corners.
+                        .graphicsLayer { alpha = (swipe() * 6f).coerceAtMost(1f) }
+                        .clip(rowShape)
+                        .background(c.danger),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        contentDescription = null,
+                        tint = c.onDanger,
+                        modifier = Modifier
+                            .padding(end = 24.dp)
+                            .size(24.dp)
+                            .graphicsLayer {
+                                val f = (swipe() / 0.45f).coerceIn(0f, 1f)
+                                val s = 0.7f + 0.5f * f
+                                scaleX = s
+                                scaleY = s
+                            },
                     )
-                    // Words, not just the dimmed time, say whether it is on. Fades only when it is
-                    // switched; the countdown itself just updates.
-                    AnimatedContent(targetState = on, transitionSpec = { quickFade() }, label = "status") { isOn ->
+                }
+            },
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(rowShape)
+                    // Opaque, so the red only shows where the row has moved away.
+                    .background(c.raised)
+                    .pressable(onClick = onClick, pressedScale = 0.98f, onClickLabel = "Edit alarm")
+                    // Screen readers can't swipe: offer Delete as an action on the row.
+                    .semantics { customActions = listOf(CustomAccessibilityAction("Delete alarm") { latestDelete(); true }) }
+                    .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(digits, style = HubType.clockMedium, color = timeColor)
+                        if (period != null) {
+                            Text(
+                                period,
+                                style = HubType.bodyStrong.copy(fontSize = 14.sp),
+                                color = timeColor,
+                                modifier = Modifier.padding(start = 5.dp, bottom = 6.dp),
+                            )
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (isOn) " • in ${Fmt.untilText(ringsAt, now)}" else " • Off",
-                            style = HubType.small.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                            meta,
+                            style = metaStyle,
                             color = c.inkMuted,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
+                        // Words, not just the dimmed time, say whether it is on. Fades only when it is
+                        // switched; the countdown itself just updates.
+                        AnimatedContent(targetState = on, transitionSpec = { quickFade() }, label = "status") { isOn ->
+                            Text(
+                                if (isOn) " • in ${Fmt.untilText(ringsAt, now)}" else " • Off",
+                                style = HubType.small.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                                color = c.inkMuted,
+                                maxLines = 1,
+                            )
+                        }
                     }
                 }
+                HubSwitch(
+                    checked = on,
+                    onCheckedChange = {
+                        haptics.performHapticFeedback(if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
+                        on = it
+                        onToggle(it)
+                    },
+                    accent = c.dawn,
+                    contentDescription = buildString {
+                        append("Alarm at ").append(digits)
+                        if (period != null) append(' ').append(period)
+                        if (alarm.label.isNotBlank()) append(", ").append(alarm.label)
+                    },
+                )
             }
-            HubSwitch(
-                checked = on,
-                onCheckedChange = {
-                    haptics.performHapticFeedback(if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
-                    on = it
-                    onToggle(it)
-                },
-                accent = c.dawn,
-                contentDescription = buildString {
-                    append("Alarm at ").append(digits)
-                    if (period != null) append(' ').append(period)
-                    if (alarm.label.isNotBlank()) append(", ").append(alarm.label)
-                },
-            )
         }
     }
 }
