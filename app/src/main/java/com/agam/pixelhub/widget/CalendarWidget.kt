@@ -2,6 +2,9 @@ package com.agam.pixelhub.widget
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -53,7 +56,13 @@ import com.agam.pixelhub.widget.kit.isStrip
 import com.agam.pixelhub.widget.kit.openTab
 import com.agam.pixelhub.widget.kit.ringBitmap
 import com.agam.pixelhub.widget.kit.shapeOf
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -119,8 +128,12 @@ class CalendarWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val state = load(context)
-        provideContent { CalendarContent(context, state) }
+        val first = load(context)
+        provideContent {
+            // Re-reads when the calendars change, and every 5 minutes so events that end drop off.
+            val state by remember { live(context) }.collectAsState(first)
+            CalendarContent(context, state)
+        }
     }
 
     /** The widget picker shows the real widget with sample events. */
@@ -131,6 +144,21 @@ class CalendarWidget : GlanceAppWidget() {
 
 /** The same event from several calendars (a holiday three times) shows once; back-to-back sessions stay separate. */
 private fun List<CalendarEvent>.unique() = distinctBy { it.title.trim().lowercase() to it.begin }
+
+/** The widget's state, re-read on every calendar change and every 5 minutes. */
+private fun live(context: Context): Flow<CalendarState> {
+    val events = CalendarEvents(context)
+    if (!events.hasPermission()) return flowOf(CalendarState.NoAccess)
+    val now = System.currentTimeMillis()
+    val changes = events.observe(now, now + 2 * DAY_MS).map { }
+    val ticks = flow {
+        while (true) {
+            delay(5 * MINUTE_MS)
+            emit(Unit)
+        }
+    }
+    return merge(changes, ticks).map { load(context) }
+}
 
 private suspend fun load(context: Context): CalendarState {
     val events = CalendarEvents(context)

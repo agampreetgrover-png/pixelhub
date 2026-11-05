@@ -2,6 +2,9 @@ package com.agam.pixelhub.widget
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,9 +74,13 @@ class RemindersWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        // Open reminders, soonest first, so anything late comes first.
-        val open = context.container.reminders.all.first().filter { !it.done }.sortedBy { it.triggerAt }
-        provideContent { RemindersContent(context, open, ZonedDateTime.now()) }
+        val repo = context.container.reminders
+        val first = openOf(repo.all.first())
+        provideContent {
+            // Follows the reminders live: a ✓ or an edit in the app redraws at once.
+            val all by remember { repo.all }.collectAsState(null)
+            RemindersContent(context, all?.let(::openOf) ?: first, ZonedDateTime.now())
+        }
     }
 
     /** The widget picker shows the real widget with sample reminders. */
@@ -81,6 +88,9 @@ class RemindersWidget : GlanceAppWidget() {
         provideContent { RemindersContent(context, sampleReminders(), ZonedDateTime.now()) }
     }
 }
+
+/** Open reminders, soonest first, so anything late comes first. */
+private fun openOf(all: List<Reminder>): List<Reminder> = all.filter { !it.done }.sortedBy { it.triggerAt }
 
 /** ✓ on a one-off reminder: the same completion as the app's checkbox (cancels its alarm). */
 class ReminderDoneAction : ActionCallback {

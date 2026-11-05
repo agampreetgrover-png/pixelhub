@@ -2,6 +2,9 @@ package com.agam.pixelhub.widget
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
@@ -68,8 +71,13 @@ class MoneyWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val summary = context.container.expenses.month().first()
-        provideContent { MoneyContent(context, summary) }
+        val month = context.container.expenses.month()
+        val first = month.first()
+        provideContent {
+            // Follows this month live: a new expense or budget redraws at once.
+            val summary by remember { month }.collectAsState(first)
+            MoneyContent(context, summary)
+        }
     }
 
     /** The widget picker shows the real widget with sample figures. */

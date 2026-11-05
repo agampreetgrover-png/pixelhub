@@ -2,6 +2,9 @@ package com.agam.pixelhub.widget
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
@@ -63,8 +66,13 @@ class AlarmsWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val alarms = context.container.alarms.all.first()
-        provideContent { AlarmsContent(context, ordered(alarms), ZonedDateTime.now()) }
+        val repo = context.container.alarms
+        val first = repo.all.first()
+        provideContent {
+            // Follows the alarms live: a switch or an edit in the app redraws at once.
+            val alarms by remember { repo.all }.collectAsState(first)
+            AlarmsContent(context, ordered(alarms), ZonedDateTime.now())
+        }
     }
 
     /** The widget picker shows the real widget with sample alarms. */
