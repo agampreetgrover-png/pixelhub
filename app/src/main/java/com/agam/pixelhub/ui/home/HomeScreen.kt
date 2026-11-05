@@ -351,6 +351,11 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                 QuickAction(Icons.Outlined.MoreHoriz, "More", onClick = onOpenMenu)
             }
 
+            // Spotify or whatever else is playing; hidden while nothing is.
+            NowPlayingCard(
+                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "music", 4),
+            )
+
             // Setup nudge: a small progress ring and one sentence.
             AnimatedVisibility(
                 visible = pendingSetup > 0,
@@ -369,7 +374,7 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                     .hubCard(colors.raised)
                     .padding(bottom = 8.dp)
                     .animateContentSize(if (reduced) snap() else tween(220, easing = Motion.EaseOut))
-                    .staggerIn(stagger, "today", 4),
+                    .staggerIn(stagger, "today", 5),
             ) {
                 CardHeader("Today", "View all") { onNavigate(Tab.REMINDERS) }
                 if (today.isEmpty()) {
@@ -428,7 +433,7 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
             // What's on the phone's calendars (Google Calendar included).
             UpcomingEventsCard(
                 onOpen = { onNavigate(Tab.CALENDAR) },
-                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "calendar", 5),
+                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "calendar", 6),
             )
 
             // Money this month.
@@ -436,13 +441,13 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                 summary = month,
                 onViewAll = { onNavigate(Tab.EXPENSES) },
                 onAdd = { editor = HomeEditor.NewExpense },
-                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "money", 6),
+                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "money", 7),
             )
 
             // Today's body.
             HealthHomeCard(
                 onOpen = { onNavigate(Tab.HEALTH) },
-                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "health", 7),
+                modifier = Modifier.padding(horizontal = Gutter).padding(top = 14.dp).staggerIn(stagger, "health", 8),
             )
 
             // Clear the floating tab bar and the system navigation bar.
@@ -728,7 +733,7 @@ private fun dayLabel(d: LocalDate, today: LocalDate): String = when (d) {
 private const val UserName = "Aggu"
 
 private fun greeting(t: LocalTime): String = when (t.hour) {
-    in 5..11 -> "Good morning, $UserName!"
+    in 4..11 -> "Good morning, $UserName!"
     in 12..16 -> "Good afternoon, $UserName!"
     in 17..21 -> "Good evening, $UserName!"
     else -> "Good night, $UserName!"
