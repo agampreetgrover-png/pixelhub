@@ -77,6 +77,7 @@ object BudgetNotifier {
         val open = PendingIntent.getActivity(
             context, id,
             Intent(context, MainActivity::class.java)
+                .setAction("com.agam.pixelhub.open.BUDGET")
                 .putExtra(MainActivity.EXTRA_TAB, EXPENSES_TAB)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -139,6 +140,7 @@ object HealthNotifier {
     private fun openApp(context: Context, tab: Tab, request: Int): PendingIntent = PendingIntent.getActivity(
         context, request,
         Intent(context, MainActivity::class.java)
+            .setAction("com.agam.pixelhub.open.HEALTH")
             .putExtra(MainActivity.EXTRA_TAB, tab.name)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -154,7 +156,11 @@ object ReminderNotifier {
         val request = reminder.id.toInt()
         val open = PendingIntent.getActivity(
             context, request,
+            // Each notifier opens MainActivity with its own action: PendingIntents match on action
+            // and component, not extras, so a shared request code (reminder #1 vs the alarm icon,
+            // #7 vs "Missed alarm") made one overwrite the other's tab.
             Intent(context, MainActivity::class.java)
+                .setAction("com.agam.pixelhub.open.REMINDERS")
                 .putExtra(MainActivity.EXTRA_TAB, Tab.REMINDERS.name)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,

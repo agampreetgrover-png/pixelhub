@@ -1,5 +1,6 @@
 package com.agam.pixelhub.ui.alarms
 
+import android.os.SystemClock
 import com.agam.pixelhub.ui.notchWidthFor
 import com.agam.pixelhub.ui.heroHeight
 import androidx.compose.animation.AnimatedContent
@@ -152,6 +153,7 @@ fun AlarmsScreen() {
     val loaded by c.alarms.all.collectAsStateWithLifecycle<List<Alarm>?>(initialValue = null)
     val alarms = loaded
     val list = alarms.orEmpty()
+    val lastQuickTap = remember { longArrayOf(0L) }
     var creating by rememberSaveable { mutableStateOf(false) }
     var editingId by rememberSaveable { mutableStateOf<Long?>(null) }
     val stagger = rememberStagger()
@@ -198,8 +200,14 @@ fun AlarmsScreen() {
     }
 
     fun quickAlarm(minutes: Int) {
+        // A double tap would set two alarms for the same minute; the second then rings again
+        // as "Snoozed" after the first is dismissed.
+        val tap = SystemClock.uptimeMillis()
+        if (tap - lastQuickTap[0] < 1_000L) return
+        lastQuickTap[0] = tap
         // Rounded to the nearest minute.
         val t = LocalTime.now().plusSeconds(minutes * 60L + 30L)
+        if (list.any { it.label == QUICK_LABEL && it.enabled && (it.daysMask and Days.ALL) == 0 && it.hour == t.hour && it.minute == t.minute }) return
         // Reuse a spent quick alarm, but never replace one that is still set to ring.
         val reuse = list.firstOrNull { it.label == QUICK_LABEL && (it.daysMask and Days.ALL) == 0 && !it.enabled }
         val base = reuse ?: Alarm(hour = t.hour, minute = t.minute, label = QUICK_LABEL)

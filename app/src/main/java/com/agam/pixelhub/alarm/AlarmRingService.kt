@@ -166,7 +166,9 @@ class AlarmRingService : Service() {
     private fun showMissed(r: Ringing) {
         val open = PendingIntent.getActivity(
             this, MISSED_REQUEST,
+            // Own action so request code 7 can't merge with reminder #7's notification intent.
             Intent(this, MainActivity::class.java)
+                .setAction(Scheduler.ACTION_OPEN_ALARMS)
                 .putExtra(MainActivity.EXTRA_TAB, Tab.ALARMS.name)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,

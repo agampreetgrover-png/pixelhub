@@ -141,8 +141,10 @@ private fun RingScreen(ringing: AlarmRingService.Ringing, onSnooze: () -> Unit, 
                 Text(date, style = HubType.button, color = c.ink, maxLines = 1)
             }
 
-            Spacer(Modifier.weight(1f))
-
+            // The card takes whatever height is left. Weighted children are measured last, so the
+            // date chip and both buttons always get their full height; in landscape it's the card
+            // that gives way, never Snooze.
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -170,12 +172,16 @@ private fun RingScreen(ringing: AlarmRingService.Ringing, onSnooze: () -> Unit, 
                         style = HubType.clockHuge.copy(fontSize = 76.sp, lineHeight = 80.sp),
                         color = on,
                         maxLines = 1,
+                        // Leaves room for "am"/"pm" at large font sizes instead of squeezing it.
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     if (period != null) {
                         Text(
                             period,
                             style = HubType.section,
                             color = on,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(start = 8.dp, bottom = 14.dp),
                         )
                     }
@@ -189,8 +195,7 @@ private fun RingScreen(ringing: AlarmRingService.Ringing, onSnooze: () -> Unit, 
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-
-            Spacer(Modifier.weight(1f))
+            }
 
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 RingButton(

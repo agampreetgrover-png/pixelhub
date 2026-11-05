@@ -207,9 +207,12 @@ internal fun ReminderEditorSheet(
     fun build(): ReminderDraft? {
         val at = LocalDateTime.of(date, time)
         val rec = recurrence()
+        // Only a time the user set (or a new reminder) has to be ahead: fixing the title of an
+        // overdue or finished one-off must still save.
+        val timeChanged = isNew || at != initial.at || initial.recurrence.type != RepeatType.NONE
         error = when {
             title.isBlank() -> "Give the reminder a title"
-            type == RepeatType.NONE && !at.isAfter(LocalDateTime.now()) -> "Pick a time in the future"
+            type == RepeatType.NONE && timeChanged && !at.isAfter(LocalDateTime.now()) -> "Pick a time in the future"
             type == RepeatType.WEEKLY && (mask and Days.ALL) == 0 -> "Pick at least one day"
             else -> null
         }

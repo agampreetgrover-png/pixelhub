@@ -58,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -344,8 +345,16 @@ private fun TimeHero(hour: Int, minute: Int, mask: Int, label: String, modifier:
     val on = c.onDawn
     val soft = c.onDawnSoft
     val (digits, period) = splitTime(Fmt.time(context, LocalTime.of(hour, minute)))
-    val ringsAt = AlarmRepository.nextTrigger(Alarm(hour = hour, minute = minute, daysMask = mask))
-        .toInstant().toEpochMilli()
+    // Ticks on :00 and :30 so "Rings in" keeps counting (and rolls to tomorrow) while the sheet is open.
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(30_000L - System.currentTimeMillis() % 30_000L + 50L)
+            value = System.currentTimeMillis()
+        }
+    }
+    val ringsAt = remember(hour, minute, mask, now) {
+        AlarmRepository.nextTrigger(Alarm(hour = hour, minute = minute, daysMask = mask)).toInstant().toEpochMilli()
+    }
     Column(
         modifier
             .fillMaxWidth()
@@ -385,7 +394,7 @@ private fun TimeHero(hour: Int, minute: Int, mask: Int, label: String, modifier:
         }
         Row(verticalAlignment = Alignment.Bottom) {
             Text("Rings in ", style = HubType.small, color = soft)
-            RollingText(Fmt.untilText(ringsAt), style = HubType.button.copy(fontSize = 12.sp, lineHeight = 18.sp), color = on)
+            RollingText(Fmt.untilText(ringsAt, now), style = HubType.button.copy(fontSize = 12.sp, lineHeight = 18.sp), color = on)
         }
     }
 }

@@ -109,7 +109,11 @@ class Scheduler(private val context: Context) {
         if (!canScheduleExact()) return setExact(atMillis, operation)
         val show = PendingIntent.getActivity(
             context, SHOW_REQUEST,
-            Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_TAB, Tab.ALARMS.name),
+            // Its own action: PendingIntents match on action and component, not extras, so without
+            // one this shared request code 1 with reminder #1's notification and one overwrote the
+            // other's tab (tapping that reminder opened Alarms).
+            Intent(context, MainActivity::class.java).setAction(ACTION_OPEN_ALARMS)
+                .putExtra(MainActivity.EXTRA_TAB, Tab.ALARMS.name),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(atMillis, show), operation)
@@ -141,6 +145,8 @@ class Scheduler(private val context: Context) {
         const val ACTION_ALARM_SNOOZE_CANCEL = "com.agam.pixelhub.action.ALARM_SNOOZE_CANCEL"
         const val ACTION_HEALTH_NUDGE = "com.agam.pixelhub.action.HEALTH_NUDGE"
         const val EXTRA_ID = "id"
+        /** Opens the Alarms tab (status-bar alarm icon, "Missed alarm" note). */
+        const val ACTION_OPEN_ALARMS = "com.agam.pixelhub.open.ALARMS"
         private const val SHOW_REQUEST = 1
 
         /** Notification id of the "Snoozed until" note for one alarm. */

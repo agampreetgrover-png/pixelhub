@@ -46,8 +46,16 @@ class TriggerReceiver : BroadcastReceiver() {
                         c.alarms.onFired(id)
                     }
                 Scheduler.ACTION_ALARM_SNOOZE_CANCEL -> c.scheduler.cancelAlarmSnooze(id)
-                Scheduler.ACTION_ALARM_SNOOZE ->
-                    c.alarms.get(id)?.let { AlarmRingService.start(context, it, snoozed = true) }
+                Scheduler.ACTION_ALARM_SNOOZE -> {
+                    val alarm = c.alarms.get(id)
+                    if (alarm != null) {
+                        AlarmRingService.start(context, alarm, snoozed = true)
+                    } else {
+                        // Deleted while ringing: nothing rings, so clear its ongoing (unswipeable)
+                        // "Snoozed" note, which only the next ring would have removed.
+                        c.scheduler.cancelAlarmSnooze(id)
+                    }
+                }
                 Scheduler.ACTION_HEALTH_NUDGE ->
                     c.healthNudges.onFired(id)?.let { nudge ->
                         when (val check = c.health.check(nudge)) {
@@ -64,6 +72,9 @@ class TriggerReceiver : BroadcastReceiver() {
 /** AlarmManager forgets everything on reboot; time changes shift wall-clock schedules. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        // Exported for the system's broadcasts, so any app could also call it by name. These
+        // actions are protected: only the system can send them.
+        if (intent.action !in HANDLED) return
         val c = context.container
         runAsync {
             c.scheduler.restoreSnoozes()
@@ -71,5 +82,15 @@ class BootReceiver : BroadcastReceiver() {
             c.healthNudges.rescheduleAll()
             c.reminders.rescheduleAll().forEach { ReminderNotifier.show(context, it) }
         }
+    }
+
+    private companion object {
+        // Keep in step with BootReceiver's intent filter in AndroidManifest.xml.
+        val HANDLED = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            Intent.ACTION_TIME_CHANGED, // "android.intent.action.TIME_SET"
+            Intent.ACTION_TIMEZONE_CHANGED,
+        )
     }
 }

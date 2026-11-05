@@ -161,7 +161,8 @@ fun RemindersScreen() {
     // Ticks so a reminder slides from Upcoming into Overdue while you watch.
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
-            delay(30_000)
+            // On :00 and :30, so a reminder moves to Overdue right as its minute arrives.
+            delay(30_000L - System.currentTimeMillis() % 30_000L + 50L)
             value = System.currentTimeMillis()
         }
     }
@@ -239,6 +240,9 @@ fun RemindersScreen() {
             Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(top = 4.dp, bottom = 104.dp),
         ) {
+            // Nothing until the database answers: if Quick add were laid out first, the hero
+            // inserted above it would push the list off its top and open the screen scrolled.
+            if (all == null) return@LazyColumn
             if (next != null) {
                 item(key = "hero", contentType = "hero") {
                     NextHero(
@@ -366,7 +370,11 @@ fun RemindersScreen() {
                 onDismiss = { editingId = null },
                 onSave = { d ->
                     editingId = null
-                    c.appScope.launch { c.reminders.save(r.id, d.title, d.notes, d.at, d.recurrence) }
+                    // A new time or repeat brings a finished reminder back; a title fix leaves it done.
+                    val reopen = r.done && (d.at != r.anchor || d.recurrence != r.recurrence)
+                    c.appScope.launch {
+                        c.reminders.save(r.id, d.title, d.notes, d.at, d.recurrence, done = if (reopen) false else null)
+                    }
                 },
                 onDelete = {
                     editingId = null

@@ -62,6 +62,13 @@ class ReminderRepository(
     }
 
     private suspend fun syncToCalendar(r: Reminder): Reminder {
+        // A finished repeating reminder would otherwise keep repeating in Google Calendar forever;
+        // un-ticking it saves again and copies it back as a fresh event.
+        if (r.done && r.recurrence.isRepeating) {
+            val eventId = r.calendarEventId ?: return r
+            calendar.remove(eventId)
+            return r.copy(calendarEventId = null).also { dao.update(it) }
+        }
         val eventId = calendar.push(r)
         if (eventId == r.calendarEventId) return r
         return r.copy(calendarEventId = eventId).also { dao.update(it) }
@@ -70,7 +77,9 @@ class ReminderRepository(
     suspend fun setDone(reminder: Reminder, done: Boolean) {
         if (done) {
             scheduler.cancelReminder(reminder.id)
-            dao.update(reminder.copy(done = true))
+            val finished = reminder.copy(done = true)
+            dao.update(finished)
+            syncToCalendar(finished)
         } else {
             save(reminder.id, reminder.title, reminder.notes, reminder.anchor, reminder.recurrence, done = false)
         }
