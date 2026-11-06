@@ -47,7 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Assistant
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
@@ -56,7 +56,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Assistant
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Notifications
@@ -124,7 +124,7 @@ enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: Image
     HOME("Home", Icons.Outlined.Home, Icons.Filled.Home),
     REMINDERS("Reminders", Icons.Outlined.Notifications, Icons.Filled.Notifications),
     ALARMS("Alarms", Icons.Outlined.Alarm, Icons.Filled.Alarm),
-    ASSISTANT("Assistant", Icons.Outlined.AutoAwesome, Icons.Filled.AutoAwesome),
+    ASSISTANT("Assistant", Icons.Outlined.Assistant, Icons.Filled.Assistant),
     SETTINGS("Settings", Icons.Outlined.Settings, Icons.Filled.Settings),
     HEALTH("Health", Icons.Outlined.FavoriteBorder, Icons.Filled.Favorite),
     EXPENSES("Money", Icons.Outlined.AccountBalanceWallet, Icons.Filled.AccountBalanceWallet),
