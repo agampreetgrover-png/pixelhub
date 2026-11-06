@@ -399,7 +399,8 @@ private fun InputBar(
                 .heightIn(min = 56.dp)
                 .clip(PillShape)
                 .background(c.raised)
-                .padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                // 4dp around the 48dp buttons (the minimum touch target) keeps the pill 56dp tall.
+                .padding(start = 20.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
             BasicTextField(
@@ -415,11 +416,11 @@ private fun InputBar(
                 keyboardActions = KeyboardActions(onSend = { onSend() }),
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 44.dp)
+                    .heightIn(min = 48.dp)
                     .focusRequester(focus)
                     .semantics { contentDescription = "Message" },
                 decorationBox = { inner ->
-                    Box(Modifier.heightIn(min = 44.dp).padding(vertical = 10.dp), contentAlignment = Alignment.CenterStart) {
+                    Box(Modifier.heightIn(min = 48.dp).padding(vertical = 12.dp), contentAlignment = Alignment.CenterStart) {
                         if (value.text.isEmpty()) {
                             Text("Ask or give a command", style = HubType.body, color = c.inkMuted, maxLines = 1)
                         }
@@ -451,7 +452,7 @@ private fun MicButton(enabled: Boolean, listening: Boolean, onClick: () -> Unit)
     )
     Box(
         Modifier
-            .size(44.dp)
+            .size(48.dp)
             .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Speak", showRipple = false)
             .clip(CircleShape)
             .background(bg)
@@ -475,7 +476,7 @@ private fun SendButton(enabled: Boolean, onClick: () -> Unit) {
     val fg by animateColorAsState(if (enabled) onFg else c.inkMuted, tween(180), label = "sendFg")
     Box(
         Modifier
-            .size(44.dp)
+            .size(48.dp)
             .pressable(onClick = onClick, enabled = enabled, pressedScale = 0.9f, onClickLabel = "Send", showRipple = false)
             .clip(CircleShape)
             .background(bg)
