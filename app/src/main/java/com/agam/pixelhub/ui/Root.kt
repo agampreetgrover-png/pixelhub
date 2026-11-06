@@ -324,6 +324,8 @@ private fun NavDrawer(selected: Tab, badges: Map<Tab, Int>, drawerOpen: Boolean,
                 modifier = Modifier.padding(start = 28.dp, top = 20.dp, bottom = 8.dp),
             )
             DrawerMore.forEach { Item(it) }
+            Spacer(Modifier.height(12.dp))
+            QuickNotesSection(drawerOpen = drawerOpen)
         }
     }
 }
@@ -337,8 +339,6 @@ private fun tabTransition(from: Tab, to: Tab, reduced: Boolean): ContentTransfor
     if (to.isLayer && !from.isLayer) {
         return (slideInVertically(tween(300, easing = Motion.Drawer)) { it / 5 } + fadeIn(tween(220)) +
             scaleIn(tween(300, easing = Motion.Drawer), initialScale = 0.98f)) togetherWith
-            Spacer(Modifier.height(12.dp))
-            QuickNotesSection(drawerOpen = drawerOpen)
             (fadeOut(tween(180)) + scaleOut(tween(300), targetScale = 0.96f))
     }
     if (from.isLayer) {
