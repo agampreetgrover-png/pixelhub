@@ -151,7 +151,9 @@ class CalendarEvents(context: Context) {
             Log.w("PixelHub", "Calendar query failed", e)
             return emptyList()
         }
-        return result.sortedWith(compareBy<CalendarEvent> { it.begin }.thenByDescending { it.allDay })
+        return CalendarAgenda.withoutDuplicates(
+            result.sortedWith(compareBy<CalendarEvent> { it.begin }.thenByDescending { it.allDay }),
+        )
     }
 
     private companion object {
@@ -196,6 +198,17 @@ object CalendarAgenda {
 
     /** The description footer PixelHub writes on its own reminder events. */
     private val pixelHubFooter: String = CalendarRules.description("")
+
+    /**
+     * One entry per real-world event. The same event is often on the phone several times: an
+     * invite sent to two synced Google accounts, or "Holidays in India" subscribed in more than
+     * one account or region. Same title, start, end and all-day flag counts as the same event;
+     * the first one (in [events]' order) is kept.
+     */
+    fun withoutDuplicates(events: List<CalendarEvent>): List<CalendarEvent> =
+        events.distinctBy { e ->
+            listOf(e.title.trim().lowercase().replace(Regex("\\s+"), " "), e.begin, e.end, e.allDay)
+        }
 
     /** True for an event PixelHub created from a reminder. */
     fun isFromPixelHub(description: String?): Boolean =

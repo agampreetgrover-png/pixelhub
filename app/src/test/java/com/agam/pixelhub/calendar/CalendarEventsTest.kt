@@ -35,6 +35,26 @@ class CalendarEventsTest {
         true, 0, "Personal", "",
     )
 
+    // --- duplicates across accounts -------------------------------------------------------
+
+    @Test fun sameEventFromSeveralCalendarsShowsOnce() {
+        val diwali = LocalDate.of(2026, 11, 8)
+        val list = listOf(
+            allDay(diwali, 1, "Diwali/Deepavali").copy(eventId = 9),
+            allDay(diwali, 1, "Diwali/Deepavali").copy(eventId = 109),
+            allDay(diwali, 1, "diwali/deepavali ").copy(eventId = 211),
+            allDay(diwali, 1, "Naraka Chaturdasi").copy(eventId = 82),
+        )
+        val kept = CalendarAgenda.withoutDuplicates(list)
+        assertEquals(listOf(9L, 82L), kept.map { it.eventId })
+    }
+
+    @Test fun sameTitleAtDifferentTimesIsKept() {
+        val a = event("2026-11-06T09:00", "2026-11-06T10:00", title = "Lab", id = 1)
+        val b = event("2026-11-06T10:00", "2026-11-06T11:00", title = "Lab", id = 2)
+        assertEquals(2, CalendarAgenda.withoutDuplicates(listOf(a, b)).size)
+    }
+
     // --- all-day conversion ---------------------------------------------------------------
 
     @Test fun allDayLandsOnItsDateWestOfUtc() {
