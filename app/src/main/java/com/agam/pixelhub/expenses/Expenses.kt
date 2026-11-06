@@ -41,11 +41,20 @@ object Money {
         val t = text.trim()
         val decimalComma = !t.contains('.') && Regex(""",\d{1,2}$""").containsMatchIn(t)
         val normal = if (decimalComma) t.substring(0, t.lastIndexOf(',')) + "." + t.substringAfterLast(',') else t
-        val cleaned = normal.replace("₹", "").replace(",", "").replace("Rs", "", ignoreCase = true).trim()
-        val value = cleaned.toBigDecimalOrNull()?.stripTrailingZeros() ?: return null
-        if (value.signum() <= 0 || value.scale() > 2) return null
+        // "Rs.100" is ₹100: the currency word takes its dot with it.
+        val cleaned = normal
+            .replace(CURRENCY_PREFIX, "").replace(CURRENCY_SUFFIX, "")
+            .replace("₹", "").replace(",", "").trim()
+        val raw = cleaned.toBigDecimalOrNull() ?: return null
+        // Checked before trimming zeros: "1.500" is a typo (or a European thousands dot), not ₹1.50.
+        if (raw.scale() > 2) return null
+        val value = raw.stripTrailingZeros()
+        if (value.signum() <= 0) return null
         return runCatching { value.movePointRight(2).longValueExact() }.getOrNull()
     }
+
+    private val CURRENCY_PREFIX = Regex("""^(₹|rs\.?|inr)\s*""", RegexOption.IGNORE_CASE)
+    private val CURRENCY_SUFFIX = Regex("""\s*(rs\.?|inr)$""", RegexOption.IGNORE_CASE)
 
     /** Null for zero, negative, or an amount too big to hold (a pasted 300-digit number is Infinity). */
     fun fromRupees(rupees: Double): Long? {

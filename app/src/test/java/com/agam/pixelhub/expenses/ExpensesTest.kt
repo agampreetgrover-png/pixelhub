@@ -37,6 +37,19 @@ class ExpensesTest {
         assertNull(Money.parse("1.234"))
     }
 
+    @Test fun parseTakesTheDotWithRupeeWords() {
+        assertEquals(100_00L, Money.parse("Rs.100"))
+        assertEquals(5000_00L, Money.parse("rs. 5000"))
+        assertEquals(100_00L, Money.parse("100 Rs"))
+        assertEquals(250_00L, Money.parse("INR 250"))
+        assertEquals(2_50L, Money.parse("2.50"))
+    }
+
+    @Test fun parseRejectsThreeDecimalsEvenWithTrailingZeros() {
+        assertNull(Money.parse("1.500"))
+        assertNull(Money.parse(".5000"))
+    }
+
     @Test fun fromRupeesRounds() = assertEquals(12_35L, Money.fromRupees(12.345))
 
     @Test fun crossing80Percent() = assertEquals(80, BudgetMath.crossed(7_000, 8_500, 10_000))
