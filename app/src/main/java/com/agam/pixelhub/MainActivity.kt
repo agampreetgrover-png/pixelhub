@@ -14,6 +14,7 @@ import com.agam.pixelhub.alarm.AlarmRingActivity
 import com.agam.pixelhub.alarm.AlarmRingService
 import com.agam.pixelhub.ui.PixelHubRoot
 import com.agam.pixelhub.ui.Tab
+import com.agam.pixelhub.ui.settings.PermissionAsks
 import com.agam.pixelhub.ui.theme.PixelHubTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -22,7 +23,13 @@ import java.time.YearMonth
 class MainActivity : ComponentActivity() {
     private val tab = mutableStateOf(Tab.HOME)
     private val notificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            // Shared with Settings' "Fix": once denied here, its tap must open system settings
+            // (Android no longer shows the prompt) instead of a request that silently does nothing.
+            if (granted || shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                PermissionAsks.markAsked(this, Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
