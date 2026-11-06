@@ -150,9 +150,14 @@ class AlarmRepository(private val dao: AlarmDao, private val scheduler: Schedule
     suspend fun get(id: Long): Alarm? = dao.get(id)
 
     suspend fun save(alarm: Alarm): Alarm {
+        val before = if (alarm.id == 0L) null else dao.get(alarm.id)
         val id = if (alarm.id == 0L) dao.insert(alarm) else alarm.id.also { dao.update(alarm) }
         val saved = alarm.copy(id = id)
-        apply(saved)
+        // A rename or a plain re-save keeps a snooze in progress; a new time, new days or
+        // switching the alarm off ends it.
+        val keepSnooze = saved.enabled && before != null && before.hour == saved.hour &&
+            before.minute == saved.minute && before.daysMask == saved.daysMask
+        apply(saved, keepSnooze)
         return saved
     }
 
