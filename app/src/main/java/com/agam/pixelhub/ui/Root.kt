@@ -26,6 +26,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
@@ -141,7 +142,7 @@ private val Tab.isLayer get() = this !in BarTabs
 private val NavBarSpace = 82.dp
 
 /** Home also carries the assistant button above the tab bar. */
-private val HomeBarSpace = NavBarSpace + AssistantButtonHeight + 10.dp
+private val HomeBarSpace = NavBarSpace + AssistantButtonSize + 10.dp
 
 @Composable
 fun PixelHubRoot(tabState: MutableState<Tab>) {
@@ -245,8 +246,8 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
         // The assistant button (Home only) above the tab bar. While typing, the tab bar steps
         // aside so the keyboard has the room.
         val typing = WindowInsets.isImeVisible
-        // The tab bar's measured width. The assistant button takes the same width, so the two
-        // pills stack as one column; it keeps the last width while the tab bar is hidden.
+        // The tab bar's measured width, so the assistant button lines up with its right end; the
+        // last width is kept while the tab bar is hidden.
         var barWidth by remember { mutableIntStateOf(0) }
         val density = LocalDensity.current
         Column(
@@ -258,13 +259,16 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
                 enter = if (reduced) fadeIn(tween(150)) else slideInVertically(tween(320, easing = Motion.EaseOut)) { it } + fadeIn(),
                 exit = if (reduced) fadeOut(tween(100)) else slideOutVertically(tween(200, easing = Motion.EaseOut)) { it } + fadeOut(tween(150)),
             ) {
-                AssistantButton(
-                    onClick = { go(Tab.ASSISTANT) },
-                    modifier = (
+                // A row as wide as the tab bar, with the button at its right end.
+                Box(
+                    (
                         if (barWidth > 0) Modifier.width(with(density) { barWidth.toDp() })
-                        else Modifier.padding(horizontal = 16.dp)
+                        else Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                     ).padding(bottom = 10.dp),
-                )
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    AssistantButton(onClick = { go(Tab.ASSISTANT) })
+                }
             }
             AnimatedVisibility(
                 visible = !tab.isLayer && !typing,
@@ -371,7 +375,7 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit, onWidth: (Int) -> Uni
             // Never wider than the screen: at large font sizes the selected label shortens instead
             // of pushing the last tab out of the pill.
             .padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
-            // The pill's own width, outside margins excluded; the assistant button matches it.
+            // The pill's own width, outside margins excluded; the assistant button aligns to it.
             .onSizeChanged { onWidth(it.width) }
             .clip(CircleShape)
             .background(c.chrome)
