@@ -113,6 +113,7 @@ import com.agam.pixelhub.ui.people.PeopleScreen
 import com.agam.pixelhub.ui.settings.SettingsScreen
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
+import com.agam.pixelhub.ui.notes.QuickNotesSection
 
 /** Tab.name travels in MainActivity.EXTRA_TAB from notifications; keep the value names. */
 enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
@@ -198,7 +199,7 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
                 Tab.REMINDERS to reminders.count { !it.done && it.triggerAt < nowMs },
                 Tab.SETTINGS to checks.count { !it.ok },
             )
-            NavDrawer(selected = tab, badges = badges, onPick = { picked ->
+            NavDrawer(selected = tab, badges = badges, drawerOpen = drawerShown, onPick = { picked ->
                 scope.launch { drawer.close() }
                 if (picked != tab) go(picked)
             })
@@ -274,9 +275,9 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
 private val DrawerMain = listOf(Tab.HOME, Tab.REMINDERS, Tab.ALARMS, Tab.EXPENSES, Tab.HEALTH, Tab.CALENDAR)
 private val DrawerMore = listOf(Tab.ASSISTANT, Tab.SETTINGS)
 
-/** The left-side navigation drawer: every page in the app, the current one highlighted. */
+/** The left-side navigation drawer: every page in the app, the current one highlighted, then quick notes. */
 @Composable
-private fun NavDrawer(selected: Tab, badges: Map<Tab, Int>, onPick: (Tab) -> Unit) {
+private fun NavDrawer(selected: Tab, badges: Map<Tab, Int>, drawerOpen: Boolean, onPick: (Tab) -> Unit) {
     val c = Hub.colors
     val itemColors = NavigationDrawerItemDefaults.colors(
         selectedContainerColor = c.well,
@@ -304,7 +305,8 @@ private fun NavDrawer(selected: Tab, badges: Map<Tab, Int>, onPick: (Tab) -> Uni
         drawerContainerColor = c.raised,
         drawerContentColor = c.ink,
     ) {
-        Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
+        // imePadding: while typing a note, the drawer scrolls the field up above the keyboard.
+        Column(Modifier.imePadding().verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
             Text(
                 "PixelHub",
                 style = HubType.title,
@@ -332,6 +334,8 @@ private fun tabTransition(from: Tab, to: Tab, reduced: Boolean): ContentTransfor
     if (to.isLayer && !from.isLayer) {
         return (slideInVertically(tween(300, easing = Motion.Drawer)) { it / 5 } + fadeIn(tween(220)) +
             scaleIn(tween(300, easing = Motion.Drawer), initialScale = 0.98f)) togetherWith
+            Spacer(Modifier.height(12.dp))
+            QuickNotesSection(drawerOpen = drawerOpen)
             (fadeOut(tween(180)) + scaleOut(tween(300), targetScale = 0.96f))
     }
     if (from.isLayer) {

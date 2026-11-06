@@ -121,6 +121,16 @@ data class HealthNudge(
     val enabled: Boolean = true,
 )
 
+/** A quick note from the drawer: a line of text, ticked off when it's dealt with. */
+@Entity(tableName = "notes")
+data class Note(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val text: String,
+    val done: Boolean = false,
+    /** When it was written, epoch millis. */
+    val createdAt: Long,
+)
+
 @Entity(tableName = "shortcuts")
 data class AppShortcut(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

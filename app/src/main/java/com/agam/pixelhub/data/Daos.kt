@@ -95,6 +95,20 @@ interface BudgetDao {
 }
 
 @Dao
+interface NoteDao {
+    /** Open notes first, newest first within each. */
+    @Query("SELECT * FROM notes ORDER BY done ASC, createdAt DESC, id DESC")
+    fun observeAll(): Flow<List<Note>>
+
+    @Insert suspend fun insert(note: Note): Long
+    @Update suspend fun update(note: Note)
+    @Delete suspend fun delete(note: Note)
+
+    @Query("DELETE FROM notes WHERE done = 1")
+    suspend fun deleteDone()
+}
+
+@Dao
 interface ShortcutDao {
     @Query("SELECT * FROM shortcuts ORDER BY position ASC, id ASC")
     fun observeAll(): Flow<List<AppShortcut>>

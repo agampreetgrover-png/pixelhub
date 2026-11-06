@@ -6,6 +6,7 @@ import com.agam.pixelhub.calendar.CalendarSync
 import com.agam.pixelhub.data.AlarmRepository
 import com.agam.pixelhub.data.AppDatabase
 import com.agam.pixelhub.data.HealthNudgeRepository
+import com.agam.pixelhub.data.NotesRepository
 import com.agam.pixelhub.data.ReminderRepository
 import com.agam.pixelhub.data.SettingsStore
 import com.agam.pixelhub.data.ShortcutRepository
@@ -61,6 +62,9 @@ class AppContainer(context: Context) {
 
     /** Who owes whom: people and the money between you. Kept apart from expenses. */
     val ledger = LedgerRepository(db.peopleDao(), db.ledgerDao())
+
+    /** Quick notes, in the drawer. */
+    val notes = NotesRepository(db.noteDao())
 
     /** Every assistant request and how the rules handled it, shown in Settings. */
     val assistantLog = AssistantLog(File(appContext.filesDir, "assistant_log.json"), appScope)

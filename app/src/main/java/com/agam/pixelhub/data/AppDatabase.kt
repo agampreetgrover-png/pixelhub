@@ -18,9 +18,9 @@ class Converters {
 @Database(
     entities = [
         Reminder::class, Alarm::class, AppShortcut::class, HealthNudge::class, Expense::class, Budget::class,
-        Person::class, LedgerRecord::class,
+        Person::class, LedgerRecord::class, Note::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -33,6 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun budgetDao(): BudgetDao
     abstract fun peopleDao(): PeopleDao
     abstract fun ledgerDao(): LedgerDao
+    abstract fun noteDao(): NoteDao
 
     companion object {
         /** v2 adds health nudges and calendar sync. Existing reminders, alarms and shortcuts are kept. */
@@ -122,9 +123,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v7 adds quick notes. Nothing existing changes. */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `notes` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`text` TEXT NOT NULL, " +
+                        "`done` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL)",
+                )
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "pixelhub.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build()
     }
 }
