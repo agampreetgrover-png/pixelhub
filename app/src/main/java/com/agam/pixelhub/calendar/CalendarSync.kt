@@ -113,14 +113,26 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
     suspend fun remove(eventId: Long) {
         if (!hasPermission()) return
         withContext(Dispatchers.IO) {
-            runCatching { resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, eventId), null, null) }
+            runCatching { if (isOurs(eventId)) resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, eventId), null, null) }
                 .onFailure { Log.w("PixelHub", "Calendar delete failed for event $eventId", it) }
         }
     }
 
+    /**
+     * An event id saved in the database can point at someone else's event after a restore onto
+     * a new phone, or after Calendar Storage was cleared: ids are per-device. Only events that
+     * still exist and carry PixelHub's footer are ever changed or deleted.
+     */
+    private fun isOurs(eventId: Long): Boolean =
+        resolver.query(
+            ContentUris.withAppendedId(Events.CONTENT_URI, eventId),
+            arrayOf(Events.DESCRIPTION), "${Events.DELETED} = 0", null, null,
+        )?.use { c -> c.moveToFirst() && CalendarAgenda.isFromPixelHub(c.getString(0)) } == true
+
     private fun upsert(calendarId: Long, r: Reminder): Long {
         val values = CalendarRules.eventValues(r, ZoneId.systemDefault())
-        r.calendarEventId?.let { eventId ->
+        // Not ours (or gone): leave it alone and create a fresh event below.
+        r.calendarEventId?.takeIf { isOurs(it) }?.let { eventId ->
             val uri = ContentUris.withAppendedId(Events.CONTENT_URI, eventId)
             // Update in place only if it still lives in the chosen calendar and wasn't deleted.
             val updated = resolver.update(
