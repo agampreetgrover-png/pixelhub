@@ -88,6 +88,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agam.pixelhub.alarm.AlarmRingService
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Alarm
 import com.agam.pixelhub.data.AlarmRepository
@@ -209,7 +210,11 @@ fun AlarmsScreen() {
         val t = LocalTime.now().plusSeconds(minutes * 60L + 30L)
         if (list.any { it.label == QUICK_LABEL && it.enabled && (it.daysMask and Days.ALL) == 0 && it.hour == t.hour && it.minute == t.minute }) return
         // Reuse a spent quick alarm, but never replace one that is still set to ring.
-        val reuse = list.firstOrNull { it.label == QUICK_LABEL && (it.daysMask and Days.ALL) == 0 && !it.enabled }
+        // A one-shot quick alarm that rang and was snoozed is switched off but still due to ring.
+        val reuse = list.firstOrNull {
+            it.label == QUICK_LABEL && (it.daysMask and Days.ALL) == 0 && !it.enabled &&
+                !c.scheduler.hasAlarmSnooze(it.id) && AlarmRingService.state.value?.alarmId != it.id
+        }
         val base = reuse ?: Alarm(hour = t.hour, minute = t.minute, label = QUICK_LABEL)
         save(base.copy(hour = t.hour, minute = t.minute, enabled = true))
     }

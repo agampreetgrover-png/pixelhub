@@ -51,6 +51,9 @@ class Scheduler(private val context: Context) {
         cancelAlarmTrigger(id)
         cancelAlarmSnooze(id)
     }
+    /** True while a snooze of this alarm is waiting to ring. */
+    fun hasAlarmSnooze(id: Long): Boolean = snoozes.contains("a$id")
+
     /** Only the alarm's own trigger; a snooze in progress keeps going. */
     fun cancelAlarmTrigger(id: Long) = cancel(ACTION_ALARM, id)
     fun cancelAlarmSnooze(id: Long) {
