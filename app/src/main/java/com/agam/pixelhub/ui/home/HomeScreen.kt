@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
@@ -220,10 +223,14 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
         now = ZonedDateTime.now()
         onPauseOrDispose { }
     }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay((60 - ZonedDateTime.now().second) * 1000L + 50)
-            now = ZonedDateTime.now()
+    // Only while Home is on screen: there's nothing to keep current in the background.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay((60 - ZonedDateTime.now().second) * 1000L + 50)
+                now = ZonedDateTime.now()
+            }
         }
     }
     val nowMillis = now.toInstant().toEpochMilli()
