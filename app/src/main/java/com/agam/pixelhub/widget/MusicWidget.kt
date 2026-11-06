@@ -148,10 +148,11 @@ private class MusicView(
 }
 
 /**
- * How often the times and progress bar move while a song plays with the screen on. Each tick
- * resends the whole widget with its bitmaps, so it matches WidgetSync's 5 s rather than every second.
+ * How often the times and progress bar move while a song plays with the screen on: every second,
+ * so the clock reads like the player's. The background is made once per song (MusicView.glow),
+ * so a tick only resends bitmaps that are already built.
  */
-private const val TICK_MS = 5_000L
+private const val TICK_MS = 1_000L
 
 private sealed interface MusicState {
     data class Playing(val view: MusicView) : MusicState
