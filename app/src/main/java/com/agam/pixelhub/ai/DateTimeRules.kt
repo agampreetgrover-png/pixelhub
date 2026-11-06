@@ -40,7 +40,17 @@ internal data class ClockTime(val hour: Int, val minute: Int, val meridiem: Char
 /** A resolved time of day. [certain] is false for "at 6" with nothing saying morning or evening. */
 internal data class HourMinute(val hour: Int, val minute: Int, val certain: Boolean)
 
-internal data class DateHit(val date: LocalDate, val part: DayPart? = null, val fromWeekday: Boolean = false)
+/**
+ * A date the text names. [impossible] is set when it names a day that doesn't exist ("31 april",
+ * "29/2/2027"): the words are used up, so the caller must say so instead of quietly using [date]
+ * (which is then just today).
+ */
+internal data class DateHit(
+    val date: LocalDate,
+    val part: DayPart? = null,
+    val fromWeekday: Boolean = false,
+    val impossible: Boolean = false,
+)
 
 /** "in 20 minutes" ([minutes]) or "in 3 days" ([days]). */
 internal data class Relative(val minutes: Long? = null, val days: Long? = null)
@@ -111,7 +121,8 @@ internal object DateTimeRules {
 
     fun repeat(sc: Scan): RepeatHit? {
         sc.take(EVERY_N)?.let { m ->
-            val n = m.groupValues[1].toInt()
+            // Too big for an Int ("every 3000000000 days") is still just "as rarely as allowed".
+            val n = m.groupValues[1].toIntOrNull() ?: Int.MAX_VALUE
             return if (m.groupValues[2].startsWith("day")) {
                 if (n <= 1) RepeatHit(RepeatType.DAILY) else RepeatHit(RepeatType.EVERY_N_DAYS, interval = n.coerceAtMost(365))
             } else {
@@ -131,8 +142,15 @@ internal object DateTimeRules {
 
     // ---- "in 2 hours", "10 minutes later" -------------------------------------------------
 
-    private val REL_PRE = Regex("""\b(?:in|after)\s+($NUM)\s*($UNIT)\b""")
-    private val REL_POST = Regex("""\b($NUM)\s*($UNIT)\s+(?:later|from\s+now|mein|me|main)\b""")
+    // An extra minutes part and "and a half" belong to the same span: "in 1 hour 30 minutes" was
+    // 60 minutes with "30 minutes" left in the title.
+    private const val REL_MORE = """(?:\s+(?:and\s+)?(\d+)\s*(?:minutes?|mins?|m)\b)?(\s+and\s+a\s+half\b)?"""
+    private val REL_PRE = Regex("""\b(?:in|after)\s+($NUM)\s*($UNIT)\b$REL_MORE""")
+    private val REL_POST = Regex("""\b($NUM)\s*($UNIT)\b$REL_MORE\s+(?:later|from\s+now|mein|me|main)\b""")
+
+    /** About ten years: further off is a typo, and much further overflows the date maths. */
+    private const val MAX_REL_DAYS = 3_660L
+    private const val MAX_REL_MINUTES = MAX_REL_DAYS * 24 * 60
 
     private fun amountOf(word: String): Double? = when {
         word.first().isDigit() -> word.toDoubleOrNull()
@@ -149,13 +167,20 @@ internal object DateTimeRules {
 
     fun relative(sc: Scan): Relative? {
         val m = sc.take(REL_PRE) ?: sc.take(REL_POST) ?: return null
-        val n = amountOf(m.groupValues[1]) ?: return null
+        val n = (amountOf(m.groupValues[1]) ?: return null) + if (m.groupValues[4].isNotEmpty()) 0.5 else 0.0
         val unit = m.groupValues[2]
-        return when {
-            unit.startsWith("d") -> Relative(days = n.roundToLong().coerceAtLeast(1))
-            unit.startsWith("w") -> Relative(days = (n * 7).roundToLong().coerceAtLeast(1))
-            unit.startsWith("h") -> Relative(minutes = (n * 60).roundToLong().coerceAtLeast(1))
-            else -> Relative(minutes = n.roundToLong().coerceAtLeast(1))
+        val extraMinutes = m.groupValues[3].toDoubleOrNull()
+        val minutesPerUnit = when {
+            unit.startsWith("d") -> 24 * 60.0
+            unit.startsWith("w") -> 7 * 24 * 60.0
+            unit.startsWith("h") -> 60.0
+            else -> 1.0
+        }
+        // Days and weeks stay whole days (so a time can still be given), unless minutes were added.
+        return if (minutesPerUnit >= 24 * 60 && extraMinutes == null) {
+            Relative(days = (n * minutesPerUnit / (24 * 60)).roundToLong().coerceIn(1, MAX_REL_DAYS))
+        } else {
+            Relative(minutes = (n * minutesPerUnit + (extraMinutes ?: 0.0)).roundToLong().coerceIn(1, MAX_REL_MINUTES))
         }
     }
 
@@ -172,7 +197,15 @@ internal object DateTimeRules {
     private val WEEKDAY_ABBR = Regex("""\b(on|next|this|coming|last)\s+($DAYS_ABBR)\b""")
     private val DAY_MONTH = Regex("""\b(?:on\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?($MONTHS)\b""")
     private val MONTH_DAY = Regex("""\b(?:on\s+)?($MONTHS)\s+(\d{1,2})(?:st|nd|rd|th)?\b""")
-    private val NUMERIC = Regex("""\b(?:on\s+)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b""")
+    // Not a range or fraction of something: "drink 2-3 glasses" is not 2 March, nor "1/2 kg" 1 Feb.
+    private const val QUANTITY_WORDS =
+        "glass|glasses|cups?|bottles?|kgs?|kilos?|grams?|gms?|g|ltrs?|litres?|liters?|l|ml|dozen|items?|pieces?|pcs|pc" +
+            "|packets?|packs?|boxes|box|bags?|plates?|units?|tablets?|pills?|doses?|spoons?|tsp|tbsp|slices?|eggs?" +
+            "|rotis?|chapatis?|tickets?|people|persons?|times|baar|kms?|cm|mm|ft|feet|inch|inches|meters?|metres?" +
+            "|mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?|reps?|sets?|laps?|pages?|rs|rupees?|percent"
+    private val NUMERIC = Regex(
+        """\b(?:on\s+)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b(?!\s*(?:%|(?:$QUANTITY_WORDS)\b))""",
+    )
     private val ORDINAL = Regex("""\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b""")
 
     private fun monthOf(word: String): Month? = Month.entries.firstOrNull { it.name.lowercase().startsWith(word.take(3)) }
@@ -206,7 +239,10 @@ internal object DateTimeRules {
         sc.take(NUMERIC)?.let { m ->
             val month = m.groupValues[2].toInt().takeIf { it in 1..12 }?.let { Month.of(it) }
             val year = m.groupValues[3].takeIf { it.isNotEmpty() }?.toInt()?.let { if (it < 100) 2000 + it else it }
-            return dayMonth(m.groupValues[1].toInt(), month, year, today, past)
+            val day = m.groupValues[1].toInt()
+            // Numbers that can't be a day and month ("50/50") were never a date; "31/4" was.
+            if (day !in 1..31) return null
+            return dayMonth(day, month, year, today, past)
         }
         sc.take(ORDINAL)?.let { m ->
             val day = m.groupValues[1].toInt()
@@ -225,15 +261,13 @@ internal object DateTimeRules {
 
     private fun dayMonth(day: Int, month: Month?, year: Int?, today: LocalDate, past: Boolean): DateHit? {
         month ?: return null
-        val date = runCatching { LocalDate.of(year ?: today.year, month, day) }.getOrNull() ?: return null
-        return DateHit(
-            when {
-                year != null -> date
-                past && date.isAfter(today) -> date.minusYears(1)
-                !past && date.isBefore(today) -> date.plusYears(1)
-                else -> date
-            },
-        )
+        fun on(y: Int) = runCatching { LocalDate.of(y, month, day) }.getOrNull()
+        if (year != null) return on(year)?.let { DateHit(it) } ?: DateHit(today, impossible = true)
+        // The nearest year that has it, ahead (or behind, for spending): "29 feb" said in 2026 is
+        // 29 Feb 2028, not a reminder silently left for tomorrow morning. "31 april" has none.
+        val years = if (past) (today.year downTo today.year - 8) else (today.year..today.year + 8)
+        val date = years.asSequence().mapNotNull { on(it) }.firstOrNull { if (past) !it.isAfter(today) else !it.isBefore(today) }
+        return if (date != null) DateHit(date) else DateHit(today, impossible = true)
     }
 
     // ---- Times --------------------------------------------------------------------------
@@ -244,7 +278,8 @@ internal object DateTimeRules {
     private val HHMM = Regex("""(?:\bat\s+|@\s*|\b)(\d{1,2})[:.](\d{2})\s*$MER?(?:\s*oclock)?(?![a-z\d])""")
     private val H_MER = Regex("""(?:\bat\s+|@\s*|\b)(\d{1,2})\s*$MER(?![a-z])""")
     private val H_OCLOCK = Regex("""(?:\bat\s+)?\b(\d{1,2})\s*oclock\b""")
-    private val PART_H = Regex("""\b(morning|afternoon|evening|night)\s+(?:at\s+)?(\d{1,2})\b(?![:.]\d)(?!\s*(?:minutes|hours|days|weeks|rs))""")
+    // "this evening at 7" whole: taking only "evening at 7" left "this" in the title.
+    private val PART_H = Regex("""\b(?:this\s+|in\s+the\s+)?(morning|afternoon|evening|night)\s+(?:at\s+)?(\d{1,2})\b(?![:.]\d)(?!\s*(?:minutes|hours|days|weeks|rs))""")
     private val H_PART = Regex("""\b(\d{1,2})\s+(?:in\s+the\s+|at\s+)?(morning|afternoon|evening|night)\b""")
     private val AT_H = Regex("""\bat\s+(\d{1,2})\b(?![:.]\d)(?!\s*(?:%|rs|rupees|kg|km|minutes|hours|days|weeks|percent))""")
     private val PART = Regex("""\b(?:in\s+the\s+|this\s+|at\s+)?(morning|afternoon|evening|night)(?:\s+(?:ko|mein|me))?\b""")

@@ -3,7 +3,6 @@ package com.agam.pixelhub.ai
 import com.agam.pixelhub.data.ExpenseCategory
 import com.agam.pixelhub.data.ExpenseKind
 import com.agam.pixelhub.expenses.Money
-import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RecurrenceCalc
 import java.net.URLEncoder
@@ -75,6 +74,7 @@ object CommandParser {
         val repeat = DateTimeRules.repeat(sc)
         val rel = DateTimeRules.relative(sc)
         val date = DateTimeRules.date(sc, now.toLocalDate(), past = false)
+        if (date?.impossible == true) return ParsedCommand.Invalid(NO_SUCH_DATE)
         val time = DateTimeRules.time(sc)
         val part = DateTimeRules.part(sc) ?: date?.part ?: repeat?.part
         val title = phrase(sc.rest, Lexicon.REMINDER_FILLERS, original)
@@ -125,25 +125,46 @@ object CommandParser {
         val part = DateTimeRules.part(sc) ?: date?.part ?: repeat?.part
         val label = phrase(sc.rest, Lexicon.ALARM_FILLERS, original)
 
-        val (hour, minute) = when {
-            rel?.minutes != null -> now.plusMinutes(rel.minutes).let { it.hour to it.minute }
-            time != null -> DateTimeRules.resolve(time, part)?.let { it.hour to it.minute }
+        if (date?.impossible == true) return ParsedCommand.Invalid(NO_SUCH_DATE)
+
+        val clock = when {
+            rel?.minutes != null -> now.plusMinutes(rel.minutes).let { HourMinute(it.hour, it.minute, certain = true) }
+            time != null -> DateTimeRules.resolve(time, part)
                 ?: return ParsedCommand.Invalid("That time doesn't look right. Try \"alarm at 6:30\".")
             else -> return ParsedCommand.Invalid("What time? Try \"alarm at 6:30\" or \"wake me up at 7 on weekdays\".")
         }
-        val day = date?.date?.dayOfWeek ?: now.dayOfWeek
-        val mask = when {
-            repeat != null -> repeat.toAlarmMask(day)
-            date?.fromWeekday == true -> Days.bit(day)
-            else -> 0
+        var hour = clock.hour
+        // An alarm without repeat days rings once, the next time its clock comes round, so it can't
+        // wait for a later date: "wake me up on 12 nov at 7" used to ring at the next 7:00 instead.
+        // "on friday" (said on Thursday) or "tomorrow at 7" is fine: that is the next ring. A single
+        // weekday further off used to repeat every week, which nobody asked for.
+        val onDay = if (repeat == null) date?.date ?: rel?.days?.let { now.toLocalDate().plusDays(it) } else null
+        if (onDay != null) {
+            val nowLocal = now.toLocalDateTime()
+            fun nextRing(h: Int): LocalDateTime =
+                now.toLocalDate().atTime(h, clock.minute).let { if (it.isAfter(nowLocal)) it else it.plusDays(1) }
+            // "tonight at 12" rings in the small hours after that night.
+            val smallHours = clock.hour < 6 && (time?.part ?: part) == DayPart.NIGHT
+            val ringsOn = if (smallHours) setOf(onDay, onDay.plusDays(1)) else setOf(onDay)
+            // "tomorrow at 7" with no am or pm: whichever of 7:00 and 19:00 rings on that day.
+            val hours = if (clock.certain || clock.hour !in 1..11) listOf(clock.hour) else listOf(clock.hour, clock.hour + 12)
+            hour = hours.firstOrNull { nextRing(it).toLocalDate() in ringsOn } ?: return ParsedCommand.Invalid(
+                "An alarm only rings at the next time you give, so it can't wait for a date. Set a reminder instead, " +
+                    "like \"remind me on 12 nov at 7am to wake up\", or say \"every monday\" for a weekly alarm.",
+            )
         }
-        return ParsedCommand.CreateAlarm(hour, minute, mask, label)
+        val mask = repeat?.toAlarmMask(date?.date?.dayOfWeek ?: now.dayOfWeek) ?: 0
+        return ParsedCommand.CreateAlarm(hour, clock.minute, mask, label)
     }
+
+    private const val NO_SUCH_DATE = "That date doesn't exist. Check the day and month, like \"30 april\"."
 
     // ---- Money --------------------------------------------------------------------------
 
+    // Two lookbehinds, not [\d.]: a number may follow "rs." ("Rs.500") but not a digit and a dot,
+    // so "1.5" is never read again as 5.
     private val AMOUNT = Regex(
-        """(?:\b(rs|inr)\.?\s*)?(?<![\d.])(\d+(?:\.\d{1,2})?)(?:\s*(k|thousand|hazaar|hazar|hajar|lakhs?|lacs?))?""" +
+        """(?:\b(rs|inr)\.?\s*)?(?<!\d)(?<!\d\.)(\d+(?:\.\d{1,2})?)(?:\s*(k|thousand|hazaar|hazar|hajar|lakhs?|lacs?))?""" +
             """(?:\s*(rs|rupees?|rupaye|rupay|rupaiye|rupiya|inr|bucks|/-))?(?![a-z\d])""",
     )
 
@@ -171,6 +192,7 @@ object CommandParser {
         // A bare number counts as money only next to a money word, a category ("uber 180") or ₹.
         val marked = m.groupValues[1].isNotEmpty() || m.groupValues[3].isNotEmpty() || m.groupValues[4].isNotEmpty()
         if (!incomeWord && !expenseWord && !marked && categoryIn(s, null) == null) return null
+        if (date?.impossible == true) return ParseResult(ParsedCommand.Invalid(NO_SUCH_DATE), "expense")
         val multiplier = when {
             m.groupValues[3].isEmpty() -> 1.0
             m.groupValues[3].startsWith("la") -> 1_00_000.0
@@ -182,7 +204,15 @@ object CommandParser {
         sc.takeAll(Lexicon.MONEY_VERBS)
 
         val named = categoryIn(s, null)
-        val kind = if (incomeWord || named?.isIncome == true) ExpenseKind.INCOME else ExpenseKind.EXPENSE
+        // A spending word said before any income word makes it spending, whatever the category:
+        // "paid 2000 for project", "bijli ka bill 2000 aaya" (the bill came, it wasn't money in).
+        val spentAt = Lexicon.SPENT.find(s)?.range?.first
+        val incomeAt = Lexicon.INCOME.find(s)?.range?.first
+        val kind = when {
+            spentAt != null && (incomeAt == null || spentAt < incomeAt) -> ExpenseKind.EXPENSE
+            incomeWord || named?.isIncome == true -> ExpenseKind.INCOME
+            else -> ExpenseKind.EXPENSE
+        }
         val category = categoryIn(s, kind) ?: ExpenseCategory.OTHER
         val note = phrase(sc.rest, Lexicon.MONEY_FILLERS, original)
         val at = date?.date?.takeIf { it != now.toLocalDate() }
@@ -286,6 +316,7 @@ object CommandParser {
         val nameWord = if (saved != null) SAVED else name.lowercase()
         val sc = Scan(Regex("""\b${Regex.escape(nameWord)}\b""").replaceFirst(text, " "))
         val date = DateTimeRules.date(sc, now.toLocalDate(), past = true)
+        if (date?.impossible == true) return ParseResult(ParsedCommand.Invalid(NO_SUCH_DATE), "ledger")
         val m = AMOUNT.findAll(sc.rest).toList().let { all ->
             all.firstOrNull { it.groupValues[1].isNotEmpty() || it.groupValues[3].isNotEmpty() || it.groupValues[4].isNotEmpty() }
                 ?: all.firstOrNull()
@@ -342,7 +373,9 @@ object CommandParser {
             val place = (m.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: "").trim()
             if (place.isNotEmpty()) return ParseResult(ParsedCommand.OpenLink("google.navigation:q=${encode(place)}"), "navigate")
         }
-        (Lexicon.SEARCH.matchEntire(s) ?: Lexicon.SEARCH_HI.matchEntire(s))?.let { m ->
+        // "paid 130 for google" is spending at Google, not a search for "paid 130 for".
+        val aboutMoney = (Lexicon.EXPENSE.containsMatchIn(s) || Lexicon.INCOME.containsMatchIn(s)) && s.any { it.isDigit() }
+        if (!aboutMoney) (Lexicon.SEARCH.matchEntire(s) ?: Lexicon.SEARCH_HI.matchEntire(s))?.let { m ->
             val query = m.groupValues[1].trim()
             if (query.isNotEmpty()) return ParseResult(ParsedCommand.OpenLink("https://www.google.com/search?q=${encode(query)}"), "search")
         }

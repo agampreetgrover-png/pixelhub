@@ -103,7 +103,8 @@ class AssistantLog(private val file: File, private val scope: CoroutineScope) {
                 "Reminder", cmd.title, cmd.at.format(WHEN), cmd.recurrence.describe().takeIf { it.isNotEmpty() },
             ).joinToString(" · ")
             is ParsedCommand.CreateAlarm -> listOfNotNull(
-                "Alarm", "%02d:%02d".format(cmd.hour, cmd.minute), Days.label(cmd.daysMask), cmd.label.takeIf { it.isNotEmpty() },
+                // Locale.ROOT: the phone's locale could print the time in Arabic or Devanagari digits.
+                "Alarm", String.format(Locale.ROOT, "%02d:%02d", cmd.hour, cmd.minute), Days.label(cmd.daysMask), cmd.label.takeIf { it.isNotEmpty() },
             ).joinToString(" · ")
             is ParsedCommand.LogExpense -> listOfNotNull(
                 if (cmd.isIncome) "Income" else "Expense", Money.format(cmd.amountPaise), cmd.category.label,

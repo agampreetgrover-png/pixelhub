@@ -21,14 +21,16 @@ internal object Lexicon {
         "har" to "every",
         "subah|subha|savere|sawere" to "morning",
         "dopahar|dopehar|dophar|dupahar" to "afternoon",
-        "shaam|sham" to "evening",
+        // Not "sham": it's a common name, and "call Sham" became "call evening".
+        "shaam" to "evening",
         "raat|raath" to "night",
         "aaj" to "today",
         "tmrw|tmrrw|tmr|tmw|tomm|tommorow|tomorow|tommorrow|tomorrw" to "tomorrow",
         "tonite" to "tonight",
         "baje|bajey|bajay|bje|o'clock|o clock" to "oclock",
         "ghante|ghanta|ghanton|hrs|hr" to "hours",
-        "mins|minat|mint|minute" to "minutes",
+        // Not "mint": "buy mint" became "Buy minutes".
+        "mins|minat|minute" to "minutes",
         "hafte|hafta|hafton" to "weeks",
         "din" to "days",
         "agle|agla|agli" to "next",
@@ -91,6 +93,17 @@ internal object Lexicon {
             """|kharch\w*|kharid\w*|diye|diya|lage|lagaye|liya|expenses?|bill)\b""",
     )
 
+    /**
+     * Words that say the money went out, strongly enough to beat an income category: "spent 1500
+     * on birthday gift" is spending, though "birthday" is a Gifts (income) word. Not "add" ("add
+     * 500 to salary" is income), and not "paid" after got/was or before me/us ("got paid",
+     * "client paid me 5000"), which is money coming in.
+     */
+    val SPENT = Regex(
+        """\b(?:spent|spend|spending|(?<!\b(?:got|get|was|were|been)\s)(?:paid|pay|payed)(?!\s+(?:me|us|mujhe)\b)""" +
+            """|bought|buy|purchased?|cost|costs|kharch\w*|kharid\w*|bills?)\b""",
+    )
+
     /** The verbs around an amount, removed so the note keeps only what it was for. */
     val MONEY_VERBS = Regex(
         """\b(?:got\s+paid|get\s+paid|received|recieved|receive|earned|earn|credited|got|income|expenses?""" +
@@ -121,6 +134,9 @@ internal object Lexicon {
             "fees", "fee", "emi", "tax", "cash", "money", "paisa", "paise", "mera", "meri", "mere", "my", "myself",
             "everyone", "all", "total", "amount", "upi", "online", "card", "advance", "deposit", "kharcha", "the",
             "today", "tomorrow", "yesterday", "kal", "parso", "month", "week", "mahine", "aaj", "sab", "pura",
+            // Pronouns and words that hedge an amount: "he owes me 50", "paid only 200 for lunch".
+            "he", "she", "they", "we", "us", "only", "just", "around", "about", "approx", "approximately", "extra",
+            "another", "off", "almost", "nearly", "over", "again", "more", "less", "upto", "full", "half",
         ) + CATEGORY_WORDS.values.flatten() + MONEY_FILLERS + REMINDER_FILLERS
     }
 

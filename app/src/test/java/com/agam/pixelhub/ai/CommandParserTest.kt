@@ -12,6 +12,7 @@ import java.time.DayOfWeek
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.util.Locale
 
 /** Every case runs as of Thursday 5 Nov 2026, 10:00 in India. */
 class CommandParserTest {
@@ -285,6 +286,93 @@ class CommandParserTest {
         ParsedCommand.OpenLink("sms:9876543210?body=I%27ll%20be%20late%21"),
         parse("text 9876543210 saying I'll be late!"),
     )
+
+    // ---- Regressions from review ----
+
+    // An explicit spending word beats an income category: a birthday gift you bought is spending.
+    @Test fun spentOnBirthdayGiftIsExpense() =
+        assertEquals(spent(1500, ExpenseCategory.OTHER, "Birthday gift"), parse("spent 1500 on birthday gift"))
+
+    @Test fun paidForProjectIsExpense() = assertEquals(spent(2000, ExpenseCategory.OTHER, "Project"), parse("paid 2000 for project"))
+
+    @Test fun billAayaIsExpense() = assertEquals(spent(2000, ExpenseCategory.BILLS, "Bijli ka bill"), parse("bijli ka bill 2000 aaya"))
+
+    @Test fun clientPaidMeStaysIncome() =
+        assertTrue((parse("client paid me 5000 for project") as ParsedCommand.LogExpense).isIncome)
+
+    @Test fun rupeeDotBeforeAmount() = assertEquals(spent(500, ExpenseCategory.FOOD, "Lunch"), parse("paid Rs.500 for lunch"))
+
+    @Test fun decimalAmountIsOneNumber() = assertEquals(
+        ParsedCommand.LogExpense(1250, ExpenseCategory.FOOD, "Chai", null, ExpenseKind.EXPENSE),
+        parse("spent 12.50 on chai"),
+    )
+
+    @Test fun alarmOnALaterDateFails() = invalid("wake me up on 12 nov at 7")
+
+    @Test fun alarmDayAfterTomorrowFails() = invalid("wake me up day after tomorrow at 7")
+
+    @Test fun alarmInTwoDaysFails() = invalid("wake me up in 2 days at 7")
+
+    @Test fun alarmTomorrowIsTheNextRing() = assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), parse("wake me up tomorrow at 7"))
+
+    @Test fun alarmTonight() = assertEquals(ParsedCommand.CreateAlarm(23, 0, 0, ""), parse("set an alarm for tonight at 11"))
+
+    @Test fun alarmOnTheComingWeekdayRingsOnce() = assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), parse("wake me up on friday at 7"))
+
+    @Test fun alarmOnALaterWeekdayFails() = invalid("wake me up on monday at 7")
+
+    @Test fun leapDayFindsTheNextLeapYear() = assertEquals(
+        reminder("Renew passport", LocalDateTime.of(2028, 2, 29, 9, 0)),
+        parse("remind me to renew passport on 29 feb"),
+    )
+
+    @Test fun impossibleDateFails() = invalid("remind me on 31 april to pay rent")
+
+    @Test fun impossibleYearDateFails() = invalid("remind me on 29/2/2027 to pay rent")
+
+    @Test fun rangeIsNotADate() =
+        assertEquals(reminder("Drink 2-3 glasses of water", at(11, 5, 18)), parse("remind me to drink 2-3 glasses of water at 6pm"))
+
+    @Test fun fractionIsNotADate() = assertEquals(reminder("Buy 1/2 kg paneer", at(11, 6, 9)), parse("remind me to buy 1/2 kg paneer"))
+
+    @Test fun rangeInExpenseIsNotADate() = assertEquals(spent(250, ExpenseCategory.OTHER, "2-3 items"), parse("spent 250 on 2-3 items"))
+
+    @Test fun thisEveningAt() = assertEquals(reminder("Call mom", at(11, 5, 19)), parse("remind me to call mom this evening at 7"))
+
+    @Test fun hourAndMinutes() = assertEquals(reminder("Stretch", at(11, 5, 11, 30)), parse("remind me to stretch in 1 hour 30 minutes"))
+
+    @Test fun hourAndAHalf() = assertEquals(reminder("Stretch", at(11, 5, 11, 30)), parse("remind me to stretch in an hour and a half"))
+
+    @Test fun hugeRepeatDoesNotCrash() = assertEquals(
+        Recurrence(RepeatType.EVERY_N_DAYS, interval = 365),
+        (parse("remind me to water plants every 3000000000 days") as ParsedCommand.CreateReminder).recurrence,
+    )
+
+    @Test fun hugeDelayDoesNotCrash() =
+        assertTrue(parse("remind me to stretch in 9999999999999999 minutes") is ParsedCommand.CreateReminder)
+
+    @Test fun onlyIsNotAPerson() = assertTrue(parse("paid only 200 for lunch") is ParsedCommand.LogExpense)
+
+    @Test fun aroundIsNotAPerson() = assertTrue(parse("paid around 300 for cab") is ParsedCommand.LogExpense)
+
+    @Test fun heIsNotAPerson() = assertTrue(parse("he owes me 50") !is ParsedCommand.LedgerEntry)
+
+    @Test fun mintStaysMint() = assertEquals(reminder("Buy mint", at(11, 6, 9)), parse("remind me to buy mint"))
+
+    @Test fun shamIsAName() = assertEquals(reminder("Call Sham", at(11, 5, 18)), parse("remind me to call Sham at 6pm"))
+
+    @Test fun paidForGoogleIsExpense() = assertEquals(spent(130, ExpenseCategory.OTHER, "Google"), parse("paid 130 for google"))
+
+    @Test fun alarmSummaryUsesWesternDigits() {
+        val before = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("ar-EG-u-nu-arab"))
+            val summary = AssistantLog.summarize(ParsedCommand.CreateAlarm(7, 5, 0, ""))
+            assertTrue(summary, "07:05" in summary)
+        } finally {
+            Locale.setDefault(before)
+        }
+    }
 
     // ---- Everything else ----
 
