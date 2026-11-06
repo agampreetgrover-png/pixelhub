@@ -18,17 +18,26 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import com.agam.pixelhub.container
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
 
 /**
  * Exists only so Android lets PixelHub see other apps' media sessions (Spotify, YT Music…).
  * MediaSessionManager.getActiveSessions requires an enabled notification listener; PixelHub
  * never reads or acts on the notifications themselves.
  */
-class MediaListener : NotificationListenerService()
+class MediaListener : NotificationListenerService() {
+    // Access granted (or re-granted) while the process was already running: the Music widget's
+    // watchers only start once sessions are readable, so start them now.
+    override fun onListenerConnected() {
+        applicationContext.container.widgetSync.startMusic()
+    }
+}
 
 /** What the phone is playing right now, from the top media session. */
 data class NowPlayingState(
@@ -105,7 +114,11 @@ object NowPlaying {
             msm.removeOnActiveSessionsChangedListener(watcher)
             watcher.release()
         }
-    }.conflate()
+    }
+        // The session callbacks arrive on the main thread; setting up and releasing there too
+        // keeps the Watcher on one thread whoever collects (the widget collects off it).
+        .flowOn(Dispatchers.Main)
+        .conflate()
 
     fun playPause(state: NowPlayingState) {
         val controls = state.controller.transportControls

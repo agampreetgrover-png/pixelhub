@@ -1,6 +1,7 @@
 package com.agam.pixelhub.widget
 
 import android.content.Context
+import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -130,7 +131,7 @@ private fun AlarmsContent(context: Context, entries: List<Entry>, now: ZonedDate
         when (shape) {
             WidgetShape.TINY -> Column(GlanceModifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalAlignment = Alignment.CenterVertically) {
                 if (anyOn) {
-                    Figure(shortTime(first.alarm), palette, 24.sp)
+                    Figure(shortTime(context, first.alarm), palette, 24.sp)
                     Caption(day(first.next, now), palette)
                 } else {
                     Caption("All off", palette, strong = true)
@@ -194,8 +195,9 @@ private fun AlarmSwitch(context: Context, palette: WidgetPalette, a: Alarm) {
 
 private fun time(context: Context, a: Alarm): String = Fmt.time(context, LocalTime.of(a.hour, a.minute))
 
-/** "7:00" without am/pm, for the smallest tile; the day sits under it. */
-private fun shortTime(a: Alarm): String {
+/** "7:00" without am/pm (or "19:00" on a 24-hour phone), for the smallest tile; the day sits under it. */
+private fun shortTime(context: Context, a: Alarm): String {
+    if (DateFormat.is24HourFormat(context)) return "%02d:%02d".format(a.hour, a.minute)
     val h = if (a.hour % 12 == 0) 12 else a.hour % 12
     return "%d:%02d".format(h, a.minute)
 }

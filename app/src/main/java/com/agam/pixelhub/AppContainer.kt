@@ -70,7 +70,7 @@ class AppContainer(context: Context) {
     val assistantLog = AssistantLog(File(appContext.filesDir, "assistant_log.json"), appScope)
 
     /** Redraws home-screen widgets when their data changes. */
-    private val widgetSync = WidgetSync(appContext, appScope).also { it.start(this) }
+    val widgetSync = WidgetSync(appContext, appScope).also { it.start(this) }
 
     init {
         // The assistant no longer uses Gemini or Groq: delete any API keys saved by older versions.

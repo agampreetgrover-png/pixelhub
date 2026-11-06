@@ -113,6 +113,8 @@ private class MusicView(
     val appLabel: String,
     val pkg: String,
     val art: Bitmap?,
+    /** The big player's background, made from [art] once per song rather than on every redraw. */
+    val glow: Bitmap,
     val appIcon: Bitmap?,
     val playing: Boolean,
     val durationMs: Long,
@@ -127,7 +129,8 @@ private class MusicView(
 ) {
     fun positionNow(): Long {
         val now = SystemClock.elapsedRealtime()
-        if (!playing) return positionMs.coerceAtLeast(0)
+        // Live streams report -1: show 0 rather than a clock counting up from nothing.
+        if (!playing || positionMs < 0) return positionMs.coerceAtLeast(0)
         val p = positionMs + ((now - positionAt) * speed).toLong()
         return if (durationMs > 0) p.coerceIn(0, durationMs) else p.coerceAtLeast(0)
     }
@@ -138,14 +141,17 @@ private class MusicView(
      * passes a fresh one.
      */
     fun now(): MusicView = MusicView(
-        title, artist, appLabel, pkg, art, appIcon, playing, durationMs,
+        title, artist, appLabel, pkg, art, glow, appIcon, playing, durationMs,
         positionMs = positionNow(), positionAt = SystemClock.elapsedRealtime(), speed = speed,
         shuffle = shuffle, repeat = repeat, like = like, muted = muted,
     )
 }
 
-/** How often the times and progress bar move while a song plays with the screen on. */
-private const val TICK_MS = 1_000L
+/**
+ * How often the times and progress bar move while a song plays with the screen on. Each tick
+ * resends the whole widget with its bitmaps, so it matches WidgetSync's 5 s rather than every second.
+ */
+private const val TICK_MS = 5_000L
 
 private sealed interface MusicState {
     data class Playing(val view: MusicView) : MusicState
@@ -169,7 +175,7 @@ class MusicWidget : GlanceAppWidget() {
     override suspend fun providePreview(context: Context, widgetCategory: Int) {
         val sample = MusicView(
             title = "Blinding Lights", artist = "The Weeknd", appLabel = "Spotify", pkg = "com.spotify.music",
-            art = null, appIcon = null, playing = true, durationMs = 200_000, positionMs = 51_000,
+            art = null, glow = glow(null), appIcon = null, playing = true, durationMs = 200_000, positionMs = 51_000,
             positionAt = SystemClock.elapsedRealtime(), speed = 1f, shuffle = null, repeat = null, like = null, muted = false,
         )
         provideContent { MusicContent(context, MusicState.Playing(sample)) }
@@ -216,9 +222,10 @@ private fun viewOf(context: Context, s: NowPlayingState): MusicView {
     fun find(vararg words: String) = customs.firstOrNull { b -> words.any { b.name.contains(it, ignoreCase = true) } }
     val icon = runCatching { context.packageManager.getApplicationIcon(s.pkg).toBitmap(144, 144) }.getOrNull()
     val audio = context.getSystemService(AudioManager::class.java)
+    val art = s.art?.let { fit(it, 192) }
     return MusicView(
         // Scaled once per song: every redraw sends the bitmaps to the launcher again.
-        title = s.title, artist = s.artist, appLabel = s.appLabel, pkg = s.pkg, art = s.art?.let { fit(it, 192) }, appIcon = icon,
+        title = s.title, artist = s.artist, appLabel = s.appLabel, pkg = s.pkg, art = art, glow = glow(art), appIcon = icon,
         playing = s.playing, durationMs = s.durationMs, positionMs = s.positionMs, positionAt = s.positionAt,
         speed = s.speed,
         shuffle = find("shuffle"),
@@ -426,20 +433,22 @@ private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
         Box(GlanceModifier.fillMaxSize().padding(start = disc / 2)) {
             Column(
                 GlanceModifier.fillMaxSize().background(ImageProvider(R.drawable.widget_music_card_light))
-                    .padding(start = disc / 2 + 14.dp, end = 14.dp, top = 12.dp, bottom = 16.dp),
+                    .padding(start = disc / 2 + 14.dp, end = 14.dp, top = 6.dp, bottom = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // The mute button is a full 48 dp touch target; the 12 dp it adds to this row comes
+                // out of the top padding and the gap below, so the text sits where it did.
                 Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(GlanceModifier.defaultWeight().clickable(openPlayer(context, v.pkg))) {
                         Label(v.title, M.CardInk, 15.sp, FontWeight.Medium)
                         Label(v.artist, M.CardMuted, 12.sp)
                     }
-                    Button(control("mute"), if (v.muted) "Unmute" else "Mute", size = 36.dp) {
+                    Button(control("mute"), if (v.muted) "Unmute" else "Mute", size = 48.dp) {
                         Icon(if (v.muted) R.drawable.ic_music_mute else R.drawable.ic_music_volume, M.CardMuted, 20.dp)
                     }
                 }
                 if (v.durationMs > 0) {
-                    Spacer(GlanceModifier.height(8.dp))
+                    Spacer(GlanceModifier.height(2.dp))
                     LinearProgressIndicator(
                         progress = (v.positionNow().toFloat() / v.durationMs).coerceIn(0f, 1f),
                         modifier = GlanceModifier.fillMaxWidth().height(4.dp),
@@ -476,7 +485,7 @@ private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
 private fun Player(context: Context, v: MusicView, size: DpSize) {
     Box(GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(28.dp).semantics { contentDescription = describe(v) }) {
         Image(
-            ImageProvider(glow(v.art)),
+            ImageProvider(v.glow),
             contentDescription = null,
             contentScale = ContentScale.FillBounds,
             modifier = GlanceModifier.fillMaxSize(),
