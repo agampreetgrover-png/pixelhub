@@ -15,6 +15,8 @@ import com.agam.pixelhub.alarm.AlarmRingService
 import com.agam.pixelhub.ui.PixelHubRoot
 import com.agam.pixelhub.ui.Tab
 import com.agam.pixelhub.ui.theme.PixelHubTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val tab = mutableStateOf(Tab.HOME)
@@ -26,6 +28,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         if (savedInstanceState == null) {
             tabFrom(intent)?.let { tab.value = it }
+            // A force-stop or a restore from backup wipes AlarmManager without any broadcast;
+            // opening the app is the first chance to put alarms and reminders back.
+            container.appScope.launch(Dispatchers.IO) { container.rearmAll() }
             val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
                 PackageManager.PERMISSION_GRANTED
             if (!granted) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

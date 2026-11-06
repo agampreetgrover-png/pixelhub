@@ -40,11 +40,9 @@ class TriggerReceiver : BroadcastReceiver() {
                     c.reminders.onFired(id)?.let { ReminderNotifier.show(context, it) }
                 Scheduler.ACTION_REMINDER_SNOOZE ->
                     c.reminders.get(id)?.takeIf { !it.done }?.let { ReminderNotifier.show(context, it) }
+                // Next occurrence first: if the ring service fails to start, tomorrow still rings.
                 Scheduler.ACTION_ALARM ->
-                    c.alarms.get(id)?.takeIf { it.enabled }?.let {
-                        AlarmRingService.start(context, it)
-                        c.alarms.onFired(id)
-                    }
+                    c.alarms.onFired(id)?.let { AlarmRingService.start(context, it) }
                 Scheduler.ACTION_ALARM_SNOOZE_CANCEL -> c.scheduler.cancelAlarmSnooze(id)
                 Scheduler.ACTION_ALARM_SNOOZE -> {
                     val alarm = c.alarms.get(id)
@@ -76,12 +74,7 @@ class BootReceiver : BroadcastReceiver() {
         // actions are protected: only the system can send them.
         if (intent.action !in HANDLED) return
         val c = context.container
-        runAsync {
-            c.scheduler.restoreSnoozes()
-            c.alarms.rescheduleAll()
-            c.healthNudges.rescheduleAll()
-            c.reminders.rescheduleAll().forEach { ReminderNotifier.show(context, it) }
-        }
+        runAsync { c.rearmAll() }
     }
 
     private companion object {

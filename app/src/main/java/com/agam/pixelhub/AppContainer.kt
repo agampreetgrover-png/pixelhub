@@ -12,6 +12,7 @@ import com.agam.pixelhub.data.ShortcutRepository
 import com.agam.pixelhub.expenses.ExpenseRepository
 import com.agam.pixelhub.health.HealthRepository
 import com.agam.pixelhub.notify.BudgetNotifier
+import com.agam.pixelhub.notify.ReminderNotifier
 import com.agam.pixelhub.launcher.InstalledApps
 import com.agam.pixelhub.ledger.LedgerRepository
 import com.agam.pixelhub.scheduling.Scheduler
@@ -63,5 +64,17 @@ class AppContainer(context: Context) {
     init {
         // The assistant no longer uses Gemini or Groq: delete any API keys saved by older versions.
         appScope.launch { settings.forgetCloudAi() }
+    }
+
+    /**
+     * Puts every alarm, snooze, nudge and reminder back into AlarmManager, which forgets them on
+     * reboot, force-stop and restore. Safe to repeat: each one replaces its own PendingIntent.
+     * Reminders missed in the meantime are shown now.
+     */
+    suspend fun rearmAll() {
+        scheduler.restoreSnoozes()
+        alarms.rescheduleAll()
+        healthNudges.rescheduleAll()
+        reminders.rescheduleAll().forEach { ReminderNotifier.show(appContext, it) }
     }
 }
