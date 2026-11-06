@@ -238,8 +238,10 @@ private fun compactRupees(paise: Long): String {
     val rupees = paise / 100.0
     return when {
         rupees < 1_000 -> Money.format(paise)
-        rupees < 1_00_000 -> "₹" + String.format(Locale.getDefault(), "%.1fk", rupees / 1_000).replace(".0k", "k")
-        else -> "₹" + String.format(Locale.getDefault(), "%.1fL", rupees / 1_00_000).replace(".0L", "L")
+        // Locale.ROOT: a German or Marathi phone would print "12,4k" or "१२.४k". Below 99,950 so
+        // that ₹99,960 reads "₹1L", not "₹100k".
+        rupees < 99_950 -> "₹" + String.format(Locale.ROOT, "%.1fk", rupees / 1_000).replace(".0k", "k")
+        else -> "₹" + String.format(Locale.ROOT, "%.1fL", rupees / 1_00_000).replace(".0L", "L")
     }
 }
 

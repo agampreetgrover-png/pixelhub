@@ -1175,11 +1175,7 @@ private fun TransactionRow(
     ) {
         SwipeToDismissBox(
             state = dismiss,
-            modifier = Modifier
-                .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
-                .semantics {
-                    customActions = listOf(CustomAccessibilityAction("Delete") { onDelete(); true })
-                },
+            modifier = Modifier.onSizeChanged { widthPx = it.width.coerceAtLeast(1) },
             enableDismissFromStartToEnd = false,
             backgroundContent = {
                 Box(
@@ -1216,7 +1212,13 @@ private fun TransactionRow(
                     if (income && e.category == ExpenseCategory.OTHER) "Other income" else e.category.label
                 },
                 meta = meta,
-                modifier = Modifier.background(c.raised),
+                // On the row itself, the node TalkBack focuses: on the swipe box above it the
+                // action was never reachable, and swiping doesn't work under TalkBack.
+                modifier = Modifier
+                    .background(c.raised)
+                    .semantics {
+                        customActions = listOf(CustomAccessibilityAction("Delete") { latestDelete(); true })
+                    },
                 trailing = if (income) incomeText(e.amountPaise) else Money.format(e.amountPaise),
                 trailingColor = if (income) c.ok else c.ink,
                 iconTint = if (income) c.ok else e.category.color(c),

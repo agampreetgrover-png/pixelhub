@@ -89,7 +89,8 @@ internal fun LedgerEntrySheet(
     var amount by rememberSaveable { mutableStateOf(startAmount) }
     var note by rememberSaveable { mutableStateOf(initial.note) }
     var date by rememberSaveable { mutableStateOf(startAt.toLocalDate()) }
-    var showDate by remember { mutableStateOf(false) }
+    // Saved, like the expense editor's: rotating with the date picker open keeps it open.
+    var showDate by rememberSaveable { mutableStateOf(false) }
     val paise = Money.parse(amount)
     val today = LocalDate.now()
     val dirty = amount != startAmount || note != initial.note || paid != youPaid || date != startAt.toLocalDate()
@@ -106,7 +107,12 @@ internal fun LedgerEntrySheet(
             Spacer(Modifier.height(12.dp))
             HubTextField(
                 value = amount,
-                onValueChange = { v -> amount = v.filter { it.isDigit() || it == '.' || it == ',' }.take(12) },
+                // Too long is refused, not cut: cutting a pasted "1,00,00,000.50" would quietly
+                // save a different amount.
+                onValueChange = { v ->
+                    val kept = v.filter { it.isDigit() || it == '.' || it == ',' }
+                    if (kept.length <= 16 && kept.count(Char::isDigit) <= 12) amount = kept
+                },
                 label = "Amount (₹)",
                 isError = amount.isNotEmpty() && paise == null,
                 supportingText = paise?.let { p ->
