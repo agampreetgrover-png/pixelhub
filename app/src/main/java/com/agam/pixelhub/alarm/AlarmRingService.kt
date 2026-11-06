@@ -14,6 +14,7 @@ import android.media.RingtoneManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -115,6 +116,8 @@ class AlarmRingService : Service() {
         if (intent.getBooleanExtra(EXTRA_VIBRATE, true)) vibrate()
         handler.removeCallbacks(autoStop)
         handler.postDelayed(autoStop, AUTO_STOP_MS)
+        // Ringing as a foreground service now: the hand-off is over.
+        releaseHandoffWake()
     }
 
     private fun buildNotification(r: Ringing): Notification {
@@ -267,6 +270,7 @@ class AlarmRingService : Service() {
         handler.removeCallbacks(autoStop)
         stopSound()
         ringingState.value = null
+        releaseHandoffWake()
         super.onDestroy()
     }
 
@@ -289,12 +293,29 @@ class AlarmRingService : Service() {
         private const val EXTRA_VIBRATE = "vibrate"
         private const val NOTIFICATION_ID = 42
         private const val AUTO_STOP_MS = 10 * 60 * 1000L
+        private const val HANDOFF_WAKE_MS = 60_000L
 
         private val ringingState = MutableStateFlow<Ringing?>(null)
         /** The alarm ringing right now, or null. */
         val state: StateFlow<Ringing?> = ringingState.asStateFlow()
 
+        /**
+         * Keeps the CPU awake from the alarm broadcast until the service is ringing. The
+         * broadcast's own wake lock ends when the receiver finishes, and starting a service is
+         * asynchronous: with the screen off the phone could sleep in between and ring late.
+         */
+        private var handoffWake: PowerManager.WakeLock? = null
+
+        private fun releaseHandoffWake() {
+            handoffWake?.takeIf { it.isHeld }?.release()
+            handoffWake = null
+        }
+
         fun start(context: Context, alarm: Alarm, snoozed: Boolean = false) {
+            handoffWake?.takeIf { it.isHeld }?.release()
+            handoffWake = context.getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PixelHub:alarm-handoff")
+                .apply { setReferenceCounted(false); acquire(HANDOFF_WAKE_MS) }
             val intent = Intent(context, AlarmRingService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_ID, alarm.id)
