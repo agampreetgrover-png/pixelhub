@@ -72,6 +72,9 @@ import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.launch
@@ -242,6 +245,10 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
         // The assistant bar (Home only) above the tab bar. While typing, the tab bar steps
         // aside and the assistant bar rides on top of the keyboard.
         val typing = WindowInsets.isImeVisible
+        // The tab bar's measured width. The assistant bar takes the same width, so the two pills
+        // stack as one column; it keeps the last width while the tab bar is hidden for typing.
+        var barWidth by remember { mutableIntStateOf(0) }
+        val density = LocalDensity.current
         Column(
             Modifier.align(Alignment.BottomCenter).imePadding(),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -258,7 +265,10 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
                             assistant.send(text)
                             go(Tab.ASSISTANT)
                         },
-                        modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 10.dp),
+                        modifier = (
+                            if (barWidth > 0) Modifier.width(with(density) { barWidth.toDp() })
+                            else Modifier.padding(horizontal = 16.dp)
+                        ).padding(bottom = 10.dp),
                     )
                 }
             }
@@ -267,7 +277,7 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
                 enter = if (reduced) fadeIn(tween(150)) else slideInVertically(tween(320, easing = Motion.EaseOut)) { it * 2 } + fadeIn(),
                 exit = if (reduced) fadeOut(tween(100)) else slideOutVertically(tween(200, easing = Motion.EaseOut)) { it * 2 } + fadeOut(tween(150)),
             ) {
-                TabBar(selected = tab, onSelect = { go(it) })
+                TabBar(selected = tab, onSelect = { go(it) }, onWidth = { barWidth = it })
             }
         }
     }
@@ -357,7 +367,7 @@ private fun tabTransition(from: Tab, to: Tab, reduced: Boolean): ContentTransfor
  * pill with its name; the others stay as dark discs.
  */
 @Composable
-private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
+private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit, onWidth: (Int) -> Unit) {
     val c = Hub.colors
     val haptics = LocalHapticFeedback.current
     val reduced = LocalReducedMotion.current
@@ -367,6 +377,8 @@ private fun TabBar(selected: Tab, onSelect: (Tab) -> Unit) {
             // Never wider than the screen: at large font sizes the selected label shortens instead
             // of pushing the last tab out of the pill.
             .padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
+            // The pill's own width, outside margins excluded; the assistant bar matches it.
+            .onSizeChanged { onWidth(it.width) }
             .clip(CircleShape)
             .background(c.chrome)
             .padding(6.dp)
