@@ -5,6 +5,8 @@ import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RecurrenceCalc
 import com.agam.pixelhub.scheduling.Scheduler
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDateTime
 import java.time.ZonedDateTime
 
@@ -47,7 +49,11 @@ class ReminderRepository(
             notifiedAt = if (next != null) 0L else existing?.notifiedAt?.takeIf { it > 0L } ?: now.millis(),
         )
         val savedId = if (id == 0L) dao.insert(draft) else id.also { dao.update(draft) }
-        scheduler.cancelReminder(savedId)
+        // Only the text changed: keep a snooze in progress and the notification already showing
+        // (the main trigger is replaced in place below). A new time, repeat or state starts over.
+        val sameTiming = existing != null && existing.anchor == anchor &&
+            existing.recurrence == recurrence && existing.done == isDone
+        if (!sameTiming) scheduler.cancelReminder(savedId)
         if (next != null && !isDone) scheduler.scheduleReminder(savedId, trigger)
         return syncToCalendar(draft.copy(id = savedId))
     }
@@ -57,11 +63,24 @@ class ReminderRepository(
      * Choosing a calendar copies every open reminder, moving any that live in a previous calendar.
      */
     suspend fun setCalendar(calendarId: Long?) {
-        calendar.select(calendarId)
-        if (calendarId != null) dao.active().forEach { syncToCalendar(it) }
+        calendarLock.withLock {
+            calendar.select(calendarId)
+            if (calendarId != null) dao.active().forEach { syncLocked(it) }
+        }
     }
 
-    private suspend fun syncToCalendar(r: Reminder): Reminder {
+    /**
+     * One calendar write at a time. Two overlapping syncs (a double tap on a calendar, or a save
+     * during "copy every reminder") would both see no event yet and create two, and the loser's
+     * event would be left behind in Google Calendar.
+     */
+    private val calendarLock = Mutex()
+
+    private suspend fun syncToCalendar(r: Reminder): Reminder = calendarLock.withLock { syncLocked(r) }
+
+    private suspend fun syncLocked(stale: Reminder): Reminder {
+        // Fresh row: sees an event id another sync just stored, and doesn't write back old text.
+        val r = dao.get(stale.id) ?: return stale
         // A finished repeating reminder would otherwise keep repeating in Google Calendar forever;
         // un-ticking it saves again and copies it back as a fresh event.
         if (r.done && r.recurrence.isRepeating) {
@@ -130,7 +149,9 @@ class ReminderRepository(
         val missed = mutableListOf<Reminder>()
         for (r in dao.active()) {
             val next = RecurrenceCalc.nextTrigger(r.recurrence, r.anchor, now)
-            if (next != null) {
+            // A one-off that already went off stays fired, even if a time-zone change or the
+            // clock going back puts its wall-clock time in the future again.
+            if (next != null && (r.recurrence.isRepeating || r.notifiedAt == 0L)) {
                 val t = next.millis()
                 if (t != r.triggerAt) dao.update(r.copy(triggerAt = t))
                 scheduler.scheduleReminder(r.id, t)
