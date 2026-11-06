@@ -96,6 +96,9 @@ class Scheduler(private val context: Context) {
     fun scheduleNudge(id: Long, atMillis: Long) = setExact(atMillis, trigger(ACTION_HEALTH_NUDGE, id))
     fun cancelNudge(id: Long) = cancel(ACTION_HEALTH_NUDGE, id)
 
+    /** Last month's report on the 1st: a quiet note, so a plain exact alarm. One at a time. */
+    fun scheduleMonthlyReport(atMillis: Long) = setExact(atMillis, trigger(ACTION_MONTHLY_REPORT, 0))
+
     private fun setExact(atMillis: Long, operation: PendingIntent) {
         if (canScheduleExact()) {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, operation)
@@ -144,6 +147,7 @@ class Scheduler(private val context: Context) {
         const val ACTION_ALARM_SNOOZE = "com.agam.pixelhub.action.ALARM_SNOOZE"
         const val ACTION_ALARM_SNOOZE_CANCEL = "com.agam.pixelhub.action.ALARM_SNOOZE_CANCEL"
         const val ACTION_HEALTH_NUDGE = "com.agam.pixelhub.action.HEALTH_NUDGE"
+        const val ACTION_MONTHLY_REPORT = "com.agam.pixelhub.action.MONTHLY_REPORT"
         const val EXTRA_ID = "id"
         /** Opens the Alarms tab (status-bar alarm icon, "Missed alarm" note). */
         const val ACTION_OPEN_ALARMS = "com.agam.pixelhub.open.ALARMS"

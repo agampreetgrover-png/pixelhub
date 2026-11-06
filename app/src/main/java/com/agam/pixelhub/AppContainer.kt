@@ -13,18 +13,25 @@ import com.agam.pixelhub.expenses.ExpenseRepository
 import com.agam.pixelhub.health.HealthRepository
 import com.agam.pixelhub.notify.BudgetNotifier
 import com.agam.pixelhub.notify.ReminderNotifier
+import com.agam.pixelhub.notify.ReportNotifier
+import com.agam.pixelhub.expenses.ReportMath
 import com.agam.pixelhub.launcher.InstalledApps
 import com.agam.pixelhub.ledger.LedgerRepository
 import com.agam.pixelhub.scheduling.Scheduler
 import com.agam.pixelhub.widget.WidgetSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
+import java.time.LocalDateTime
+import java.time.YearMonth
+import java.time.ZoneId
 
 /** Hand-wired dependencies, one instance per process. */
 class AppContainer(context: Context) {
@@ -76,5 +83,34 @@ class AppContainer(context: Context) {
         alarms.rescheduleAll()
         healthNudges.rescheduleAll()
         reminders.rescheduleAll().forEach { ReminderNotifier.show(appContext, it) }
+        scheduleMonthlyReport()
+    }
+
+    /** A month whose report the Money page should open (from the report notification); the page clears it. */
+    val openReport = MutableStateFlow<YearMonth?>(null)
+
+    /**
+     * Arms last month's report for 9:00 on the coming 1st, or for now if one is still owed (the
+     * phone was off on the 1st). A fresh install starts counting from this month, so it never
+     * opens with a report for a month before PixelHub was used.
+     */
+    suspend fun scheduleMonthlyReport() {
+        val zone = ZoneId.systemDefault()
+        val last = settings.lastReportMonth()
+            ?: YearMonth.now(zone).minusMonths(1).also { settings.setLastReportMonth(it) }
+        val at = ReportMath.nextReportAt(LocalDateTime.now(zone), last)
+        scheduler.scheduleMonthlyReport(at.atZone(zone).toInstant().toEpochMilli())
+    }
+
+    /** The report alarm went off: sum up last month if anything happened in it, then arm the next one. */
+    suspend fun onMonthlyReport() {
+        val month = YearMonth.now().minusMonths(1)
+        val last = settings.lastReportMonth()
+        if (last == null || last < month) {
+            val report = expenses.report(month).first()
+            if (report.summary.entries.isNotEmpty()) ReportNotifier.show(appContext, report)
+            settings.setLastReportMonth(month)
+        }
+        scheduleMonthlyReport()
     }
 }

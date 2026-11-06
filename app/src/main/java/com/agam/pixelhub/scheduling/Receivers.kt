@@ -54,6 +54,7 @@ class TriggerReceiver : BroadcastReceiver() {
                         c.scheduler.cancelAlarmSnooze(id)
                     }
                 }
+                Scheduler.ACTION_MONTHLY_REPORT -> c.onMonthlyReport()
                 Scheduler.ACTION_HEALTH_NUDGE ->
                     c.healthNudges.onFired(id)?.let { nudge ->
                         when (val check = c.health.check(nudge)) {

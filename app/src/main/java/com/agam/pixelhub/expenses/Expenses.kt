@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
 
@@ -126,6 +127,12 @@ class ExpenseRepository(
             BudgetMath.summarize(month, list, b)
         }
     }
+
+    /** Live report for [m], measured against the month before it. */
+    fun report(m: YearMonth): Flow<MonthReport> =
+        combine(month(m), month(m.minusMonths(1))) { current, previous ->
+            ReportMath.build(current, previous, LocalDate.now(zone()), zone())
+        }
 
     suspend fun get(id: Long): Expense? = expenses.get(id)
 

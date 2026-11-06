@@ -20,9 +20,13 @@ import com.agam.pixelhub.data.HealthNudge
 import com.agam.pixelhub.data.Reminder
 import com.agam.pixelhub.expenses.BudgetAlert
 import com.agam.pixelhub.expenses.Money
+import com.agam.pixelhub.expenses.MonthReport
+import com.agam.pixelhub.expenses.oneLine
 import com.agam.pixelhub.health.NudgeMath
 import com.agam.pixelhub.scheduling.runAsync
 import com.agam.pixelhub.ui.Tab
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 object Channels {
     const val ALARMS = "alarms"
@@ -50,10 +54,16 @@ object Channels {
             },
         )
         createBudget(context)
+        nm.createNotificationChannel(
+            NotificationChannel(REPORTS, "Monthly report", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Last month's spending, on the 1st of each month"
+            },
+        )
     }
 
     const val HEALTH = "health"
     const val BUDGET = "budget"
+    const val REPORTS = "reports"
 
     internal fun createBudget(context: Context) {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -94,6 +104,43 @@ object BudgetNotifier {
 
     /** Tab.EXPENSES.name (the redesign adds that tab); unknown names fall back to Home. */
     private const val EXPENSES_TAB = "EXPENSES"
+}
+
+/** Last month in one note on the 1st; tapping it opens that month's report on the Money page. */
+object ReportNotifier {
+    private const val ID = 31_000
+
+    @SuppressLint("MissingPermission") // checked below
+    fun show(context: Context, report: MonthReport) {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) return
+        val s = report.summary
+        val name = report.month.format(DateTimeFormatter.ofPattern("MMMM", Locale.getDefault()))
+        val body = buildString {
+            append(report.oneLine())
+            if (s.incomePaise > 0) append("\nReceived +").append(Money.format(s.incomePaise))
+            report.top.firstOrNull()?.let { append("\nMost on ").append(it.category.label).append(": ").append(Money.format(it.paise)) }
+        }
+        val open = PendingIntent.getActivity(
+            context, ID,
+            Intent(context, MainActivity::class.java)
+                .setAction("com.agam.pixelhub.open.REPORT")
+                .putExtra(MainActivity.EXTRA_TAB, Tab.EXPENSES.name)
+                .putExtra(MainActivity.EXTRA_REPORT_MONTH, report.month.toString())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = NotificationCompat.Builder(context, Channels.REPORTS)
+            .setSmallIcon(R.drawable.ic_stat_pixelhub)
+            .setContentTitle("Your $name report")
+            .setContentText(report.oneLine())
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(ID, notification)
+    }
 }
 
 object HealthNotifier {

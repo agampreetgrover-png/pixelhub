@@ -7,13 +7,16 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.time.YearMonth
 
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 
 class SettingsStore(private val context: Context) {
     private val keyCalendar = longPreferencesKey("calendar_id")
     private val keyStepGoal = longPreferencesKey("step_goal")
+    private val keyReportMonth = stringPreferencesKey("report_last_month")
 
     /** Calendar that reminders are copied into, or null when calendar sync is off. */
     val calendarId: Flow<Long?> = context.settingsDataStore.data.map { it[keyCalendar] }
@@ -23,6 +26,14 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setStepGoal(steps: Long) {
         context.settingsDataStore.edit { it[keyStepGoal] = steps.coerceIn(500, 100_000) }
+    }
+
+    /** The last month a report notification went out for, or null before the first one. */
+    suspend fun lastReportMonth(): YearMonth? =
+        context.settingsDataStore.data.first()[keyReportMonth]?.let { runCatching { YearMonth.parse(it) }.getOrNull() }
+
+    suspend fun setLastReportMonth(month: YearMonth) {
+        context.settingsDataStore.edit { it[keyReportMonth] = month.toString() }
     }
 
     suspend fun setCalendarId(id: Long?) {

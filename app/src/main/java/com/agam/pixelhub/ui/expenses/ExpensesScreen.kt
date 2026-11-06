@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FilterList
+import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Savings
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Tune
@@ -114,6 +115,8 @@ import com.agam.pixelhub.data.ExpenseCategory
 import com.agam.pixelhub.data.ExpenseKind
 import com.agam.pixelhub.expenses.CategoryTotal
 import com.agam.pixelhub.expenses.Money
+import com.agam.pixelhub.expenses.MonthReport
+import com.agam.pixelhub.expenses.oneLine
 import com.agam.pixelhub.expenses.MonthSummary
 import com.agam.pixelhub.ui.CardRadius
 import com.agam.pixelhub.ui.EmptyState
@@ -222,10 +225,22 @@ fun ExpensesScreen(onOpenPeople: () -> Unit = {}) {
     val snackbar = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
 
-    // The last summary stays up while the next month loads, so nothing flashes empty.
-    var summary by remember { mutableStateOf<MonthSummary?>(null) }
-    LaunchedEffect(month) { app.expenses.month(month).collect { summary = it } }
-    val s = summary
+    // The last summary stays up while the next month loads, so nothing flashes empty. The report
+    // carries the month's summary, so one live query feeds both the page and the Report card.
+    var report by remember { mutableStateOf<MonthReport?>(null) }
+    LaunchedEffect(month) { app.expenses.report(month).collect { report = it } }
+    var reportOpen by rememberSaveable { mutableStateOf(false) }
+    val s = report?.summary
+    // Opened from the monthly report notification: go to that month and show its report.
+    val pendingReport by app.openReport.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingReport) {
+        val m = pendingReport ?: return@LaunchedEffect
+        if (m <= thisMonth) {
+            month = m
+            reportOpen = true
+        }
+        app.openReport.value = null
+    }
 
     val list = rememberLazyListState()
     val stagger = rememberStagger()
@@ -379,6 +394,27 @@ fun ExpensesScreen(onOpenPeople: () -> Unit = {}) {
                 return@LazyColumn
             }
 
+            report?.let { r ->
+                item(key = "report") {
+                    Box(
+                        hubAnimateItem(fadeIn = false)
+                            .staggerIn(stagger, "report", 2)
+                            .fillMaxWidth()
+                            .padding(horizontal = Gutter)
+                            .padding(top = 12.dp)
+                            .hubCard(c.raised)
+                            .padding(4.dp),
+                    ) {
+                        HubListRow(
+                            icon = Icons.Outlined.Insights,
+                            title = "${monthName(r.month, thisMonth)} report" + if (r.partial) " so far" else "",
+                            meta = r.oneLine(),
+                            onClick = { reportOpen = true },
+                        )
+                    }
+                }
+            }
+
             // Categories and budgets are about spending, so a month of only income skips them.
             if (s.byCategory.isNotEmpty()) {
                 item(key = "cats") {
@@ -477,6 +513,10 @@ fun ExpensesScreen(onOpenPeople: () -> Unit = {}) {
                 app.appScope.launch { changes.forEach { (cat, limit) -> app.expenses.setBudget(cat, limit) } }
             },
         )
+    }
+    // Only once the report for the month on screen has loaded, so it never flashes the month before.
+    if (reportOpen) report?.takeIf { it.month == month }?.let { r ->
+        ReportSheet(report = r, thisMonth = thisMonth, onDismiss = { reportOpen = false })
     }
     if (picking) {
         FilterSheet(
