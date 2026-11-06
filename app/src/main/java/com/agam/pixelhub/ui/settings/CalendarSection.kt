@@ -88,9 +88,11 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
         if (hasPermission) {
             val found = c.calendar.listCalendars()
             calendars = found
-            if (enableAfterGrant && selected == null) {
+            // Used up by the first grant either way: left set, it would switch sync back on
+            // the next time the user picks "Off".
+            if (enableAfterGrant) {
                 enableAfterGrant = false
-                (found.firstOrNull { it.isGoogle && it.isPrimary } ?: found.firstOrNull())
+                if (selected == null) (found.firstOrNull { it.isGoogle && it.isPrimary } ?: found.firstOrNull())
                     ?.let { cal -> c.appScope.launch { c.reminders.setCalendar(cal.id) } }
             }
         }
