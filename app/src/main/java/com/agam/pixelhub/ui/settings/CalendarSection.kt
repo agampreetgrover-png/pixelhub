@@ -101,6 +101,11 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         hasPermission = result.values.all { it }
         if (!hasPermission) enableAfterGrant = false
+        // Counted as asked only after a real answer: a dialog dismissed with Back isn't a denial,
+        // and treating it as one would send the next tap to App info instead of asking again.
+        if (hasPermission || c.calendar.permissions.any { activity?.shouldShowRequestPermissionRationale(it) == true }) {
+            PermissionAsks.markAsked(context, CALENDAR_ASKED)
+        }
     }
     // Decided before launching: once asked and Android no longer shows the prompt (denied twice),
     // the request would do nothing, so open the app's settings page, where access can be turned on.
@@ -112,7 +117,6 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
             Toast.makeText(context, "Turn on Calendar under Permissions", Toast.LENGTH_LONG).show()
             openSafely(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
         } else {
-            PermissionAsks.markAsked(context, CALENDAR_ASKED)
             ask.launch(c.calendar.permissions)
         }
     }
@@ -166,7 +170,8 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
                         CalendarOption(
                             title = cal.name,
                             subtitle = cal.accountName,
-                            dot = Color(cal.color),
+                            // Some calendars store their colour with no alpha (0x00RRGGBB).
+                            dot = Color(cal.color).copy(alpha = 1f),
                             selected = selected == cal.id,
                             onSelect = { c.appScope.launch { c.reminders.setCalendar(cal.id) } },
                         )

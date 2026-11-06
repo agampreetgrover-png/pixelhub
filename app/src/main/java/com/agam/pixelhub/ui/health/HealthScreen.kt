@@ -210,7 +210,9 @@ fun HealthScreen() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            emptyList()
+            // Re-read about every minute while walking: one failed read (a rate limit, Health
+            // Connect restarting) keeps the week already on screen instead of an error.
+            value ?: emptyList()
         }
     }
     val nudges by c.healthNudges.all.collectAsStateWithLifecycle<List<HealthNudge>?>(initialValue = null)

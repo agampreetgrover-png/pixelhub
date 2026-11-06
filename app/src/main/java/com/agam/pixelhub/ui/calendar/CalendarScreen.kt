@@ -119,7 +119,8 @@ fun CalendarScreen(onBack: () -> Unit) {
     }
     val all by flow.collectAsStateWithLifecycle<List<CalendarEvent>?>(initialValue = null)
     val live = remember(all, now) { all?.filter { maxOf(it.end, it.begin + 1) > now } }
-    val byDay = remember(live, today) {
+    // Zone too: after a flight the events can be equal (same instants) but belong to other days.
+    val byDay = remember(live, today, zone) {
         live?.let { CalendarAgenda.groupByDay(it, zone, today, lastDay) }.orEmpty()
     }
     val next = remember(live, now) { live?.let { CalendarAgenda.nextEvent(it, now) } }
