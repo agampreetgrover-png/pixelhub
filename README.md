@@ -15,9 +15,11 @@ A personal all-in-one Android app for a Google Pixel 9a. Everything works by han
 - a swipeable alarm and reminder card deck;
 - quick actions;
 - today's items, upcoming events and the month's money and health;
-- the **Ask PixelHub anything** bar, which sits just above the tab bar.
+- an assistant button with the PixelHub logo, above the right end of the tab bar, which opens the Assistant page.
 
 There are 10 themes (System, Light, Dark, Black, Midnight, Forest, Plum, Ocean, Rose, Sand). Switching between them crossfades.
+
+The app icon is the tab bar's black pill holding a violet (alarms) and a yellow (reminders) button, on the app's light grey. With Pixel's **Themed icons** turned on, it shows a one-colour version with the two buttons cut out.
 
 It is built with Kotlin, Jetpack Compose, Material 3, Room, DataStore, Health Connect and Jetpack Glance. There are no Google Play services, no account sign-in and no internet permission: nothing leaves the phone.
 
