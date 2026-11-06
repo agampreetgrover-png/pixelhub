@@ -147,14 +147,17 @@ fun PixelHubRoot(tabState: MutableState<Tab>) {
     val assistant: AssistantViewModel = viewModel()
     val reduced = LocalReducedMotion.current
     // Pages opened from a page above the tabs go back to it (Assistant -> Settings -> Health,
-    // back, back). Leaving from a bar tab starts over, so back from a bar tab goes Home.
+    // back, back), and so do pages opened from a bar tab (Money -> People, back). Moving between
+    // bar tabs starts over, so back from a bar tab goes Home.
     val stack = rememberSaveable(saver = TabStackSaver) { mutableStateListOf<String>() }
     // The tab this code last moved to; anything else means the activity switched tabs itself
     // (a notification tap), which starts a fresh trail.
     var navigated by rememberSaveable { mutableStateOf(tab.name) }
     fun go(to: Tab) {
         if (to == tab) return
-        if (tab.isLayer) stack.add(tab.name) else stack.clear()
+        // Into a page above the tabs, remember where it was opened from (Money -> People, back,
+        // is Money again). Bar tab to bar tab starts over, so the trail stays short.
+        if (tab.isLayer || to.isLayer) stack.add(tab.name) else stack.clear()
         tab = to
         navigated = to.name
     }

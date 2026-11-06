@@ -364,7 +364,13 @@ fun HubListRow(
         }
         if (trailing != null) {
             Spacer(Modifier.width(8.dp))
-            Text(trailing, style = HubType.clockSmall.copy(fontSize = 14.sp), color = trailingColor, maxLines = 1)
+            // Capped and ellipsized: at a large font "owes you ₹1,25,000.50" would otherwise be
+            // clipped mid-digit (reading as another amount) and squeeze the title to nothing.
+            Text(
+                trailing, style = HubType.clockSmall.copy(fontSize = 14.sp), color = trailingColor,
+                maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 200.dp),
+            )
         }
     }
 }
@@ -679,19 +685,6 @@ fun HubSheet(
             } else true
         },
     )
-    if (askDiscard) {
-        AlertDialog(
-            onDismissRequest = { askDiscard = false },
-            title = { Text("Discard changes?", style = HubType.section, color = c.ink) },
-            text = { Text("What you changed here won't be saved.", style = HubType.body, color = c.inkMuted) },
-            confirmButton = {
-                QuietButton("Discard", color = c.danger, onClick = { askDiscard = false; onDismiss() })
-            },
-            dismissButton = { QuietButton("Keep editing", color = c.ink, onClick = { askDiscard = false }) },
-            containerColor = c.raised,
-            shape = RoundedCornerShape(28.dp),
-        )
-    }
     ModalBottomSheet(
         onDismissRequest = { if (isDirty) askDiscard = true else onDismiss() },
         sheetState = state,
@@ -705,6 +698,21 @@ fun HubSheet(
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Gutter).padding(bottom = 16.dp).navigationBarsPadding(),
             content = content,
+        )
+    }
+    // After the sheet: each opens its own window in composition order, so after a rotation
+    // (both shown at once) the question would otherwise sit hidden under the sheet's scrim.
+    if (askDiscard) {
+        AlertDialog(
+            onDismissRequest = { askDiscard = false },
+            title = { Text("Discard changes?", style = HubType.section, color = c.ink) },
+            text = { Text("What you changed here won't be saved.", style = HubType.body, color = c.inkMuted) },
+            confirmButton = {
+                QuietButton("Discard", color = c.danger, onClick = { askDiscard = false; onDismiss() })
+            },
+            dismissButton = { QuietButton("Keep editing", color = c.ink, onClick = { askDiscard = false }) },
+            containerColor = c.raised,
+            shape = RoundedCornerShape(28.dp),
         )
     }
 }
