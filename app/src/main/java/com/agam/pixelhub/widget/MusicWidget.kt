@@ -510,16 +510,16 @@ private fun fit(b: Bitmap, max: Int): Bitmap {
 }
 
 /**
- * The big player's background: the art shrunk to 8×8; the launcher's smooth scaling stretches it
- * back into a blur. Each pixel is darkened until white text on it keeps 4.5:1.
+ * The big player's background: one colour, the most vivid (saturation × brightness) of the art
+ * sampled at 8×8, darkened until white text on it keeps 4.5:1.
  */
 private fun glow(art: Bitmap?): Bitmap {
-    val b = art?.let { Bitmap.createScaledBitmap(it, 8, 8, true).copy(Bitmap.Config.ARGB_8888, true) }
-        ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF3A3A40.toInt()) }
-    for (x in 0 until b.width) for (y in 0 until b.height) {
-        var c = lerp(Color(b.getPixel(x, y)).copy(alpha = 1f), M.Black, 0.25f)
-        while (c.luminance() > 0.18f) c = lerp(c, M.Black, 0.15f)
-        b.setPixel(x, y, c.toArgb())
-    }
-    return b
+    val hsv = FloatArray(3)
+    var tint = art?.let { a ->
+        val px = IntArray(64).also { Bitmap.createScaledBitmap(a, 8, 8, true).getPixels(it, 0, 8, 0, 0, 8, 8) }
+        Color(px.maxBy { android.graphics.Color.colorToHSV(it, hsv); hsv[1] * hsv[2] })
+    } ?: Color(0xFF3A3A40)
+    tint = lerp(tint.copy(alpha = 1f), M.Black, 0.25f)
+    while (tint.luminance() > 0.18f) tint = lerp(tint, M.Black, 0.15f)
+    return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply { eraseColor(tint.toArgb()) }
 }
