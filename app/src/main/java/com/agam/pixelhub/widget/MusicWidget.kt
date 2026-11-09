@@ -3,11 +3,6 @@ package com.agam.pixelhub.widget
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.LinearGradient
-import android.graphics.Paint
-import android.graphics.Shader
-import android.graphics.drawable.Icon
 import android.media.AudioManager
 import android.os.PowerManager
 import android.os.SystemClock
@@ -99,12 +94,10 @@ private object M {
     val CardTrack = Color(0xFFD9D9DE)
     val Blue = Color(0xFF1D4ED8)
     val Button = Color(0xFF2A2A2A)
+    val Soft = Color(0xCCFFFFFF)
 }
 
 private fun fixed(c: Color): ColorProvider = DayNightColor(c, c)
-
-/** The player's own extra buttons (shuffle, repeat, add to library), drawn with its own icons. */
-private data class PlayerButton(val action: String, val name: String, val icon: Icon)
 
 /** What the widget draws, taken from the media session (or made up for the picker's preview). */
 private class MusicView(
@@ -122,9 +115,6 @@ private class MusicView(
     val positionMs: Long,
     val positionAt: Long,
     val speed: Float,
-    val shuffle: PlayerButton?,
-    val repeat: PlayerButton?,
-    val like: PlayerButton?,
     val muted: Boolean,
 ) {
     fun positionNow(): Long {
@@ -142,8 +132,7 @@ private class MusicView(
      */
     fun now(): MusicView = MusicView(
         title, artist, appLabel, pkg, art, glow, appIcon, playing, durationMs,
-        positionMs = positionNow(), positionAt = SystemClock.elapsedRealtime(), speed = speed,
-        shuffle = shuffle, repeat = repeat, like = like, muted = muted,
+        positionMs = positionNow(), positionAt = SystemClock.elapsedRealtime(), speed = speed, muted = muted,
     )
 }
 
@@ -177,7 +166,7 @@ class MusicWidget : GlanceAppWidget() {
         val sample = MusicView(
             title = "Blinding Lights", artist = "The Weeknd", appLabel = "Spotify", pkg = "com.spotify.music",
             art = null, glow = glow(null), appIcon = null, playing = true, durationMs = 200_000, positionMs = 51_000,
-            positionAt = SystemClock.elapsedRealtime(), speed = 1f, shuffle = null, repeat = null, like = null, muted = false,
+            positionAt = SystemClock.elapsedRealtime(), speed = 1f, muted = false,
         )
         provideContent { MusicContent(context, MusicState.Playing(sample)) }
     }
@@ -217,10 +206,6 @@ private fun live(context: Context): Flow<MusicState> =
     }
 
 private fun viewOf(context: Context, s: NowPlayingState): MusicView {
-    val customs = s.controller.playbackState?.customActions.orEmpty().map {
-        PlayerButton(it.action, it.name.toString(), Icon.createWithResource(s.pkg, it.icon))
-    }
-    fun find(vararg words: String) = customs.firstOrNull { b -> words.any { b.name.contains(it, ignoreCase = true) } }
     val icon = runCatching { context.packageManager.getApplicationIcon(s.pkg).toBitmap(144, 144) }.getOrNull()
     val audio = context.getSystemService(AudioManager::class.java)
     val art = s.art?.let { fit(it, 192) }
@@ -229,9 +214,6 @@ private fun viewOf(context: Context, s: NowPlayingState): MusicView {
         title = s.title, artist = s.artist, appLabel = s.appLabel, pkg = s.pkg, art = art, glow = glow(art), appIcon = icon,
         playing = s.playing, durationMs = s.durationMs, positionMs = s.positionMs, positionAt = s.positionAt,
         speed = s.speed,
-        shuffle = find("shuffle"),
-        repeat = find("repeat"),
-        like = find("like", "heart", "save", "add", "library"),
         muted = audio.isStreamMute(AudioManager.STREAM_MUSIC),
     )
 }
@@ -239,9 +221,8 @@ private fun viewOf(context: Context, s: NowPlayingState): MusicView {
 // ---- Actions -------------------------------------------------------------------------------
 
 private val Kind = ActionParameters.Key<String>("kind")
-private val Custom = ActionParameters.Key<String>("custom")
 
-/** Every music button: play/pause, next, previous, a player button, or mute. */
+/** Every music button: play/pause, next, previous, or mute. */
 class MusicControlAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         when (parameters[Kind]) {
@@ -253,7 +234,6 @@ class MusicControlAction : ActionCallback {
                     "toggle" -> NowPlaying.playPause(s)
                     "next" -> NowPlaying.next(s)
                     "previous" -> NowPlaying.previous(s)
-                    "custom" -> parameters[Custom]?.let { s.controller.transportControls.sendCustomAction(it, null) }
                 }
             }
         }
@@ -263,8 +243,6 @@ class MusicControlAction : ActionCallback {
 }
 
 private fun control(kind: String): Action = actionRunCallback<MusicControlAction>(actionParametersOf(Kind to kind))
-private fun custom(b: PlayerButton): Action =
-    actionRunCallback<MusicControlAction>(actionParametersOf(Kind to "custom", Custom to b.action))
 
 /** Opens the player app; Spotify (or Home) when nothing is playing. */
 private fun openPlayer(context: Context, pkg: String?): Action {
@@ -481,80 +459,46 @@ private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
     }
 }
 
-/** Image 1 (4×2 and up): dark with the album's colour glowing up from the bottom. */
+/** Image 1 (4×2 and up): the art on the left over its own blurred colours; song, progress and controls on the right. */
 @Composable
 private fun Player(context: Context, v: MusicView, size: DpSize) {
+    val art = minOf(size.height - 32.dp, size.width * 0.42f)
     Box(GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(28.dp).semantics { contentDescription = describe(v) }) {
-        Image(
-            ImageProvider(v.glow),
-            contentDescription = null,
-            contentScale = ContentScale.FillBounds,
-            modifier = GlanceModifier.fillMaxSize(),
-        )
-        // One block in a fixed rhythm, centred so the space above and below is equal.
-        Column(GlanceModifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            // The song, large and bold beside the art; it wraps to a second line rather than being cut.
-            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(GlanceModifier.clickable(openPlayer(context, v.pkg))) { Art(v, 56.dp, 12.dp) }
-                Spacer(GlanceModifier.width(14.dp))
-                Column(GlanceModifier.defaultWeight().clickable(openPlayer(context, v.pkg))) {
-                    Label(v.title, M.White, 18.sp, FontWeight.Bold, maxLines = 2)
-                    Label(v.artist, M.Grey, 13.sp)
+        Image(ImageProvider(v.glow), contentDescription = null, contentScale = ContentScale.Crop, modifier = GlanceModifier.fillMaxSize())
+        Row(GlanceModifier.fillMaxSize().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(GlanceModifier.clickable(openPlayer(context, v.pkg))) { Art(v, art, 18.dp) }
+            Spacer(GlanceModifier.width(16.dp))
+            Column(GlanceModifier.defaultWeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(GlanceModifier.fillMaxWidth().clickable(openPlayer(context, v.pkg)), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Label(v.title, M.White, 17.sp, FontWeight.Bold)
+                    Label(v.artist, M.Soft, 12.sp)
                 }
-                v.like?.let { PlayerIcon(it, 26.dp) }
-            }
-            Spacer(GlanceModifier.height(26.dp))
-            if (v.durationMs > 0) {
-                LinearProgressIndicator(
-                    progress = (v.positionNow().toFloat() / v.durationMs).coerceIn(0f, 1f),
-                    modifier = GlanceModifier.fillMaxWidth().height(4.dp),
-                    color = fixed(M.White),
-                    backgroundColor = fixed(M.Track),
-                )
-                Spacer(GlanceModifier.height(4.dp))
-                Row(GlanceModifier.fillMaxWidth()) {
-                    Label(clock(v.positionNow()), M.Grey, 11.sp)
-                    Spacer(GlanceModifier.defaultWeight())
-                    Label("-" + clock(v.durationMs - v.positionNow()), M.Grey, 11.sp)
-                }
-            }
-            Spacer(GlanceModifier.height(6.dp))
-            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Slot { v.shuffle?.let { PlayerIcon(it, 22.dp) } }
-                Spacer(GlanceModifier.defaultWeight())
-                Button(control("previous"), "Previous track") { Icon(R.drawable.ic_music_prev, M.White, 28.dp) }
-                Spacer(GlanceModifier.defaultWeight())
-                Button(control("toggle"), if (v.playing) "Pause" else "Play", size = 52.dp) {
-                    Box(GlanceModifier.size(48.dp).cornerRadius(24.dp).background(fixed(M.White)), contentAlignment = Alignment.Center) {
-                        Icon(if (v.playing) R.drawable.ic_music_pause else R.drawable.ic_music_play, M.Black, 26.dp)
+                if (v.durationMs > 0) {
+                    Spacer(GlanceModifier.height(10.dp))
+                    LinearProgressIndicator(
+                        progress = (v.positionNow().toFloat() / v.durationMs).coerceIn(0f, 1f),
+                        modifier = GlanceModifier.fillMaxWidth().height(4.dp),
+                        color = fixed(M.White),
+                        backgroundColor = fixed(M.Track),
+                    )
+                    Spacer(GlanceModifier.height(3.dp))
+                    Row(GlanceModifier.fillMaxWidth()) {
+                        Label(clock(v.positionNow()), M.Soft, 11.sp)
+                        Spacer(GlanceModifier.defaultWeight())
+                        Label("-" + clock(v.durationMs - v.positionNow()), M.Soft, 11.sp)
                     }
                 }
-                Spacer(GlanceModifier.defaultWeight())
-                Button(control("next"), "Next track") { Icon(R.drawable.ic_music_next, M.White, 28.dp) }
-                Spacer(GlanceModifier.defaultWeight())
-                Slot { v.repeat?.let { PlayerIcon(it, 22.dp) } }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(control("previous"), "Previous track") { Icon(R.drawable.ic_music_rewind, M.White, 28.dp) }
+                    Spacer(GlanceModifier.width(12.dp))
+                    Button(control("toggle"), if (v.playing) "Pause" else "Play", size = 52.dp) {
+                        Icon(if (v.playing) R.drawable.ic_music_pause else R.drawable.ic_music_play, M.White, 36.dp)
+                    }
+                    Spacer(GlanceModifier.width(12.dp))
+                    Button(control("next"), "Next track") { Icon(R.drawable.ic_music_ffwd, M.White, 28.dp) }
+                }
             }
         }
-    }
-}
-
-/** A fixed-width place for an optional player button, so the main controls stay centred. */
-@Composable
-private fun Slot(content: @Composable () -> Unit) {
-    Box(GlanceModifier.size(44.dp), contentAlignment = Alignment.Center) { content() }
-}
-
-/** One of the player's own buttons, with the player's own icon (it shows its state, e.g. shuffle on). */
-@Composable
-private fun PlayerIcon(b: PlayerButton, size: Dp) {
-    Button(custom(b), b.name) {
-        // Tinted white to read on the dark player; the icon's shape still shows its state.
-        Image(
-            ImageProvider(b.icon),
-            contentDescription = null,
-            colorFilter = ColorFilter.tint(fixed(M.White.copy(alpha = 0.85f))),
-            modifier = GlanceModifier.size(size),
-        )
     }
 }
 
@@ -566,21 +510,16 @@ private fun fit(b: Bitmap, max: Int): Bitmap {
 }
 
 /**
- * The background of the big player: black at the top, the album's main colour glowing up from
- * the bottom. The colour is darkened until white text on it keeps 4.5:1.
+ * The big player's background: the art shrunk to 8×8; the launcher's smooth scaling stretches it
+ * back into a blur. Each pixel is darkened until white text on it keeps 4.5:1.
  */
 private fun glow(art: Bitmap?): Bitmap {
-    // A 1×128 strip, stretched over the widget (FillBounds): the gradient is vertical only, so it
-    // looks the same as a full-size bitmap at a fraction of a percent of the size.
-    val w = 1
-    val h = 128
-    var tint = art?.let { Color(Bitmap.createScaledBitmap(it, 1, 1, true).getPixel(0, 0)) } ?: Color(0xFF3A3A40)
-    tint = lerp(tint, M.Black, 0.35f)
-    while (tint.luminance() > 0.18f) tint = lerp(tint, M.Black, 0.15f)
-    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    val paint = Paint().apply {
-        shader = LinearGradient(0f, 0f, 0f, h.toFloat(), intArrayOf(M.Black.toArgb(), M.Black.toArgb(), tint.toArgb()), floatArrayOf(0f, 0.35f, 1f), Shader.TileMode.CLAMP)
+    val b = art?.let { Bitmap.createScaledBitmap(it, 8, 8, true).copy(Bitmap.Config.ARGB_8888, true) }
+        ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF3A3A40.toInt()) }
+    for (x in 0 until b.width) for (y in 0 until b.height) {
+        var c = lerp(Color(b.getPixel(x, y)).copy(alpha = 1f), M.Black, 0.25f)
+        while (c.luminance() > 0.18f) c = lerp(c, M.Black, 0.15f)
+        b.setPixel(x, y, c.toArgb())
     }
-    Canvas(bitmap).drawRect(0f, 0f, w.toFloat(), h.toFloat(), paint)
-    return bitmap
+    return b
 }
