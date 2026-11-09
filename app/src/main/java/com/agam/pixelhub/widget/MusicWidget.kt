@@ -462,10 +462,10 @@ private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
 /** Image 1 (4×2 and up): the art on the left over its own blurred colours; song, progress and controls on the right. */
 @Composable
 private fun Player(context: Context, v: MusicView, size: DpSize) {
-    val art = minOf(size.height - 32.dp, size.width * 0.42f)
+    val art = minOf(size.height - 52.dp, size.width * 0.36f)
     Box(GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(28.dp).semantics { contentDescription = describe(v) }) {
         Image(ImageProvider(v.glow), contentDescription = null, contentScale = ContentScale.Crop, modifier = GlanceModifier.fillMaxSize())
-        Row(GlanceModifier.fillMaxSize().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(GlanceModifier.fillMaxSize().padding(start = 10.dp, end = 16.dp, top = 16.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(GlanceModifier.clickable(openPlayer(context, v.pkg))) { Art(v, art, 18.dp) }
             Spacer(GlanceModifier.width(16.dp))
             Column(GlanceModifier.defaultWeight(), horizontalAlignment = Alignment.CenterHorizontally) {
