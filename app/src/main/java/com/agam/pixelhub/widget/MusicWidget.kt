@@ -12,9 +12,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.TextUnit
@@ -106,8 +103,6 @@ private class MusicView(
     val appLabel: String,
     val pkg: String,
     val art: Bitmap?,
-    /** The big player's background, made from [art] once per song rather than on every redraw. */
-    val glow: Bitmap,
     val appIcon: Bitmap?,
     val playing: Boolean,
     val durationMs: Long,
@@ -131,15 +126,15 @@ private class MusicView(
      * passes a fresh one.
      */
     fun now(): MusicView = MusicView(
-        title, artist, appLabel, pkg, art, glow, appIcon, playing, durationMs,
+        title, artist, appLabel, pkg, art, appIcon, playing, durationMs,
         positionMs = positionNow(), positionAt = SystemClock.elapsedRealtime(), speed = speed, muted = muted,
     )
 }
 
 /**
  * How often the times and progress bar move while a song plays with the screen on: every second,
- * so the clock reads like the player's. The background is made once per song (MusicView.glow),
- * so a tick only resends bitmaps that are already built.
+ * so the clock reads like the player's. The art is scaled once per song, so a tick only resends
+ * bitmaps that are already built.
  */
 private const val TICK_MS = 1_000L
 
@@ -165,7 +160,7 @@ class MusicWidget : GlanceAppWidget() {
     override suspend fun providePreview(context: Context, widgetCategory: Int) {
         val sample = MusicView(
             title = "Blinding Lights", artist = "The Weeknd", appLabel = "Spotify", pkg = "com.spotify.music",
-            art = null, glow = glow(null), appIcon = null, playing = true, durationMs = 200_000, positionMs = 51_000,
+            art = null, appIcon = null, playing = true, durationMs = 200_000, positionMs = 51_000,
             positionAt = SystemClock.elapsedRealtime(), speed = 1f, muted = false,
         )
         provideContent { MusicContent(context, MusicState.Playing(sample)) }
@@ -211,7 +206,7 @@ private fun viewOf(context: Context, s: NowPlayingState): MusicView {
     val art = s.art?.let { fit(it, 192) }
     return MusicView(
         // Scaled once per song: every redraw sends the bitmaps to the launcher again.
-        title = s.title, artist = s.artist, appLabel = s.appLabel, pkg = s.pkg, art = art, glow = glow(art), appIcon = icon,
+        title = s.title, artist = s.artist, appLabel = s.appLabel, pkg = s.pkg, art = art, appIcon = icon,
         playing = s.playing, durationMs = s.durationMs, positionMs = s.positionMs, positionAt = s.positionAt,
         speed = s.speed,
         muted = audio.isStreamMute(AudioManager.STREAM_MUSIC),
@@ -459,44 +454,51 @@ private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
     }
 }
 
-/** Image 1 (4×2 and up): the art on the left over its own blurred colours; song, progress and controls on the right. */
+/**
+ * Image 1 (4×2 and up) on the Calendar's clear glass: the art on the left; on the right, the song at
+ * the art's top edge, the controls at its bottom edge and the progress bar between them.
+ */
 @Composable
 private fun Player(context: Context, v: MusicView, size: DpSize) {
     val art = minOf(size.height - 52.dp, size.width * 0.36f)
-    Box(GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(28.dp).semantics { contentDescription = describe(v) }) {
-        Image(ImageProvider(v.glow), contentDescription = null, contentScale = ContentScale.Crop, modifier = GlanceModifier.fillMaxSize())
-        Row(GlanceModifier.fillMaxSize().padding(start = 10.dp, end = 16.dp, top = 16.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(GlanceModifier.clickable(openPlayer(context, v.pkg))) { Art(v, art, 18.dp) }
-            Spacer(GlanceModifier.width(16.dp))
-            Column(GlanceModifier.defaultWeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Column(GlanceModifier.fillMaxWidth().clickable(openPlayer(context, v.pkg)), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Label(v.title, M.White, 17.sp, FontWeight.Bold)
-                    Label(v.artist, M.Soft, 12.sp)
+    Row(
+        GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(24.dp)
+            .background(ImageProvider(R.drawable.widget_glass_container))
+            .semantics { contentDescription = describe(v) }.padding(start = 16.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(GlanceModifier.clickable(openPlayer(context, v.pkg))) { Art(v, art, 16.dp) }
+        Spacer(GlanceModifier.width(18.dp))
+        Column(GlanceModifier.defaultWeight().height(art), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(GlanceModifier.fillMaxWidth().clickable(openPlayer(context, v.pkg)), horizontalAlignment = Alignment.CenterHorizontally) {
+                Label(v.title, M.White, 18.sp, FontWeight.Bold)
+                Label(v.artist, M.Soft, 13.sp)
+            }
+            Spacer(GlanceModifier.defaultWeight())
+            if (v.durationMs > 0) {
+                LinearProgressIndicator(
+                    progress = (v.positionNow().toFloat() / v.durationMs).coerceIn(0f, 1f),
+                    modifier = GlanceModifier.fillMaxWidth().height(4.dp),
+                    color = fixed(M.White),
+                    backgroundColor = fixed(M.Track),
+                )
+                Spacer(GlanceModifier.height(4.dp))
+                Row(GlanceModifier.fillMaxWidth()) {
+                    Label(clock(v.positionNow()), M.Soft, 11.sp)
+                    Spacer(GlanceModifier.defaultWeight())
+                    Label("-" + clock(v.durationMs - v.positionNow()), M.Soft, 11.sp)
                 }
-                if (v.durationMs > 0) {
-                    Spacer(GlanceModifier.height(10.dp))
-                    LinearProgressIndicator(
-                        progress = (v.positionNow().toFloat() / v.durationMs).coerceIn(0f, 1f),
-                        modifier = GlanceModifier.fillMaxWidth().height(4.dp),
-                        color = fixed(M.White),
-                        backgroundColor = fixed(M.Track),
-                    )
-                    Spacer(GlanceModifier.height(3.dp))
-                    Row(GlanceModifier.fillMaxWidth()) {
-                        Label(clock(v.positionNow()), M.Soft, 11.sp)
-                        Spacer(GlanceModifier.defaultWeight())
-                        Label("-" + clock(v.durationMs - v.positionNow()), M.Soft, 11.sp)
-                    }
+            }
+            Spacer(GlanceModifier.defaultWeight())
+            // Spread across the bar's width, so the outer buttons sit under its ends.
+            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Button(control("previous"), "Previous track") { Icon(R.drawable.ic_music_rewind, M.White, 30.dp) }
+                Spacer(GlanceModifier.defaultWeight())
+                Button(control("toggle"), if (v.playing) "Pause" else "Play", size = 48.dp) {
+                    Icon(if (v.playing) R.drawable.ic_music_pause else R.drawable.ic_music_play, M.White, 38.dp)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(control("previous"), "Previous track") { Icon(R.drawable.ic_music_rewind, M.White, 28.dp) }
-                    Spacer(GlanceModifier.width(12.dp))
-                    Button(control("toggle"), if (v.playing) "Pause" else "Play", size = 52.dp) {
-                        Icon(if (v.playing) R.drawable.ic_music_pause else R.drawable.ic_music_play, M.White, 36.dp)
-                    }
-                    Spacer(GlanceModifier.width(12.dp))
-                    Button(control("next"), "Next track") { Icon(R.drawable.ic_music_ffwd, M.White, 28.dp) }
-                }
+                Spacer(GlanceModifier.defaultWeight())
+                Button(control("next"), "Next track") { Icon(R.drawable.ic_music_ffwd, M.White, 30.dp) }
             }
         }
     }
@@ -507,19 +509,4 @@ private fun fit(b: Bitmap, max: Int): Bitmap {
     val scale = max.toFloat() / maxOf(b.width, b.height)
     if (scale >= 1f) return b
     return Bitmap.createScaledBitmap(b, (b.width * scale).toInt().coerceAtLeast(1), (b.height * scale).toInt().coerceAtLeast(1), true)
-}
-
-/**
- * The big player's background: one colour, the most vivid (saturation × brightness) of the art
- * sampled at 8×8, darkened until white text on it keeps 4.5:1.
- */
-private fun glow(art: Bitmap?): Bitmap {
-    val hsv = FloatArray(3)
-    var tint = art?.let { a ->
-        val px = IntArray(64).also { Bitmap.createScaledBitmap(a, 8, 8, true).getPixels(it, 0, 8, 0, 0, 8, 8) }
-        Color(px.maxBy { android.graphics.Color.colorToHSV(it, hsv); hsv[1] * hsv[2] })
-    } ?: Color(0xFF3A3A40)
-    tint = lerp(tint.copy(alpha = 1f), M.Black, 0.25f)
-    while (tint.luminance() > 0.18f) tint = lerp(tint, M.Black, 0.15f)
-    return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply { eraseColor(tint.toArgb()) }
 }
