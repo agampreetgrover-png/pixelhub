@@ -476,6 +476,8 @@ private fun Player(context: Context, v: MusicView, size: DpSize) {
             }
             Spacer(GlanceModifier.defaultWeight())
             if (v.durationMs > 0) {
+                // Sits a little below the midpoint, nearer the controls.
+                Spacer(GlanceModifier.height(10.dp))
                 LinearProgressIndicator(
                     progress = (v.positionNow().toFloat() / v.durationMs).coerceIn(0f, 1f),
                     modifier = GlanceModifier.fillMaxWidth().height(4.dp),
