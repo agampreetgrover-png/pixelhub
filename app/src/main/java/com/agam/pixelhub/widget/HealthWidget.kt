@@ -3,6 +3,9 @@ package com.agam.pixelhub.widget
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -77,8 +80,15 @@ class HealthWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val state = load(context)
-        provideContent { HealthContent(context, state) }
+        val loaded = load(context)
+        val c = context.container
+        provideContent {
+            // Followed live: a redraw of a session still running doesn't call provideGlance again,
+            // so a new goal or new figures in that window would otherwise wait for the next one.
+            val goal by remember { c.settings.stepGoal }.collectAsState((loaded as? HealthState.Ready)?.goal ?: c.stepGoal.value)
+            val latest by c.health.latest.collectAsState()
+            HealthContent(context, withLive(loaded, latest, goal))
+        }
     }
 
     /** The widget picker shows the real widget with sample figures. */
@@ -109,6 +119,19 @@ private suspend fun load(context: Context): HealthState {
     val week = runCatching { c.health.history(7) }.getOrDefault(emptyList())
     val stale = System.currentTimeMillis() - today.asOf.toEpochMilli() > STALE_AFTER_MS
     return HealthState.Ready(today, c.settings.stepGoal.first(), week, stale)
+}
+
+/** [loaded] with the current goal and with [latest] figures when they're today's and newer. */
+private fun withLive(loaded: HealthState, latest: DailyActivity?, goal: Long): HealthState {
+    val fresh = latest?.takeIf { it.asOf.atZone(ZoneId.systemDefault()).toLocalDate() == LocalDate.now() }
+    return when (loaded) {
+        is HealthState.Ready -> {
+            val today = if (fresh != null && fresh.asOf > loaded.today.asOf) fresh else loaded.today
+            loaded.copy(today = today, goal = goal, stale = System.currentTimeMillis() - today.asOf.toEpochMilli() > STALE_AFTER_MS)
+        }
+        HealthState.NotLoaded -> fresh?.let { HealthState.Ready(it, goal, emptyList(), stale = false) } ?: loaded
+        HealthState.NotConnected -> loaded
+    }
 }
 
 /** The last figures read (by the widget or the app), so the widget never starts blank. */

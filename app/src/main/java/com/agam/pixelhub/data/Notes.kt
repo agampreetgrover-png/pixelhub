@@ -1,32 +1,64 @@
 package com.agam.pixelhub.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Notes, pinned first, then last edited first. */
 class NotesRepository(private val dao: NoteDao, private val now: () -> Long = System::currentTimeMillis) {
     val all: Flow<List<Note>> = dao.observeAll()
 
+    /** One save at a time, so two first saves of the same new note can't both insert. */
+    private val lock = Mutex()
+
     /**
-     * Saves note [id] (0 = a new one) and returns its id. A note left with no title and no body
-     * is deleted instead (as Keep discards an empty note) and 0 comes back.
+     * Saves note [id] (0 = a new one, known by [createdAt]) with the editor's title, body, pin and
+     * colour, and returns its id. A note left with no title and no body is deleted instead (as
+     * Keep discards an empty note) and 0 comes back.
      */
-    suspend fun save(id: Long, title: String, text: String, pinned: Boolean = false, color: Int = 0): Long {
+    suspend fun save(
+        id: Long,
+        title: String,
+        text: String,
+        pinned: Boolean = false,
+        color: Int = 0,
+        createdAt: Long = 0L,
+    ): Long = lock.withLock {
         val t = title.trim().take(MAX_TITLE)
         val b = clean(text).orEmpty()
+        val row = resolve(id, createdAt)
         if (t.isEmpty() && b.isEmpty()) {
-            if (id != 0L) dao.deleteById(id)
-            return 0
+            if (row != 0L) dao.deleteById(row)
+            return@withLock 0L
         }
         val at = now()
-        // [pinned] and [color] count only for a new note; setPinned and setColor change them after.
-        if (id == 0L) return dao.insert(Note(title = t, text = b, createdAt = at, updatedAt = at, pinned = pinned, color = color))
-        dao.edit(id, t, b, at)
-        return id
+        if (row == 0L) {
+            return@withLock dao.insert(
+                Note(title = t, text = b, createdAt = createdAt.takeIf { it != 0L } ?: at, updatedAt = at, pinned = pinned, color = color),
+            )
+        }
+        dao.edit(row, t, b, at, pinned, color)
+        row
     }
 
-    suspend fun setPinned(id: Long, pinned: Boolean) = dao.setPinned(id, pinned)
+    /** Pins note [id] (or the new note started at [createdAt]); a note not saved yet takes its pin in with its first save. */
+    suspend fun setPinned(id: Long, pinned: Boolean, createdAt: Long = 0L) = lock.withLock {
+        resolve(id, createdAt).takeIf { it != 0L }?.let { dao.setPinned(it, pinned) }
+    }
 
-    suspend fun setColor(id: Long, color: Int) = dao.setColor(id, color)
+    suspend fun setColor(id: Long, color: Int, createdAt: Long = 0L) = lock.withLock {
+        resolve(id, createdAt).takeIf { it != 0L }?.let { dao.setColor(it, color) }
+    }
+
+    /**
+     * The row for [id], or for the new note started at [createdAt]: an editor rebuilt mid-typing
+     * (rotation, dark mode) still has id 0 though its first save went in. 0 when there's none.
+     */
+    private suspend fun resolve(id: Long, createdAt: Long): Long = when {
+        id != 0L -> id
+        createdAt != 0L -> dao.idCreatedAt(createdAt) ?: 0L
+        else -> 0L
+    }
 
     /** Deletes note [id] and returns it as it was, for Undo; null if it's already gone. */
     suspend fun delete(id: Long): Note? = dao.get(id)?.also { dao.delete(it) }

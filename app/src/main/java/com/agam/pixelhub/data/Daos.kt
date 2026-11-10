@@ -106,8 +106,11 @@ interface NoteDao {
     @Insert suspend fun insert(note: Note): Long
     @Delete suspend fun delete(note: Note)
 
-    @Query("UPDATE notes SET title = :title, text = :text, updatedAt = :at WHERE id = :id")
-    suspend fun edit(id: Long, title: String, text: String, at: Long)
+    @Query("UPDATE notes SET title = :title, text = :text, updatedAt = :at, pinned = :pinned, color = :color WHERE id = :id")
+    suspend fun edit(id: Long, title: String, text: String, at: Long, pinned: Boolean, color: Int)
+
+    @Query("SELECT id FROM notes WHERE createdAt = :at LIMIT 1")
+    suspend fun idCreatedAt(at: Long): Long?
 
     /** Leaves the edit time alone: pinning isn't an edit. */
     @Query("UPDATE notes SET pinned = :pinned WHERE id = :id")

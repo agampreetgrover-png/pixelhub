@@ -1509,7 +1509,11 @@ private fun BudgetField(
 ) {
     HubTextField(
         value = value,
-        onValueChange = { v -> onChange(v.filter { it.isDigit() || it == '.' || it == ',' }) },
+        onValueChange = { v ->
+            val kept = v.filter { it.isDigit() || it == '.' || it == ',' }
+            // Up to 12 digits, like the People amounts: far past any real budget, and the threshold maths can't overflow.
+            if (kept.count(Char::isDigit) <= 12) onChange(kept)
+        },
         label = label,
         placeholder = "No limit",
         isError = isError,

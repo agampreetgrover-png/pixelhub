@@ -2,6 +2,9 @@ package com.agam.pixelhub
 
 import android.content.Context
 import com.agam.pixelhub.ai.AssistantLog
+import com.agam.pixelhub.alarm.AlarmRingService
+import com.agam.pixelhub.ui.Fmt
+import java.time.LocalTime
 import com.agam.pixelhub.calendar.CalendarSync
 import com.agam.pixelhub.data.AlarmRepository
 import com.agam.pixelhub.data.AppDatabase
@@ -84,7 +87,9 @@ class AppContainer(context: Context) {
      */
     suspend fun rearmAll() {
         scheduler.restoreSnoozes()
-        alarms.rescheduleAll()
+        alarms.rescheduleAll().forEach { a ->
+            AlarmRingService.notifyMissed(appContext, a.id, a.label, "Due at ${Fmt.time(appContext, LocalTime.of(a.hour, a.minute))} while the phone was off")
+        }
         healthNudges.rescheduleAll()
         reminders.rescheduleAll().forEach { ReminderNotifier.show(appContext, it) }
         scheduleMonthlyReport()

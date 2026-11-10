@@ -98,6 +98,8 @@ object BudgetNotifier {
             .setContentText(body)
             .setContentIntent(open)
             .setAutoCancel(true)
+            // Spending figures stay off the lock screen; they show once the phone is unlocked.
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
         NotificationManagerCompat.from(context).notify(id, notification)
     }
@@ -138,6 +140,8 @@ object ReportNotifier {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(open)
             .setAutoCancel(true)
+            // Money figures stay off the lock screen; they show once the phone is unlocked.
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
         NotificationManagerCompat.from(context).notify(ID, notification)
     }
@@ -158,6 +162,8 @@ object HealthNotifier {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setContentIntent(openApp(context, Tab.HOME, 20_000 + nudge.id.toInt()))
             .setAutoCancel(true)
+            // Health figures stay off the lock screen; they show once the phone is unlocked.
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
         NotificationManagerCompat.from(context).notify(20_000 + nudge.id.toInt(), notification)
     }

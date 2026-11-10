@@ -57,13 +57,23 @@ class AlarmRingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     /** Nobody answered for [AUTO_STOP_MS]: stop, but leave a "missed" note so it isn't silent. */
     private val autoStop = Runnable {
-        ringingState.value?.let { showMissed(it) }
+        ringingState.value?.let { r ->
+            notifyMissed(this, r.alarmId, r.label, "Rang at ${Fmt.time(this, LocalTime.of(r.hour, r.minute))} for 10 minutes")
+        }
         finishRinging()
     }
+
+    /**
+     * The newest start this service has seen. Stopping with it, not a bare stopSelf(), keeps the
+     * service alive for another alarm's start that is already queued (else Android kills the app
+     * for not calling startForeground, and that alarm never rings).
+     */
+    private var lastStartId = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStartId = startId
         when (intent?.action) {
             ACTION_START -> startRinging(intent)
             ACTION_SNOOZE -> {
@@ -83,7 +93,7 @@ class AlarmRingService : Service() {
             ACTION_REPOST -> ringingState.value?.let { r ->
                 runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(r)) }
             }
-            else -> if (ringingState.value == null) stopSelf()
+            else -> if (ringingState.value == null) stopSelfResult(startId)
         }
         return START_NOT_STICKY
     }
@@ -165,28 +175,6 @@ class AlarmRingService : Service() {
         runCatching { getSystemService(NotificationManager::class.java).notify(Scheduler.snoozedNotificationId(r.alarmId), n) }
     }
 
-    /** Left when an alarm rang out unanswered; tapping it opens the alarms list. */
-    private fun showMissed(r: Ringing) {
-        val open = PendingIntent.getActivity(
-            this, MISSED_REQUEST,
-            // Own action so request code 7 can't merge with reminder #7's notification intent.
-            Intent(this, MainActivity::class.java)
-                .setAction(Scheduler.ACTION_OPEN_ALARMS)
-                .putExtra(MainActivity.EXTRA_TAB, Tab.ALARMS.name)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val n = NotificationCompat.Builder(this, Channels.ALARMS)
-            .setSmallIcon(R.drawable.ic_stat_pixelhub)
-            .setContentTitle("Missed alarm: ${r.label.ifBlank { "Alarm" }}")
-            .setContentText("Rang at ${Fmt.time(this, LocalTime.of(r.hour, r.minute))} for 10 minutes")
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setSilent(true)
-            .setAutoCancel(true)
-            .setContentIntent(open)
-            .build()
-        runCatching { getSystemService(NotificationManager::class.java).notify(missedNotificationId(r.alarmId), n) }
-    }
 
     private fun servicePending(action: String, request: Int): PendingIntent = PendingIntent.getService(
         this, request,
@@ -263,7 +251,7 @@ class AlarmRingService : Service() {
         stopSound()
         ringingState.value = null
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        stopSelfResult(lastStartId)
     }
 
     override fun onDestroy() {
@@ -284,6 +272,29 @@ class AlarmRingService : Service() {
 
         /** Notification id of the "Missed alarm" note for one alarm. */
         fun missedNotificationId(alarmId: Long): Int = 60_000 + alarmId.toInt()
+
+        /** The "Missed alarm" note (rang out unanswered, or due while the phone was off); tapping it opens the alarms list. */
+        fun notifyMissed(context: Context, alarmId: Long, label: String, detail: String) {
+            val open = PendingIntent.getActivity(
+                context, MISSED_REQUEST,
+                // Own action so request code 7 can't merge with reminder #7's notification intent.
+                Intent(context, MainActivity::class.java)
+                    .setAction(Scheduler.ACTION_OPEN_ALARMS)
+                    .putExtra(MainActivity.EXTRA_TAB, Tab.ALARMS.name)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val n = NotificationCompat.Builder(context, Channels.ALARMS)
+                .setSmallIcon(R.drawable.ic_stat_pixelhub)
+                .setContentTitle("Missed alarm: ${label.ifBlank { "Alarm" }}")
+                .setContentText(detail)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setSilent(true)
+                .setAutoCancel(true)
+                .setContentIntent(open)
+                .build()
+            runCatching { context.getSystemService(NotificationManager::class.java).notify(missedNotificationId(alarmId), n) }
+        }
         private const val EXTRA_ID = "id"
         private const val EXTRA_LABEL = "label"
         private const val EXTRA_HOUR = "hour"

@@ -284,8 +284,9 @@ private fun NoteEditor(initial: Note?, onClose: () -> Unit, onDeleted: (Note) ->
     var savedTitle by rememberSaveable { mutableStateOf(title) }
     var savedBody by rememberSaveable { mutableStateOf(body.text) }
     var gone by remember { mutableStateOf(false) }
-    // One write at a time, so a new note's first insert hands its id to the next save.
-    // shortcut: the lock lives in this composition, so rotating within the first save's few ms could insert the note twice; move it to the repository if that ever shows up.
+    // Names a new note across editor rebuilds, so its saves all land on one row (see NotesRepository.save).
+    val createdAt by rememberSaveable { mutableLongStateOf(initial?.createdAt ?: System.currentTimeMillis()) }
+    // Keeps this editor's writes in order, so a new note's first insert hands its id to the next one.
     val lock = remember { Mutex() }
     val bodyFocus = remember { FocusRequester() }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -299,20 +300,22 @@ private fun NoteEditor(initial: Note?, onClose: () -> Unit, onDeleted: (Note) ->
         val b = body.text
         val p = pinned
         val k = color
-        app.appScope.launch { lock.withLock { id = app.notes.save(id, t, b, p, k) } }
+        app.appScope.launch { lock.withLock { id = app.notes.save(id, t, b, p, k, createdAt) } }
     }
     // Pin and colour of a note not saved yet go in with its first save.
     fun togglePin() {
         pinned = !pinned
         val p = pinned
-        app.appScope.launch { lock.withLock { if (id != 0L) app.notes.setPinned(id, p) } }
+        app.appScope.launch { lock.withLock { app.notes.setPinned(id, p, createdAt) } }
     }
     fun pickColor(k: Int) {
         color = k
-        app.appScope.launch { lock.withLock { if (id != 0L) app.notes.setColor(id, k) } }
+        app.appScope.launch { lock.withLock { app.notes.setColor(id, k, createdAt) } }
     }
     fun format(change: (TextFieldValue) -> TextFieldValue) {
-        body = change(body)
+        // A change that would pass the length cap does nothing, rather than cutting the note's end off on save.
+        val next = change(body)
+        if (next.text.length <= NotesRepository.MAX_LENGTH) body = next
         bodyFocus.requestFocus()
     }
     fun share() {
@@ -326,10 +329,12 @@ private fun NoteEditor(initial: Note?, onClose: () -> Unit, onDeleted: (Note) ->
         val b = body.text
         val p = pinned
         val k = color
+        // Unchanged: delete as it is, so Undo puts it back in its old place, not on top as "edited now".
+        val changed = t != savedTitle || b != savedBody
         app.appScope.launch {
             lock.withLock {
-                // Saved first, so Undo brings back the last few letters too.
-                val saved = app.notes.save(id, t, b, p, k)
+                // Changed: saved first, so Undo brings back the last few letters too.
+                val saved = if (changed || id == 0L) app.notes.save(id, t, b, p, k, createdAt) else id
                 if (saved != 0L) app.notes.delete(saved)?.let(onDeleted)
             }
         }
@@ -382,7 +387,8 @@ private fun NoteEditor(initial: Note?, onClose: () -> Unit, onDeleted: (Note) ->
                 value = body,
                 onValueChange = { new ->
                     val next = NoteFormat.continueList(body, new)
-                    body = if (next.text.length > NotesRepository.MAX_LENGTH) body else next
+                    // Over the cap only shortening gets through, so a note already past it can still be trimmed.
+                    body = if (next.text.length > NotesRepository.MAX_LENGTH && next.text.length >= body.text.length) body else next
                 },
                 modifier = Modifier
                     .fillMaxWidth()

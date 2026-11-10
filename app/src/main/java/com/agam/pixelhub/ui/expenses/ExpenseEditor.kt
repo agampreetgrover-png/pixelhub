@@ -303,7 +303,8 @@ fun ExpenseEditorSheet(
 
             HubTextField(
                 value = note,
-                onValueChange = { note = it },
+                // A short label; capped so a runaway paste can't bloat the month's rows.
+                onValueChange = { note = it.take(200) },
                 label = "Note",
                 placeholder = if (income) "November salary, client invoice, gift" else "Lunch, cab home, phone bill",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),

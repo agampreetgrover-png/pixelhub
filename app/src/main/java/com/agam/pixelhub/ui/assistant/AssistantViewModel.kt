@@ -53,7 +53,9 @@ sealed interface ChatItem {
 class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     private val c = app.container
     private val context: Context get() = getApplication()
-    private var nextId = 0L
+    // From the clock, not 0: the screen's open-editor id survives the process being killed while
+    // this chat doesn't, and counting from 0 again would hand that id to an unrelated new draft.
+    private var nextId = System.currentTimeMillis()
 
     private val _items = MutableStateFlow<List<ChatItem>>(emptyList())
     val items: StateFlow<List<ChatItem>> = _items.asStateFlow()

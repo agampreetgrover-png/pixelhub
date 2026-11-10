@@ -48,6 +48,9 @@ class NoteFormatTest {
         assertEquals(TextRange(17), next.selection)
         val ended = NoteFormat.continueList(next, v("- [x] eggs\n- [ ] \n", 18))
         assertEquals("- [x] eggs\n", ended.text)
+        // Enter just after the mark splits the item instead of deleting the mark.
+        val split = NoteFormat.continueList(v("- milk", 2), v("- \nmilk", 3))
+        assertEquals("- \n- milk", split.text)
         // Plain lines are left alone.
         val plain = v("hi\n", 3)
         assertEquals(plain, NoteFormat.continueList(v("hi", 2), plain))

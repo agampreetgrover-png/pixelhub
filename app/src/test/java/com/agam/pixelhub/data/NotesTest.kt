@@ -54,6 +54,18 @@ class NotesTest {
         assertEquals(3, dao.rows[id]!!.color)
     }
 
+    @Test fun rebuiltEditorDoesNotDuplicateANewNote() = runBlocking {
+        val dao = FakeNoteDao()
+        val repo = NotesRepository(dao) { 5L }
+        // The old editor's last save, then the rebuilt editor's first save, both still at id 0.
+        val first = repo.save(0, "", "milk", createdAt = 1_000L)
+        val second = repo.save(0, "", "milk, eggs", pinned = true, createdAt = 1_000L)
+        assertEquals(first, second)
+        assertEquals(1, dao.rows.size)
+        assertEquals("milk, eggs", dao.rows[first]!!.text)
+        assertTrue(dao.rows[first]!!.pinned)
+    }
+
     private class FakeNoteDao : NoteDao {
         val rows = mutableMapOf<Long, Note>()
         override fun observeAll(): Flow<List<Note>> = flowOf(rows.values.toList())
@@ -64,9 +76,10 @@ class NotesTest {
             return id
         }
         override suspend fun delete(note: Note) { rows.remove(note.id) }
-        override suspend fun edit(id: Long, title: String, text: String, at: Long) {
-            rows[id] = rows.getValue(id).copy(title = title, text = text, updatedAt = at)
+        override suspend fun edit(id: Long, title: String, text: String, at: Long, pinned: Boolean, color: Int) {
+            rows[id] = rows.getValue(id).copy(title = title, text = text, updatedAt = at, pinned = pinned, color = color)
         }
+        override suspend fun idCreatedAt(at: Long): Long? = rows.values.firstOrNull { it.createdAt == at }?.id
         override suspend fun deleteById(id: Long) { rows.remove(id) }
         override suspend fun setPinned(id: Long, pinned: Boolean) {
             rows[id] = rows.getValue(id).copy(pinned = pinned)

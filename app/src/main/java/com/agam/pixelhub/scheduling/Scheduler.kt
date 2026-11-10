@@ -20,6 +20,12 @@ class Scheduler(private val context: Context) {
      */
     private val snoozes = context.getSharedPreferences("snoozes", Context.MODE_PRIVATE)
 
+    /**
+     * When each alarm is next due to ring, by alarm id. AlarmManager forgets on reboot, so this is
+     * how a reboot tells an alarm that was due while the phone was off from one still ahead.
+     */
+    private val alarmTimes = context.getSharedPreferences("alarm_times", Context.MODE_PRIVATE)
+
     fun canScheduleExact(): Boolean = alarmManager.canScheduleExactAlarms()
 
     fun scheduleReminder(id: Long, atMillis: Long) = setExact(atMillis, trigger(ACTION_REMINDER, id))
@@ -42,7 +48,13 @@ class Scheduler(private val context: Context) {
         snoozes.edit().remove("r$id").apply()
     }
 
-    fun scheduleAlarm(id: Long, atMillis: Long) = setAlarmClock(atMillis, trigger(ACTION_ALARM, id))
+    fun scheduleAlarm(id: Long, atMillis: Long) {
+        alarmTimes.edit().putLong(id.toString(), atMillis).apply()
+        setAlarmClock(atMillis, trigger(ACTION_ALARM, id))
+    }
+
+    /** When alarm [id] was last set to ring, or null if it isn't set. */
+    fun alarmDueAt(id: Long): Long? = alarmTimes.getLong(id.toString(), -1L).takeIf { it >= 0 }
     fun scheduleAlarmSnooze(id: Long, atMillis: Long) {
         snoozes.edit().putLong("a$id", atMillis).apply()
         setAlarmClock(atMillis, trigger(ACTION_ALARM_SNOOZE, id))
@@ -55,7 +67,10 @@ class Scheduler(private val context: Context) {
     fun hasAlarmSnooze(id: Long): Boolean = snoozes.contains("a$id")
 
     /** Only the alarm's own trigger; a snooze in progress keeps going. */
-    fun cancelAlarmTrigger(id: Long) = cancel(ACTION_ALARM, id)
+    fun cancelAlarmTrigger(id: Long) {
+        cancel(ACTION_ALARM, id)
+        alarmTimes.edit().remove(id.toString()).apply()
+    }
     fun cancelAlarmSnooze(id: Long) {
         cancel(ACTION_ALARM_SNOOZE, id)
         snoozes.edit().remove("a$id").apply()
@@ -78,18 +93,22 @@ class Scheduler(private val context: Context) {
         snoozes.edit().remove(key).apply()
     }
 
-    /** After a reboot or clock change: re-arms snoozes still ahead and forgets the rest. */
+    /**
+     * After a reboot or clock change: re-arms every snooze. One that came due while the phone was
+     * off goes off now, late rather than never (a fired snooze removes its own record, so anything
+     * left here never went off).
+     */
     fun restoreSnoozes() {
         val now = System.currentTimeMillis()
         val edit = snoozes.edit()
         snoozes.all.forEach { (key, value) ->
-            val at = value as? Long
+            val at = (value as? Long)?.coerceAtLeast(now)
             val id = key.drop(1).toLongOrNull()
-            if (at == null || id == null || at <= now) {
-                edit.remove(key)
-            } else when (key.first()) {
-                'a' -> setAlarmClock(at, trigger(ACTION_ALARM_SNOOZE, id))
-                'r' -> setExact(at, trigger(ACTION_REMINDER_SNOOZE, id))
+            when {
+                at == null || id == null -> edit.remove(key)
+                key.first() == 'a' -> setAlarmClock(at, trigger(ACTION_ALARM_SNOOZE, id))
+                key.first() == 'r' -> setExact(at, trigger(ACTION_REMINDER_SNOOZE, id))
+                else -> edit.remove(key)
             }
         }
         edit.apply()

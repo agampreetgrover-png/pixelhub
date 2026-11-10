@@ -35,8 +35,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (savedInstanceState == null) {
-            tabFrom(intent)?.let { tab.value = it }
-            reportFrom(intent)
+            // From Recents, Android hands back the intent that first opened the app (a notification's,
+            // say); that's not a new request to open its page again.
+            if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) {
+                tabFrom(intent)?.let { tab.value = it }
+                reportFrom(intent)
+            }
             // A force-stop or a restore from backup wipes AlarmManager without any broadcast;
             // opening the app is the first chance to put alarms and reminders back.
             container.appScope.launch(Dispatchers.IO) { container.rearmAll() }

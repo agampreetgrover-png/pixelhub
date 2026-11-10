@@ -144,7 +144,9 @@ object NoteFormat {
         val lineStart = new.text.lastIndexOf('\n', at - 1) + 1
         val line = new.text.substring(lineStart, at)
         val block = blockOf(line)?.takeIf { it == Block.BULLET || it == Block.CHECK || it == Block.DONE } ?: return new
-        if (line.length == block.prefix.length) {
+        val lineEnd = new.text.indexOf('\n', at + 1).let { if (it < 0) new.text.length else it }
+        // Only a truly empty item ends the list; Enter just after "- " in "- milk" splits the line.
+        if (line.length == block.prefix.length && lineEnd == at + 1) {
             return TextFieldValue(new.text.removeRange(lineStart, at + 1), TextRange(lineStart))
         }
         val next = if (block == Block.BULLET) Block.BULLET.prefix else Block.CHECK.prefix

@@ -21,7 +21,9 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import com.agam.pixelhub.ui.theme.ThemeStore
 import java.time.LocalDate
 import java.time.YearMonth
 
@@ -46,11 +48,20 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
         // only when a figure actually changed (the Health screen reads every minute).
         scope.launch {
             c.health.latest.filterNotNull()
+                // Every reading refreshes the cache's time, even with the same figures, so the widget
+                // doesn't show them as older than they are (or yesterday's after midnight).
+                .onEach { HealthCache.save(context, it) }
                 .distinctUntilChangedBy { listOf(it.steps, it.exerciseMinutes, it.activeKcal.toLong(), it.distanceMeters.toLong()) }
-                .collect {
-                    HealthCache.save(context, it)
-                    HealthWidget().updateAll(context)
-                }
+                .collect { HealthWidget().updateAll(context) }
+        }
+        // A new theme: the widgets that take its colours redraw (Calendar and Music use their own).
+        scope.launch {
+            ThemeStore.theme(context).drop(1).collect {
+                HealthWidget().updateAll(context)
+                RemindersWidget().updateAll(context)
+                AlarmsWidget().updateAll(context)
+                MoneyWidget().updateAll(context)
+            }
         }
         // Reminders: any change to any reminder (app, notification Done, the widget's ✓) redraws it.
         scope.launch { c.reminders.all.distinctUntilChanged().collect { RemindersWidget().updateAll(context) } }
@@ -78,6 +89,9 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
         // picks up calendar access granted since the process started.
         scope.launch {
             every(5 * MINUTE_MS).collect {
+                // Restarted, not just started once: the watched window is fixed when it starts, so a
+                // long-lived process would otherwise stop noticing edits to the coming days.
+                calendarJob?.cancel()
                 startCalendar()
                 if (power.isInteractive) CalendarWidget().updateAll(context)
             }
@@ -166,8 +180,9 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
         for (receiver in receivers) {
             val key = "preview_${receiver.simpleName}"
             if (prefs.getLong(key, -1) == version) continue
+            // Only a real success is recorded; a rate-limited call is tried again next start.
             runCatching { GlanceAppWidgetManager(context).setWidgetPreviews(receiver) }
-                .onSuccess { prefs.edit().putLong(key, version).apply() }
+                .onSuccess { if (it == GlanceAppWidgetManager.SET_WIDGET_PREVIEWS_RESULT_SUCCESS) prefs.edit().putLong(key, version).apply() }
         }
     }
 }

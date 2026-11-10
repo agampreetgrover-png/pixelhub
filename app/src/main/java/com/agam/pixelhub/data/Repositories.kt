@@ -10,6 +10,9 @@ import kotlinx.coroutines.sync.withLock
 import java.time.LocalDateTime
 import java.time.ZonedDateTime
 
+/** How late past its time a reminder or alarm must be, at a reschedule, to count as missed rather than going off right now. */
+private const val MISSED_GRACE_MS = 60_000L
+
 private fun ZonedDateTime.millis() = toInstant().toEpochMilli()
 
 class ReminderRepository(
@@ -96,8 +99,11 @@ class ReminderRepository(
     suspend fun setDone(reminder: Reminder, done: Boolean) {
         if (done) {
             scheduler.cancelReminder(reminder.id)
-            val finished = reminder.copy(done = true)
-            dao.update(finished)
+            // The saved row, not the screen's copy: that may predate the calendar sync storing its
+            // event id, and writing it back would make the next sync add a second event.
+            val finished = calendarLock.withLock {
+                (dao.get(reminder.id) ?: return).copy(done = true).also { dao.update(it) }
+            }
             syncToCalendar(finished)
         } else {
             save(reminder.id, reminder.title, reminder.notes, reminder.anchor, reminder.recurrence, done = false)
@@ -111,8 +117,13 @@ class ReminderRepository(
 
     suspend fun delete(reminder: Reminder) {
         scheduler.cancelReminder(reminder.id)
-        dao.delete(reminder)
-        reminder.calendarEventId?.let { calendar.remove(it) }
+        // Under the sync's lock and from the saved row: a sync still adding this reminder's event
+        // finishes first, so its event id is known here and the event doesn't outlive the reminder.
+        calendarLock.withLock {
+            val eventId = dao.get(reminder.id)?.calendarEventId ?: reminder.calendarEventId
+            dao.delete(reminder)
+            eventId?.let { calendar.remove(it) }
+        }
     }
 
     /** Main trigger fired: record it, schedule the next occurrence, return what to show. */
@@ -143,7 +154,7 @@ class ReminderRepository(
         scheduler.scheduleReminderSnooze(id, System.currentTimeMillis() + minutes * 60_000L)
     }
 
-    /** After boot or a clock/time-zone change. Returns one-off reminders missed while the phone was off. */
+    /** After boot or a clock/time-zone change. Returns reminders whose time passed while the phone was off. */
     suspend fun rescheduleAll(): List<Reminder> {
         val now = ZonedDateTime.now()
         val missed = mutableListOf<Reminder>()
@@ -153,8 +164,14 @@ class ReminderRepository(
             // clock going back puts its wall-clock time in the future again.
             if (next != null && (r.recurrence.isRepeating || r.notifiedAt == 0L)) {
                 val t = next.millis()
-                if (t != r.triggerAt) dao.update(r.copy(triggerAt = t))
+                // onFired always moves a repeating reminder on to its next time, so one still in the
+                // past never went off (phone off): show it late instead of skipping to tomorrow. A
+                // minute's grace, so one going off right now isn't caught as well.
+                val late = r.recurrence.isRepeating && r.triggerAt in 1 until now.millis() - MISSED_GRACE_MS
+                val u = r.copy(triggerAt = t, notifiedAt = if (late) now.millis() else r.notifiedAt)
+                if (u != r) dao.update(u)
                 scheduler.scheduleReminder(r.id, t)
+                if (late) missed += u
             } else if (!r.recurrence.isRepeating && r.notifiedAt == 0L) {
                 val u = r.copy(notifiedAt = now.millis())
                 dao.update(u)
@@ -199,9 +216,28 @@ class AlarmRepository(private val dao: AlarmDao, private val scheduler: Schedule
         return a
     }
 
-    /** After boot or a clock change. Keeps a snooze in progress (the scheduler restores it). */
-    suspend fun rescheduleAll() {
-        dao.enabled().forEach { apply(it, keepSnooze = true) }
+    /**
+     * After boot or a clock change. Keeps a snooze in progress (the scheduler restores it).
+     * Returns alarms that were due while the phone was off: a one-time one is switched off
+     * rather than ringing a day late; a repeating one just moves on to its next day.
+     */
+    suspend fun rescheduleAll(): List<Alarm> {
+        val now = System.currentTimeMillis()
+        val missed = mutableListOf<Alarm>()
+        dao.enabled().forEach { a ->
+            // A minute's grace, so an alarm going off right now isn't taken for a missed one.
+            val due = scheduler.alarmDueAt(a.id)
+            if (due != null && due < now - MISSED_GRACE_MS) {
+                missed += a
+                if (a.daysMask == 0) {
+                    dao.update(a.copy(enabled = false))
+                    scheduler.cancelAlarmTrigger(a.id)
+                    return@forEach
+                }
+            }
+            apply(a, keepSnooze = true)
+        }
+        return missed
     }
 
     private fun apply(a: Alarm, keepSnooze: Boolean = false) {
