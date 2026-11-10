@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,6 +34,20 @@ class NotesTest {
         assertTrue(dao.rows.isEmpty())
     }
 
+    @Test fun searchLooksInTitleAndBody() {
+        val n = Note(title = "Shopping", text = "Milk, eggs", createdAt = 0)
+        assertTrue(NotesRepository.matches(n, "  "))
+        assertTrue(NotesRepository.matches(n, "shop"))
+        assertTrue(NotesRepository.matches(n, "EGGS"))
+        assertFalse(NotesRepository.matches(n, "bread"))
+    }
+
+    @Test fun newNoteKeepsItsPin() = runBlocking {
+        val dao = FakeNoteDao()
+        val id = NotesRepository(dao) { 1L }.save(0, "", "wifi password", pinned = true)
+        assertTrue(dao.rows[id]!!.pinned)
+    }
+
     private class FakeNoteDao : NoteDao {
         val rows = mutableMapOf<Long, Note>()
         override fun observeAll(): Flow<List<Note>> = flowOf(rows.values.toList())
@@ -47,5 +62,8 @@ class NotesTest {
             rows[id] = rows.getValue(id).copy(title = title, text = text, updatedAt = at)
         }
         override suspend fun deleteById(id: Long) { rows.remove(id) }
+        override suspend fun setPinned(id: Long, pinned: Boolean) {
+            rows[id] = rows.getValue(id).copy(pinned = pinned)
+        }
     }
 }

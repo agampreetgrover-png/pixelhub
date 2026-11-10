@@ -133,6 +133,8 @@ data class Note(
     val createdAt: Long,
     /** Last edit, epoch millis; the list shows the latest edit first. */
     val updatedAt: Long = createdAt,
+    /** Pinned notes sit above the rest. */
+    val pinned: Boolean = false,
 )
 
 @Entity(tableName = "shortcuts")

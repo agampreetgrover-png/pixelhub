@@ -96,8 +96,8 @@ interface BudgetDao {
 
 @Dao
 interface NoteDao {
-    /** Last edited first. */
-    @Query("SELECT * FROM notes ORDER BY updatedAt DESC, id DESC")
+    /** Pinned first, then last edited first. */
+    @Query("SELECT * FROM notes ORDER BY pinned DESC, updatedAt DESC, id DESC")
     fun observeAll(): Flow<List<Note>>
 
     @Query("SELECT * FROM notes WHERE id = :id")
@@ -108,6 +108,10 @@ interface NoteDao {
 
     @Query("UPDATE notes SET title = :title, text = :text, updatedAt = :at WHERE id = :id")
     suspend fun edit(id: Long, title: String, text: String, at: Long)
+
+    /** Leaves the edit time alone: pinning isn't an edit. */
+    @Query("UPDATE notes SET pinned = :pinned WHERE id = :id")
+    suspend fun setPinned(id: Long, pinned: Boolean)
 
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteById(id: Long)
