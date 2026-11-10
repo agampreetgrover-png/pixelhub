@@ -96,16 +96,21 @@ interface BudgetDao {
 
 @Dao
 interface NoteDao {
-    /** Open notes first, newest first within each. */
-    @Query("SELECT * FROM notes ORDER BY done ASC, createdAt DESC, id DESC")
+    /** Last edited first. */
+    @Query("SELECT * FROM notes ORDER BY updatedAt DESC, id DESC")
     fun observeAll(): Flow<List<Note>>
 
+    @Query("SELECT * FROM notes WHERE id = :id")
+    suspend fun get(id: Long): Note?
+
     @Insert suspend fun insert(note: Note): Long
-    @Update suspend fun update(note: Note)
     @Delete suspend fun delete(note: Note)
 
-    @Query("DELETE FROM notes WHERE done = 1")
-    suspend fun deleteDone()
+    @Query("UPDATE notes SET title = :title, text = :text, updatedAt = :at WHERE id = :id")
+    suspend fun edit(id: Long, title: String, text: String, at: Long)
+
+    @Query("DELETE FROM notes WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }
 
 @Dao

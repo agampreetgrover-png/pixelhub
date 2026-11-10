@@ -121,14 +121,18 @@ data class HealthNudge(
     val enabled: Boolean = true,
 )
 
-/** A quick note from the drawer: a line of text, ticked off when it's dealt with. */
+/** A note, like Keep: an optional title and a body. */
 @Entity(tableName = "notes")
 data class Note(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String = "",
     val text: String,
+    /** Left over from v7's tick-off notes; no longer shown. Kept so the table needn't be rebuilt. */
     val done: Boolean = false,
     /** When it was written, epoch millis. */
     val createdAt: Long,
+    /** Last edit, epoch millis; the list shows the latest edit first. */
+    val updatedAt: Long = createdAt,
 )
 
 @Entity(tableName = "shortcuts")
