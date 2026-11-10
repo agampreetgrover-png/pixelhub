@@ -20,7 +20,7 @@ class Converters {
         Reminder::class, Alarm::class, AppShortcut::class, HealthNudge::class, Expense::class, Budget::class,
         Person::class, LedgerRecord::class, Note::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -152,9 +152,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v10 lets notes have a colour. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `notes` ADD COLUMN `color` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "pixelhub.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+                )
                 .build()
     }
 }

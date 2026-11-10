@@ -135,6 +135,8 @@ data class Note(
     val updatedAt: Long = createdAt,
     /** Pinned notes sit above the rest. */
     val pinned: Boolean = false,
+    /** Index into the notes palette; 0 = no colour. */
+    val color: Int = 0,
 )
 
 @Entity(tableName = "shortcuts")

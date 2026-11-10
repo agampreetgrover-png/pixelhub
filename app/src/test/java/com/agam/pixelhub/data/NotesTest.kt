@@ -48,6 +48,12 @@ class NotesTest {
         assertTrue(dao.rows[id]!!.pinned)
     }
 
+    @Test fun newNoteKeepsItsColour() = runBlocking {
+        val dao = FakeNoteDao()
+        val id = NotesRepository(dao) { 1L }.save(0, "Ideas", "", color = 3)
+        assertEquals(3, dao.rows[id]!!.color)
+    }
+
     private class FakeNoteDao : NoteDao {
         val rows = mutableMapOf<Long, Note>()
         override fun observeAll(): Flow<List<Note>> = flowOf(rows.values.toList())
@@ -64,6 +70,9 @@ class NotesTest {
         override suspend fun deleteById(id: Long) { rows.remove(id) }
         override suspend fun setPinned(id: Long, pinned: Boolean) {
             rows[id] = rows.getValue(id).copy(pinned = pinned)
+        }
+        override suspend fun setColor(id: Long, color: Int) {
+            rows[id] = rows.getValue(id).copy(color = color)
         }
     }
 }

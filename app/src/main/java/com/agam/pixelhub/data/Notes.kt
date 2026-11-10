@@ -10,7 +10,7 @@ class NotesRepository(private val dao: NoteDao, private val now: () -> Long = Sy
      * Saves note [id] (0 = a new one) and returns its id. A note left with no title and no body
      * is deleted instead (as Keep discards an empty note) and 0 comes back.
      */
-    suspend fun save(id: Long, title: String, text: String, pinned: Boolean = false): Long {
+    suspend fun save(id: Long, title: String, text: String, pinned: Boolean = false, color: Int = 0): Long {
         val t = title.trim().take(MAX_TITLE)
         val b = clean(text).orEmpty()
         if (t.isEmpty() && b.isEmpty()) {
@@ -18,13 +18,15 @@ class NotesRepository(private val dao: NoteDao, private val now: () -> Long = Sy
             return 0
         }
         val at = now()
-        // [pinned] counts only for a new note (pinned before its first save); setPinned changes it after.
-        if (id == 0L) return dao.insert(Note(title = t, text = b, createdAt = at, updatedAt = at, pinned = pinned))
+        // [pinned] and [color] count only for a new note; setPinned and setColor change them after.
+        if (id == 0L) return dao.insert(Note(title = t, text = b, createdAt = at, updatedAt = at, pinned = pinned, color = color))
         dao.edit(id, t, b, at)
         return id
     }
 
     suspend fun setPinned(id: Long, pinned: Boolean) = dao.setPinned(id, pinned)
+
+    suspend fun setColor(id: Long, color: Int) = dao.setColor(id, color)
 
     /** Deletes note [id] and returns it as it was, for Undo; null if it's already gone. */
     suspend fun delete(id: Long): Note? = dao.get(id)?.also { dao.delete(it) }

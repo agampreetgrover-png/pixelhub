@@ -113,6 +113,10 @@ interface NoteDao {
     @Query("UPDATE notes SET pinned = :pinned WHERE id = :id")
     suspend fun setPinned(id: Long, pinned: Boolean)
 
+    /** Leaves the edit time alone, like pinning. */
+    @Query("UPDATE notes SET color = :color WHERE id = :id")
+    suspend fun setColor(id: Long, color: Int)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteById(id: Long)
 }
