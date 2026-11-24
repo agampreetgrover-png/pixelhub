@@ -184,9 +184,16 @@ private class Watcher(
         (live.keys - observed.keys).forEach { token ->
             live.getValue(token).let { it.registerCallback(this, handler); observed[token] = it }
         }
-        current = list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
-            ?: list.firstOrNull { it.metadata != null && it.playbackState?.state.let { s -> s != null && s != PlaybackState.STATE_STOPPED && s != PlaybackState.STATE_NONE } }
+        // Title-less players (games, in-app video) can't be shown, so they mustn't hide a paused track.
+        current = list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING && hasTitle(it) }
+            ?: list.firstOrNull { hasTitle(it) && it.playbackState?.state.let { s -> s != null && s != PlaybackState.STATE_STOPPED && s != PlaybackState.STATE_NONE } }
         publish()
+    }
+
+    /** The same title rule as [toState], so a picked session is always showable. */
+    private fun hasTitle(c: MediaController): Boolean {
+        val md = c.metadata ?: return false
+        return !(md.getString(MediaMetadata.METADATA_KEY_TITLE) ?: md.description?.title?.toString()).isNullOrBlank()
     }
 
     private fun publish() = emit(current?.let { toState(it) }?.takeIf { it.showable })

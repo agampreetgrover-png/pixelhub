@@ -1,7 +1,11 @@
 package com.agam.pixelhub.widget
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.updateAll
 import com.agam.pixelhub.AppContainer
@@ -22,6 +26,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.agam.pixelhub.ui.theme.ThemeStore
 import java.time.LocalDate
@@ -45,13 +50,17 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
     @OptIn(ExperimentalCoroutinesApi::class)
     fun start(c: AppContainer) {
         // Health: every new reading the app makes goes to the widget's cache and redraws it,
-        // only when a figure actually changed (the Health screen reads every minute).
+        // only when a figure changed or a new half hour began (the Health screen reads every minute).
         scope.launch {
             c.health.latest.filterNotNull()
                 // Every reading refreshes the cache's time, even with the same figures, so the widget
                 // doesn't show them as older than they are (or yesterday's after midnight).
                 .onEach { HealthCache.save(context, it) }
-                .distinctUntilChangedBy { listOf(it.steps, it.exerciseMinutes, it.activeKcal.toLong(), it.distanceMeters.toLong()) }
+                // The half-hour bucket (the widget's stale-after time) redraws unchanged figures once
+                // per window, so a stale "at HH:mm" label clears.
+                .distinctUntilChangedBy {
+                    listOf(it.steps, it.exerciseMinutes, it.activeKcal.toLong(), it.distanceMeters.toLong(), it.asOf.toEpochMilli() / (30 * MINUTE_MS))
+                }
                 .collect { HealthWidget().updateAll(context) }
         }
         // A new theme: the widgets that take its colours redraw (Calendar and Music use their own).
@@ -63,8 +72,19 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
                 MoneyWidget().updateAll(context)
             }
         }
-        // Reminders: any change to any reminder (app, notification Done, the widget's ✓) redraws it.
-        scope.launch { c.reminders.all.distinctUntilChanged().collect { RemindersWidget().updateAll(context) } }
+        // Reminders: any change to any reminder (app, notification Done, the widget's ✓) redraws it,
+        // and so does a new date, since "Today", "Tomorrow" and the due-today count depend on it,
+        // and a one-off passing its time, which turns it "Late".
+        scope.launch {
+            c.reminders.all.flatMapLatest { list ->
+                minutely {
+                    val now = System.currentTimeMillis()
+                    Triple(list, LocalDate.now(), list.count { !it.recurrence.isRepeating && it.triggerAt < now })
+                }
+            }
+                .distinctUntilChanged()
+                .collect { RemindersWidget().updateAll(context) }
+        }
         // Alarms: added, edited, deleted, switched, or turned off after ringing. A repeating alarm
         // that rang moves on to its next day without touching the database, and "Tomorrow" becomes
         // "Today" at midnight, so the next rings are re-worked out every minute too; it only
@@ -78,7 +98,9 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
         }
         // Money: any expense or budget change in the current month, moving to the new month on the 1st.
         scope.launch {
-            hourly { YearMonth.now() }.distinctUntilChanged()
+            // Checked every minute (it only re-subscribes when the month changes), so an expense
+            // added just after midnight on the 1st lands in the new month's view.
+            minutely { YearMonth.now() }.distinctUntilChanged()
                 .flatMapLatest { c.expenses.month(it) }
                 .distinctUntilChanged()
                 .collect { MoneyWidget().updateAll(context) }
@@ -96,8 +118,39 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
                 if (power.isInteractive) CalendarWidget().updateAll(context)
             }
         }
+        // Calendar, also at once when the screen comes on (the 5-minute tick skips screen-off, so
+        // the countdown would be stale on wake) and when the date, time or time zone changes.
+        // SCREEN_ON only reaches a receiver registered at run time; app-wide, so never unregistered.
+        ContextCompat.registerReceiver(
+            context,
+            object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    refreshCalendar()
+                }
+            },
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_DATE_CHANGED)
+                addAction(Intent.ACTION_TIME_CHANGED)
+                addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         startMusic()
         scope.launch { publishPreviews() }
+    }
+
+    /**
+     * Redraws the calendar widget now and restarts its change watch, e.g. right after calendar
+     * access is granted (the widget would otherwise ask for access until the next tick). Main thread only.
+     */
+    fun refreshCalendar() {
+        calendarJob?.cancel()
+        startCalendar()
+        // A running session only gets a state update from updateAll, so this makes it re-check
+        // access and reload; updateAll covers the case with no session running.
+        calendarRefresh.update { it + 1 }
+        scope.launch { CalendarWidget().updateAll(context) }
     }
 
     /**
@@ -130,8 +183,15 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
             scope.launch {
                 NowPlaying.flow(context)
                     // Not the art's identity: every read unparcels a new Bitmap, which would redraw
-                    // on every playback callback. Its size is enough to see new art arrive.
-                    .distinctUntilChangedBy { s -> listOf(s?.pkg, s?.title, s?.artist, s?.playing, s?.art?.width, s?.art?.height) }
+                    // on every playback callback. Its size is enough to see new art arrive. The duration
+                    // counts too (it often arrives after the title), and so does the position while
+                    // paused (a seek or a restart); while playing the ticker below moves it instead.
+                    .distinctUntilChangedBy { s ->
+                        listOf(
+                            s?.pkg, s?.title, s?.artist, s?.playing, s?.durationMs,
+                            s?.takeIf { !it.playing }?.positionMs, s?.art?.width, s?.art?.height,
+                        )
+                    }
                     .collect { MusicWidget().updateAll(context) }
             },
             // While music plays and the screen is on, redraw every 5 s so the progress bar moves.
@@ -157,14 +217,6 @@ class WidgetSync(private val context: Context, private val scope: CoroutineScope
         while (true) {
             emit(value())
             delay(MINUTE_MS)
-        }
-    }
-
-    /** [value] now, and again every hour. */
-    private fun <T> hourly(value: () -> T): Flow<T> = flow {
-        while (true) {
-            emit(value())
-            delay(HOUR_MS)
         }
     }
 

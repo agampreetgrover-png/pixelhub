@@ -35,7 +35,8 @@ object SetupChecks {
         val am = context.getSystemService(AlarmManager::class.java)
         val pm = context.getSystemService(PowerManager::class.java)
         val alarmChannelOn = nm.getNotificationChannel(Channels.ALARMS)
-            ?.let { it.importance != NotificationManager.IMPORTANCE_NONE } ?: true
+            // Below HIGH (Pop on screen off, or Silent) Android refuses the full-screen ring screen.
+            ?.let { it.importance >= NotificationManager.IMPORTANCE_HIGH } ?: true
 
         return listOf(
             SetupCheck(
@@ -64,7 +65,7 @@ object SetupChecks {
             ),
             SetupCheck(
                 CheckKind.ALARM_CHANNEL, "Alarm notifications on",
-                "The \"Alarms\" notification category must stay enabled.",
+                "The \"Alarms\" notification category must stay on, with Pop on screen.",
                 alarmChannelOn,
                 Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(Settings.EXTRA_APP_PACKAGE, pkg)
@@ -83,12 +84,20 @@ object SetupChecks {
 internal object PermissionAsks {
     private const val PREFS = "permission_asks"
 
+    /** Calendar access, shared by Settings' sync card and the Home and Calendar pages. */
+    const val CALENDAR = "calendar"
+
     fun askedBefore(context: Context, key: String): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(key, false)
 
     fun markAsked(context: Context, key: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(key, true).apply()
     }
+
+    /** [CALENDAR], or a block recorded by the old Calendar-page flow ("permissions"/"calendar_blocked"). */
+    fun calendarAskedBefore(context: Context): Boolean =
+        askedBefore(context, CALENDAR) ||
+            context.getSharedPreferences("permissions", Context.MODE_PRIVATE).getBoolean("calendar_blocked", false)
 }
 
 /** Re-evaluated every time the screen resumes, e.g. after coming back from system settings. */

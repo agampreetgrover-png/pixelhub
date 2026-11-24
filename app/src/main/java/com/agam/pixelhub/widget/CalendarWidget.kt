@@ -58,8 +58,11 @@ import com.agam.pixelhub.widget.kit.isStrip
 import com.agam.pixelhub.widget.kit.openTab
 import com.agam.pixelhub.widget.kit.ringBitmap
 import com.agam.pixelhub.widget.kit.shapeOf
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import java.time.Instant
@@ -119,6 +122,8 @@ private sealed interface CalendarState {
         val next: CalendarEvent?,
         val doneToday: Int,
         val totalToday: Int,
+        /** The minute it was read: a reload after a date or time change is never equal, so it redraws the date and countdown. */
+        val minute: Long = System.currentTimeMillis() / MINUTE_MS,
     ) : CalendarState
     data object NoAccess : CalendarState
 }
@@ -149,12 +154,18 @@ private fun List<CalendarEvent>.unique() = distinctBy { it.title.trim().lowercas
  * redraw that moves the countdown on comes from WidgetSync: Glance ends this session ~45 s
  * after a redraw, so a timer in here would never fire.
  */
-private fun live(context: Context): Flow<CalendarState> {
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun live(context: Context): Flow<CalendarState> = calendarRefresh.flatMapLatest {
+    // Re-checked on every refresh: a running session's update() doesn't re-run provideGlance,
+    // so access granted mid-session would otherwise leave it on "allow access".
     val events = CalendarEvents(context)
-    if (!events.hasPermission()) return flowOf(CalendarState.NoAccess)
+    if (!events.hasPermission()) return@flatMapLatest flowOf(CalendarState.NoAccess)
     val now = System.currentTimeMillis()
-    return events.observe(now, now + 2 * DAY_MS).map { load(context) }
+    events.observe(now, now + 2 * DAY_MS).map { load(context) }
 }
+
+/** Bumped by WidgetSync.refreshCalendar so a running session re-checks access and reloads. */
+internal val calendarRefresh = MutableStateFlow(0)
 
 private suspend fun load(context: Context): CalendarState {
     val events = CalendarEvents(context)
@@ -165,7 +176,8 @@ private suspend fun load(context: Context): CalendarState {
     val endOfToday = LocalDate.now().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
     val endOfTomorrow = LocalDate.now().plusDays(2).atStartOfDay(zone).toInstant().toEpochMilli()
     val week = runCatching { events.observe(now, now + 7 * DAY_MS).first() }.getOrDefault(emptyList())
-        .filter { it.end > now }
+        // A 0-minute event counts as under way for its own millisecond, as on the Calendar page.
+        .filter { maxOf(it.end, it.begin + 1) > now }
         .unique()
         .sortedWith(compareBy<CalendarEvent>({ dayOf(it) }, { it.allDay }, { it.begin }))
     val today = runCatching { events.observe(startOfToday, endOfToday).first() }.getOrDefault(emptyList())
@@ -174,7 +186,7 @@ private suspend fun load(context: Context): CalendarState {
     return CalendarState.Ready(
         soon = week.filter { it.begin < endOfTomorrow },
         next = week.firstOrNull { !it.allDay },
-        doneToday = today.count { it.end <= now },
+        doneToday = today.count { maxOf(it.end, it.begin + 1) <= now },
         totalToday = today.size,
     )
 }
@@ -201,8 +213,8 @@ private fun CalendarContent(context: Context, state: CalendarState) {
     val countdown = countdown(ready.next)
     val description = buildString {
         append("${today.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.getDefault())} ${today.dayOfMonth}.")
-        ready.next?.let { append(" Next: ${it.title}${countdown?.let { c -> " $c" }.orEmpty().replace("m", " minutes").replace("h", " hours")}.") }
-        if (ready.totalToday > 0) append(" ${ready.doneToday} of ${ready.totalToday} classes done.")
+        ready.next?.let { append(" Next: ${it.title}${countdown?.let { c -> " ${spoken(c)}" }.orEmpty()}.") }
+        if (ready.totalToday > 0) append(" ${ready.doneToday} of ${ready.totalToday} events done.")
     }
 
     if (shape == WidgetShape.TINY) {
@@ -326,11 +338,19 @@ private fun EventCard(context: Context, events: CalendarEvents, e: CalendarEvent
     }
 }
 
+/** [countdown] for TalkBack: "in 1h 5m" is read "in 1 hour 5 minutes". */
+internal fun spoken(countdown: String): String =
+    Regex("""(\d+)([mhd])\b""").replace(countdown) { m ->
+        val n = m.groupValues[1].toLong()
+        val unit = when (m.groupValues[2]) { "m" -> "minute"; "h" -> "hour"; else -> "day" }
+        "$n $unit" + if (n == 1L) "" else "s"
+    }
+
 /** "now" during an event; "in 45m", "in 2h 15m", "in 8h" (hours only beyond 3h), "in 2d". */
 private fun countdown(next: CalendarEvent?): String? {
     next ?: return null
     val now = System.currentTimeMillis()
-    if (next.begin <= now) return if (next.end > now) "now" else null
+    if (next.begin <= now) return if (maxOf(next.end, next.begin + 1) > now) "now" else null
     val minutes = ((next.begin - now + MINUTE_MS - 1) / MINUTE_MS)
     val hours = minutes / 60
     return when {

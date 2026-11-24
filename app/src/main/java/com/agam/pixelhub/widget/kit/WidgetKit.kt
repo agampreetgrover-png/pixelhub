@@ -136,7 +136,11 @@ fun shapeOf(size: DpSize): WidgetShape {
             w < 200f -> WidgetShape.SQUARE
             else -> WidgetShape.PANEL
         }
-        else -> if (w < 200f) WidgetShape.SQUARE else WidgetShape.LARGE
+        else -> when {
+            w < 120f -> WidgetShape.TINY
+            w < 200f -> WidgetShape.SQUARE
+            else -> WidgetShape.LARGE
+        }
     }
 }
 

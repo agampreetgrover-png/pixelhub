@@ -65,10 +65,15 @@ import com.agam.pixelhub.widget.kit.shapeOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 import androidx.glance.color.ColorProvider as DayNightColor
 import androidx.glance.text.TextStyle as GlanceTextStyle
@@ -125,7 +130,7 @@ private class MusicView(
      * (Compose skips a composable whose arguments are the same objects), so each progress tick
      * passes a fresh one.
      */
-    fun now(): MusicView = MusicView(
+    fun now(muted: Boolean): MusicView = MusicView(
         title, artist, appLabel, pkg, art, appIcon, playing, durationMs,
         positionMs = positionNow(), positionAt = SystemClock.elapsedRealtime(), speed = speed, muted = muted,
     )
@@ -178,8 +183,15 @@ private suspend fun load(context: Context): MusicState {
 }
 
 /**
+ * Bumped by the widget's mute button. Muting changes no media session, so without this a running
+ * session would keep drawing the old speaker icon.
+ */
+private val muteVersion = MutableStateFlow(0)
+
+/**
  * The widget's state, following the top media session as it changes. While a song plays and
- * the screen is on, it re-emits every 5 s so the progress bar and times move.
+ * the screen is on, it re-emits every [TICK_MS] so the progress bar and times move. The mute
+ * state is read again on each emission.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 private fun live(context: Context): Flow<MusicState> =
@@ -187,16 +199,24 @@ private fun live(context: Context): Flow<MusicState> =
         flowOf(MusicState.NoAccess)
     } else {
         val power = context.getSystemService(PowerManager::class.java)
+        val audio = context.getSystemService(AudioManager::class.java)
+        fun muted() = audio.isStreamMute(AudioManager.STREAM_MUSIC)
         NowPlaying.flow(context).flatMapLatest { s ->
             if (s == null) return@flatMapLatest flowOf(MusicState.Nothing)
             val view = viewOf(context, s)
-            if (!s.playing) return@flatMapLatest flowOf(MusicState.Playing(view))
-            flow {
-                while (true) {
-                    if (power.isInteractive) emit(MusicState.Playing(view.now()))
-                    delay(TICK_MS)
-                }
-            }
+            // A StateFlow emits its current value first, so this also draws the new paused state.
+            if (!s.playing) return@flatMapLatest muteVersion.map { MusicState.Playing(view.now(muted())) }
+            merge(
+                flow {
+                    // The new song is always drawn, even with the screen off; only the ticks wait for it.
+                    emit(MusicState.Playing(view.now(muted())))
+                    while (true) {
+                        delay(TICK_MS)
+                        if (power.isInteractive) emit(MusicState.Playing(view.now(muted())))
+                    }
+                },
+                muteVersion.drop(1).map { MusicState.Playing(view.now(muted())) },
+            )
         }
     }
 
@@ -221,8 +241,11 @@ private val Kind = ActionParameters.Key<String>("kind")
 class MusicControlAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         when (parameters[Kind]) {
-            "mute" -> context.getSystemService(AudioManager::class.java)
-                .adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0)
+            "mute" -> {
+                context.getSystemService(AudioManager::class.java)
+                    .adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 0)
+                muteVersion.update { it + 1 }
+            }
             else -> {
                 val s = current(context) ?: return
                 when (parameters[Kind]) {
@@ -261,12 +284,20 @@ private fun MusicContent(context: Context, state: MusicState) {
         MusicState.Nothing -> Message("Nothing playing", "Tap to open your music", openPlayer(context, null))
         is MusicState.Playing -> {
             val v = state.view
+            // Each layout only when its fixed contents fit, so the controls are never clipped off:
+            // Player's column needs ~122 dp tall (90 without a bar) and 136 dp wide for its controls;
+            // DiscCard's card needs disc + 160 dp for its 132 dp controls row.
+            val art = playerArt(size)
+            val playerFits = art >= (if (v.durationMs > 0) 122.dp else 90.dp) && size.width - 50.dp - art >= 136.dp
+            val disc = discSize(size)
             when {
-                shape == WidgetShape.TINY -> Tiny(context, v, size)
+                shape == WidgetShape.TINY || shape == WidgetShape.SQUARE -> Tiny(context, v, size)
                 shape == WidgetShape.STRIP_S || shape == WidgetShape.STRIP_M -> SmallPill(context, v)
                 shape == WidgetShape.STRIP_L -> LargePill(context, v)
-                shape == WidgetShape.PANEL && size.width < 290.dp -> DiscCard(context, v, size)
-                else -> Player(context, v, size)
+                shape == WidgetShape.PANEL && size.width < 290.dp && size.width >= disc + 160.dp -> DiscCard(context, v, size)
+                playerFits -> Player(context, v, size)
+                size.width >= 260.dp -> LargePill(context, v)
+                else -> Tiny(context, v, size)
             }
         }
     }
@@ -401,7 +432,7 @@ private fun LargePill(context: Context, v: MusicView) {
 /** Image 3 (3×2): a white card with the round album disc over its left edge. */
 @Composable
 private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
-    val disc = (size.height - 12.dp).coerceIn(72.dp, 140.dp)
+    val disc = discSize(size)
     Box(GlanceModifier.fillMaxSize().appWidgetBackground().semantics { contentDescription = describe(v) }, contentAlignment = Alignment.CenterStart) {
         // The card starts halfway under the disc.
         Box(GlanceModifier.fillMaxSize().padding(start = disc / 2)) {
@@ -460,7 +491,7 @@ private fun DiscCard(context: Context, v: MusicView, size: DpSize) {
  */
 @Composable
 private fun Player(context: Context, v: MusicView, size: DpSize) {
-    val art = minOf(size.height - 52.dp, size.width * 0.36f)
+    val art = playerArt(size)
     Row(
         GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(24.dp)
             .background(ImageProvider(R.drawable.widget_glass_container))
@@ -505,6 +536,12 @@ private fun Player(context: Context, v: MusicView, size: DpSize) {
         }
     }
 }
+
+/** Player's art side; MusicContent uses the same value to check that Player fits. */
+private fun playerArt(size: DpSize): Dp = minOf(size.height - 52.dp, size.width * 0.36f)
+
+/** DiscCard's disc diameter. */
+private fun discSize(size: DpSize): Dp = (size.height - 12.dp).coerceIn(72.dp, 140.dp)
 
 /** [b] scaled down so its longer side is at most [max] px. */
 private fun fit(b: Bitmap, max: Int): Bitmap {

@@ -60,11 +60,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.calendar.CalendarAgenda
 import com.agam.pixelhub.calendar.CalendarEvent
 import com.agam.pixelhub.calendar.CalendarEvents
+import com.agam.pixelhub.container
 import com.agam.pixelhub.ui.hubCard
 import com.agam.pixelhub.ui.motion.LocalReducedMotion
 import com.agam.pixelhub.ui.motion.Motion
 import com.agam.pixelhub.ui.motion.pressable
 import com.agam.pixelhub.ui.openSafely
+import com.agam.pixelhub.ui.settings.PermissionAsks
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubColors
 import com.agam.pixelhub.ui.theme.HubType
@@ -97,36 +99,34 @@ internal fun rememberCalendarAccess(events: CalendarEvents): CalendarAccess {
     var granted by remember { mutableStateOf(events.hasPermission()) }
     // Picks up a grant made in system settings while PixelHub was in the background.
     LifecycleResumeEffect(Unit) {
-        granted = events.hasPermission()
+        val now = events.hasPermission()
+        // The calendar widget only starts watching the calendars once access exists.
+        if (now && !granted) context.container.widgetSync.refreshCalendar()
+        granted = now
         onPauseOrDispose { }
     }
-    val prefs = remember { context.getSharedPreferences(PERMISSION_PREFS, Context.MODE_PRIVATE) }
-    // Whether Android showed its "why" state before this request: true only after one denial.
-    var rationaleBefore by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok && !granted) context.container.widgetSync.refreshCalendar()
         granted = ok
-        // A second denial (rationale was showing, now it isn't) means Android won't ask again.
-        // Remember that; never jump to settings from here, the user just made their choice.
-        // A first-time dismissal (no rationale before or after) isn't a block.
+        // Shares Settings' calendar sync record, so a block reached on either surface counts on both.
+        // Counted as asked only after a real answer; never jump to settings from here, the user
+        // just made their choice. A first-time dismissal (no rationale after) isn't a denial.
         val rationaleNow = activity?.shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR) == true
-        prefs.edit().putBoolean(KEY_CALENDAR_BLOCKED, !ok && rationaleBefore && !rationaleNow).apply()
+        if (ok || rationaleNow) PermissionAsks.markAsked(context, PermissionAsks.CALENDAR)
     }
     return CalendarAccess(granted) {
         val rationale = activity?.shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR) == true
-        if (prefs.getBoolean(KEY_CALENDAR_BLOCKED, false) && !rationale) {
+        // Also counts the old flag, for a device that was blocked before the shared record existed.
+        if (PermissionAsks.calendarAskedBefore(context) && !rationale) {
             // Android no longer shows the prompt, so the button would do nothing: open the
             // app's settings page, where calendar access can be turned on.
             Toast.makeText(context, "Turn on Calendar under Permissions", Toast.LENGTH_LONG).show()
             openSafely(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
         } else {
-            rationaleBefore = rationale
             launcher.launch(Manifest.permission.READ_CALENDAR)
         }
     }
 }
-
-private const val PERMISSION_PREFS = "permissions"
-private const val KEY_CALENDAR_BLOCKED = "calendar_blocked"
 
 /** The current time, refreshed on each minute boundary and on resume. */
 @Composable
@@ -269,7 +269,7 @@ fun UpcomingEventsCard(onOpen: () -> Unit, modifier: Modifier = Modifier) {
         events.observe(from, from + 8 * DAY_MS)
     }
     val all by flow.collectAsStateWithLifecycle<List<CalendarEvent>?>(initialValue = null)
-    val upcoming = all?.filter { it.end > now && it.begin < now + 7 * DAY_MS }?.take(3)
+    val upcoming = all?.filter { maxOf(it.end, it.begin + 1) > now &&it.begin < now + 7 * DAY_MS }?.take(3)
     val state = when {
         !access.granted -> UpcomingState.NoAccess
         upcoming == null -> UpcomingState.Loading

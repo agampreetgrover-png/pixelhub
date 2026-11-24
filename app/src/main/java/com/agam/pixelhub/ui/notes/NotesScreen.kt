@@ -98,6 +98,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agam.pixelhub.container
 import com.agam.pixelhub.data.Note
 import com.agam.pixelhub.data.NotesRepository
+import com.agam.pixelhub.data.takeSafe
 import com.agam.pixelhub.ui.BackButton
 import com.agam.pixelhub.ui.CircleIconButton
 import com.agam.pixelhub.ui.EmptyState
@@ -135,6 +136,8 @@ fun NotesScreen(onBack: () -> Unit) {
     fun deleted(note: Note) {
         uiScope.launch {
             snackbar.currentSnackbarData?.dismiss()
+            // Another note opened already: the offer would only turn up, stale, back on the grid.
+            if (openId != null) return@launch
             val undo = snackbar.showSnackbar("Note deleted", actionLabel = "Undo", duration = SnackbarDuration.Short)
             if (undo == SnackbarResult.ActionPerformed) app.appScope.launch { app.notes.restore(note) }
         }
@@ -142,6 +145,8 @@ fun NotesScreen(onBack: () -> Unit) {
 
     val list = notes
     val open = openId
+    // The snackbar's host lives on the grid, so an Undo still showing would wait there for the editor to close.
+    LaunchedEffect(open) { if (open != null) snackbar.currentSnackbarData?.dismiss() }
     if (open != null) {
         BackHandler { openId = null }
         // Wait for the notes, or a reopened note would start blank.
@@ -173,7 +178,10 @@ fun NotesScreen(onBack: () -> Unit) {
             }
             return@ScreenScaffold
         }
-        val shown = list.orEmpty().filter { NotesRepository.matches(it, query) }
+        // Also against the text as the card shows it, so "organic milk" finds "**organic** milk".
+        val shown = list.orEmpty().filter {
+            NotesRepository.matches(it, query) || NoteFormat.plain(it.text).contains(query.trim(), ignoreCase = true)
+        }
         // The list comes pinned first, so this split keeps each group's order.
         val (pinned, others) = shown.partition { it.pinned }
         LazyVerticalStaggeredGrid(
@@ -295,7 +303,8 @@ private fun NoteEditor(initial: Note?, onClose: () -> Unit, onDeleted: (Note) ->
         if (gone || (title == savedTitle && body.text == savedBody)) return
         savedTitle = title
         savedBody = body.text
-        editedAt = System.currentTimeMillis()
+        // Cleared to nothing, the save deletes the row (NotesRepository.save): no "Edited" for it.
+        editedAt = if (title.isBlank() && NotesRepository.clean(body.text) == null) 0L else System.currentTimeMillis()
         val t = title
         val b = body.text
         val p = pinned
@@ -374,7 +383,7 @@ private fun NoteEditor(initial: Note?, onClose: () -> Unit, onDeleted: (Note) ->
             BasicTextField(
                 value = title,
                 // A title is one line; Enter moves on to the note.
-                onValueChange = { title = it.replace('\n', ' ').take(NotesRepository.MAX_TITLE) },
+                onValueChange = { title = it.replace('\n', ' ').takeSafe(NotesRepository.MAX_TITLE) },
                 modifier = Modifier.fillMaxWidth(),
                 textStyle = HubType.section.copy(color = c.ink),
                 cursorBrush = SolidColor(c.ink),

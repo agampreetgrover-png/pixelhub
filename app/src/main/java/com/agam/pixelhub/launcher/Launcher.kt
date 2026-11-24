@@ -1,5 +1,6 @@
 package com.agam.pixelhub.launcher
 
+import com.agam.pixelhub.data.takeSafe
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -83,7 +84,7 @@ object ShortcutLauncher {
         }
         val icon = bitmap?.let { Icon.createWithBitmap(it) } ?: Icon.createWithResource(context, R.mipmap.ic_launcher)
         val info = ShortcutInfo.Builder(context, "shortcut_${s.id}")
-            .setShortLabel(s.label.take(24))
+            .setShortLabel(s.label.takeSafe(24))
             .setIcon(icon)
             .setIntent(intent)
             .build()

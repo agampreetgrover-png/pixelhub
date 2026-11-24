@@ -204,17 +204,25 @@ private fun localDate(r: Reminder) = Instant.ofEpochMilli(r.triggerAt).atZone(Zo
 
 private val DayMonth: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())
 
-/** "6:00 pm", "Late, 9:00 am", "Tomorrow 7:00 am", "Fri 9:00 am", "12 Nov 9:00 am". */
+/**
+ * "6:00 pm", "Late, 9:00 am", "Late, yesterday 9:00 am", "Late, 12 Nov 9:00 am",
+ * "Tomorrow 7:00 am", "Fri 9:00 am", "12 Nov 9:00 am".
+ */
 private fun whenText(context: Context, r: Reminder, now: ZonedDateTime): String {
     val at = Instant.ofEpochMilli(r.triggerAt).atZone(now.zone)
     val time = Fmt.time(context, at.toLocalTime())
     val today = now.toLocalDate()
     val date = at.toLocalDate()
     return when {
-        !r.recurrence.isRepeating && r.triggerAt < now.toInstant().toEpochMilli() -> "Late, $time"
+        !r.recurrence.isRepeating && r.triggerAt < now.toInstant().toEpochMilli() -> when (date) {
+            today -> "Late, $time"
+            today.minusDays(1) -> "Late, yesterday $time"
+            else -> "Late, ${at.format(DayMonth)} $time"
+        }
         date == today -> time
         date == today.plusDays(1) -> "Tomorrow $time"
-        date < today.plusDays(7) -> "${at.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())} $time"
+        // Only ahead: a missed repeating time from an earlier day mustn't read as next week.
+        date > today && date < today.plusDays(7) -> "${at.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())} $time"
         else -> "${at.format(DayMonth)} $time"
     }
 }

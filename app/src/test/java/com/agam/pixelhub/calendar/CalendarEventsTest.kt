@@ -195,6 +195,11 @@ class CalendarEventsTest {
         assertEquals(at("2026-11-09T09:00"), CalendarAgenda.suggestedStart(LocalDate.of(2026, 11, 9), now, zone))
     }
 
+    @Test fun suggestedStartInTheLastHourStaysToday() {
+        val now = at("2026-11-06T23:20")
+        assertEquals(at("2026-11-06T23:15"), CalendarAgenda.suggestedStart(LocalDate.of(2026, 11, 6), now, zone))
+    }
+
     @Test fun overlapWindow() {
         assertTrue(CalendarAgenda.overlaps(10, 20, 15, 30))
         assertFalse(CalendarAgenda.overlaps(10, 15, 15, 30))

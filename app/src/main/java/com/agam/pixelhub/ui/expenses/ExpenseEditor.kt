@@ -2,6 +2,7 @@
 
 package com.agam.pixelhub.ui.expenses
 
+import com.agam.pixelhub.data.takeSafe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -143,23 +144,28 @@ fun ExpenseEditorSheet(
 
     val startAmount = remember { initial?.amountPaise?.takeIf { it > 0L }?.let { plainAmount(it) }.orEmpty() }
     var amount by rememberSaveable { mutableStateOf(startAmount) }
+    val startKind = remember { initial?.kind ?: ExpenseKind.EXPENSE }
+    val startCategory = remember {
+        initial?.category?.takeIf { it in ExpenseCategory.forKind(startKind) } ?: ExpenseCategory.forKind(startKind).first()
+    }
     // The kind is saved by name so it survives rotation and process death as a plain string.
-    var kindName by rememberSaveable { mutableStateOf((initial?.kind ?: ExpenseKind.EXPENSE).name) }
+    var kindName by rememberSaveable { mutableStateOf(startKind.name) }
     val kind = ExpenseKind.valueOf(kindName)
     val income = kind == ExpenseKind.INCOME
     val categories = remember(kind) { ExpenseCategory.forKind(kind) }
-    var category by rememberSaveable {
-        val start = initial?.kind ?: ExpenseKind.EXPENSE
-        mutableStateOf(initial?.category?.takeIf { it in ExpenseCategory.forKind(start) } ?: ExpenseCategory.forKind(start).first())
-    }
+    var category by rememberSaveable { mutableStateOf(startCategory) }
     var note by rememberSaveable { mutableStateOf(initial?.note.orEmpty()) }
     val initialAt = remember { initial?.spentAt?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDateTime() } }
-    // A draft stamped within the last minute ("Repeat") counts as "now".
-    var useNow by rememberSaveable {
-        mutableStateOf(initial == null || (initial.id == 0L && abs(initial.spentAt - System.currentTimeMillis()) < 60_000L))
+    // A draft stamped within the last minute ("Repeat") counts as "now". Saved, so a rotation a
+    // minute later doesn't flip it and mark an untouched draft dirty.
+    val startUseNow = rememberSaveable {
+        initial == null || (initial.id == 0L && abs(initial.spentAt - System.currentTimeMillis()) < 60_000L)
     }
-    var date by rememberSaveable { mutableStateOf(initialAt?.toLocalDate() ?: LocalDate.now()) }
-    var time by rememberSaveable { mutableStateOf((initialAt?.toLocalTime() ?: LocalTime.now()).withSecond(0).withNano(0)) }
+    val startDate = remember { initialAt?.toLocalDate() ?: LocalDate.now() }
+    val startTime = remember { (initialAt?.toLocalTime() ?: LocalTime.now()).withSecond(0).withNano(0) }
+    var useNow by rememberSaveable { mutableStateOf(startUseNow) }
+    var date by rememberSaveable { mutableStateOf(startDate) }
+    var time by rememberSaveable { mutableStateOf(startTime) }
     var showDate by rememberSaveable { mutableStateOf(false) }
     var showTime by rememberSaveable { mutableStateOf(false) }
     val today = remember { LocalDate.now() }
@@ -208,12 +214,12 @@ fun ExpenseEditorSheet(
     // entry counts once anything is typed (a "Repeat" or assistant draft: once it's changed); an
     // existing one once a field differs from what it was.
     val dirty = if (isNew) {
-        amount != startAmount || note != initial?.note.orEmpty()
+        // Date and time only count once off "Now", so a draft left on "Now" stays clean.
+        amount != startAmount || note != initial?.note.orEmpty() ||
+            kind != startKind || category != startCategory ||
+            useNow != startUseNow || (!useNow && (date != startDate || time != startTime))
     } else {
         val start = initial!!
-        val startKind = start.kind
-        val startCategory = start.category.takeIf { it in ExpenseCategory.forKind(startKind) }
-            ?: ExpenseCategory.forKind(startKind).first()
         (paise ?: 0L) != start.amountPaise || category != startCategory || note != start.note ||
             kind != startKind || useNow ||
             date != initialAt?.toLocalDate() || time != initialAt?.toLocalTime()?.withSecond(0)?.withNano(0)
@@ -304,7 +310,7 @@ fun ExpenseEditorSheet(
             HubTextField(
                 value = note,
                 // A short label; capped so a runaway paste can't bloat the month's rows.
-                onValueChange = { note = it.take(200) },
+                onValueChange = { note = it.takeSafe(200) },
                 label = "Note",
                 placeholder = if (income) "November salary, client invoice, gift" else "Lunch, cab home, phone bill",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
@@ -362,11 +368,13 @@ fun ExpenseEditorSheet(
                         reject()
                         return@PrimaryButton
                     }
-                    val at = if (useNow) {
-                        System.currentTimeMillis()
-                    } else {
+                    val at = when {
+                        useNow -> System.currentTimeMillis()
+                        // Untouched date and time keep the original stamp, seconds and all, so order holds.
+                        initial != null && initialAt != null && date == initialAt.toLocalDate() &&
+                            time == initialAt.toLocalTime().withSecond(0).withNano(0) -> initial.spentAt
                         // Never in the future, whichever way the date and time were picked.
-                        minOf(LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli(), System.currentTimeMillis())
+                        else -> minOf(LocalDateTime.of(date, time).atZone(zone).toInstant().toEpochMilli(), System.currentTimeMillis())
                     }
                     onSave(
                         Expense(

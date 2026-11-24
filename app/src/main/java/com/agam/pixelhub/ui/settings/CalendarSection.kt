@@ -1,9 +1,11 @@
 package com.agam.pixelhub.ui.settings
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.LocalActivity
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.agam.pixelhub.ui.openSafely
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -80,7 +82,10 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
     var resumes by remember { mutableIntStateOf(0) }
 
     LifecycleResumeEffect(Unit) {
-        hasPermission = c.calendar.hasPermission()
+        val now = c.calendar.hasPermission()
+        // The calendar widget only starts watching the calendars once access exists.
+        if (now && !hasPermission) c.widgetSync.refreshCalendar()
+        hasPermission = now
         resumes++
         onPauseOrDispose { }
     }
@@ -99,19 +104,28 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
     }
     val activity = LocalActivity.current
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        hasPermission = result.values.all { it }
+        // Empty when the request was cancelled or overlapped another (a double tap): no answer yet.
+        if (result.isEmpty()) return@rememberLauncherForActivityResult
+        val now = c.calendar.hasPermission()
+        if (now && !hasPermission) c.widgetSync.refreshCalendar()
+        hasPermission = now
         if (!hasPermission) enableAfterGrant = false
         // Counted as asked only after a real answer: a dialog dismissed with Back isn't a denial,
         // and treating it as one would send the next tap to App info instead of asking again.
         if (hasPermission || c.calendar.permissions.any { activity?.shouldShowRequestPermissionRationale(it) == true }) {
-            PermissionAsks.markAsked(context, CALENDAR_ASKED)
+            PermissionAsks.markAsked(context, PermissionAsks.CALENDAR)
         }
     }
     // Decided before launching: once asked and Android no longer shows the prompt (denied twice),
     // the request would do nothing, so open the app's settings page, where access can be turned on.
     val allow: () -> Unit = {
         enableAfterGrant = true
-        val blocked = PermissionAsks.askedBefore(context, CALENDAR_ASKED) &&
+        // Only when none of them is held: with read access granted on Home or the Calendar page,
+        // the request adds write access without a dialog, so it must still be launched.
+        val anyGranted = c.calendar.permissions.any {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+        val blocked = !anyGranted && PermissionAsks.calendarAskedBefore(context) &&
             c.calendar.permissions.none { activity?.shouldShowRequestPermissionRationale(it) == true }
         if (blocked) {
             Toast.makeText(context, "Turn on Calendar under Permissions", Toast.LENGTH_LONG).show()
@@ -181,8 +195,6 @@ fun CalendarSyncSection(modifier: Modifier = Modifier) {
         }
     }
 }
-
-private const val CALENDAR_ASKED = "calendar"
 
 /** A calendar as a row: its colour in the well, the account under the name, a radio at the end. */
 @Composable

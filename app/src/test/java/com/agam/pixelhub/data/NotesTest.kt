@@ -22,6 +22,21 @@ class NotesTest {
         assertEquals(NotesRepository.MAX_LENGTH, NotesRepository.clean(long)!!.length)
     }
 
+    @Test fun dropsEmptyItemsAtTheEnd() {
+        assertEquals("Groceries\n- [ ] milk", NotesRepository.clean("Groceries\n- [ ] milk\n- [ ] "))
+        assertNull(NotesRepository.clean("- [ ] "))
+        assertNull(NotesRepository.clean("# "))
+        assertEquals("a", NotesRepository.clean("a\n- \n- [ ] "))
+        // Only at the end; an empty item mid-note keeps its space.
+        assertEquals("a\n- [ ] \nb", NotesRepository.clean("a\n- [ ] \nb"))
+    }
+
+    @Test fun capDoesNotSplitAnEmoji() {
+        assertEquals("a".repeat(199), ("a".repeat(199) + "😀").takeSafe(200))
+        assertEquals("ab😀", "ab😀c".takeSafe(4))
+        assertEquals("ab", "ab".takeSafe(5))
+    }
+
     @Test fun emptyNoteIsNotKept() = runBlocking {
         val dao = FakeNoteDao()
         val repo = NotesRepository(dao) { 1L }

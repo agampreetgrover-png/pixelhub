@@ -24,7 +24,7 @@ class NotesRepository(private val dao: NoteDao, private val now: () -> Long = Sy
         color: Int = 0,
         createdAt: Long = 0L,
     ): Long = lock.withLock {
-        val t = title.trim().take(MAX_TITLE)
+        val t = title.trim().takeSafe(MAX_TITLE)
         val b = clean(text).orEmpty()
         val row = resolve(id, createdAt)
         if (t.isEmpty() && b.isEmpty()) {
@@ -79,7 +79,25 @@ class NotesRepository(private val dao: NoteDao, private val now: () -> Long = Sy
             return q.isEmpty() || note.title.contains(q, ignoreCase = true) || note.text.contains(q, ignoreCase = true)
         }
 
-        /** Trimmed and capped, or null when there's nothing to keep. */
-        fun clean(text: String): String? = text.trim().take(MAX_LENGTH).trimEnd().takeIf { it.isNotEmpty() }
+        // What an empty heading or list item ("# ", "- [ ] ") is left as once its trailing space is trimmed.
+        private val BareMarks = setOf("-", "- [ ]", "- [x]", "- [X]", "#", "##")
+
+        /** Trimmed and capped, with empty list items or headings dropped from the end; null when there's nothing to keep. */
+        fun clean(text: String): String? {
+            var s = text.trim().takeSafe(MAX_LENGTH).trimEnd()
+            while (s.isNotEmpty()) {
+                val last = s.substringAfterLast('\n')
+                if (last.trim() !in BareMarks) break
+                s = s.dropLast(last.length).trimEnd()
+            }
+            return s.takeIf { it.isNotEmpty() }
+        }
     }
+}
+
+/** The first [n] UTF-16 units, one fewer if the cut would split an emoji (a surrogate pair) in half. */
+fun String.takeSafe(n: Int): String {
+    if (length <= n) return this
+    val end = if (n > 0 && this[n - 1].isHighSurrogate()) n - 1 else n
+    return substring(0, end)
 }

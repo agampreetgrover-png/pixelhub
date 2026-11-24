@@ -1,5 +1,6 @@
 package com.agam.pixelhub.ui.people
 
+import com.agam.pixelhub.data.takeSafe
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -110,7 +111,8 @@ internal fun LedgerEntrySheet(
                 // Too long is refused, not cut: cutting a pasted "1,00,00,000.50" would quietly
                 // save a different amount.
                 onValueChange = { v ->
-                    val kept = v.filter { it.isDigit() || it == '.' || it == ',' }
+                    // A pasted "Rs. 50" loses its prefix first, or its dot would leave ".50".
+                    val kept = Money.stripCurrencyPrefix(v).filter { it.isDigit() || it == '.' || it == ',' }
                     if (kept.length <= 16 && kept.count(Char::isDigit) <= 12) amount = kept
                 },
                 label = "Amount (₹)",
@@ -124,7 +126,7 @@ internal fun LedgerEntrySheet(
             Spacer(Modifier.height(8.dp))
             HubTextField(
                 value = note,
-                onValueChange = { note = it.take(80) },
+                onValueChange = { note = it.takeSafe(80) },
                 label = "What for (optional)",
                 placeholder = "Lunch, auto, movie…",
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -209,7 +211,7 @@ internal fun NameSheet(
             Spacer(Modifier.height(16.dp))
             HubTextField(
                 value = name,
-                onValueChange = { name = it.take(40) },
+                onValueChange = { name = it.takeSafe(40) },
                 label = "Name",
                 isError = error != null,
                 supportingText = error,

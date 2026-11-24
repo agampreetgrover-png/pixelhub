@@ -82,10 +82,11 @@ class HealthWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val loaded = load(context)
         val c = context.container
+        val initialGoal = (loaded as? HealthState.Ready)?.goal ?: c.stepGoal.value
         provideContent {
             // Followed live: a redraw of a session still running doesn't call provideGlance again,
             // so a new goal or new figures in that window would otherwise wait for the next one.
-            val goal by remember { c.settings.stepGoal }.collectAsState((loaded as? HealthState.Ready)?.goal ?: c.stepGoal.value)
+            val goal by remember { c.settings.stepGoal }.collectAsState(initialGoal)
             val latest by c.health.latest.collectAsState()
             HealthContent(context, withLive(loaded, latest, goal))
         }
@@ -248,7 +249,8 @@ private class Figures(context: Context, s: HealthState.Ready) {
 /** "6.2k", "12k": steps in the smallest tile. */
 private fun compact(n: Long): String = when {
     n < 1_000 -> n.toString()
-    n < 10_000 -> String.format(Locale.getDefault(), "%.1fk", n / 1_000.0)
+    // Truncated, not rounded: 9,960 must not read "10.0k" before the goal is reached.
+    n < 10_000 -> String.format(Locale.getDefault(), "%.1fk", (n / 100) / 10.0)
     else -> "${n / 1_000}k"
 }
 

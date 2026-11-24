@@ -53,6 +53,9 @@ object Money {
         return runCatching { value.movePointRight(2).longValueExact() }.getOrNull()
     }
 
+    /** Drops a leading "₹", "Rs." or "INR" (dot included) before a field filters out non-digits. */
+    fun stripCurrencyPrefix(text: String): String = text.trim().replace(CURRENCY_PREFIX, "")
+
     private val CURRENCY_PREFIX = Regex("""^(₹|rs\.?|inr)\s*""", RegexOption.IGNORE_CASE)
     private val CURRENCY_SUFFIX = Regex("""\s*(rs\.?|inr)$""", RegexOption.IGNORE_CASE)
 

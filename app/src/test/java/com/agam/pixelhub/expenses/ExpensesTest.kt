@@ -45,6 +45,14 @@ class ExpensesTest {
         assertEquals(2_50L, Money.parse("2.50"))
     }
 
+    @Test fun pastedRupeeWordKeepsItsDotOutOfTheAmountField() {
+        fun field(v: String) = Money.stripCurrencyPrefix(v).filter { it.isDigit() || it == '.' || it == ',' }
+        assertEquals("50", field("Rs. 50"))
+        assertEquals("500", field("Rs.500"))
+        assertEquals("1,250.50", field("₹1,250.50"))
+        assertEquals(50_00L, Money.parse(field("Rs. 50")))
+    }
+
     @Test fun parseRejectsThreeDecimalsEvenWithTrailingZeros() {
         assertNull(Money.parse("1.500"))
         assertNull(Money.parse(".5000"))

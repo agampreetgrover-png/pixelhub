@@ -134,6 +134,26 @@ class ReportMathTest {
         assertEquals("₹88 spent · 12% less than 1–7 October", r.oneLine())
     }
 
+    @Test fun changeTextNeverNamesDaysLastMonthDoesNotHave() {
+        val feb = YearMonth.of(2026, 2)
+        val mar = YearMonth.of(2026, 3)
+        val r = ReportMath.build(
+            summary(mar, listOf(spend(88, FOOD, mar.atDay(3)))),
+            summary(feb, listOf(spend(100, FOOD, feb.atDay(5)))),
+            today = mar.atDay(31),
+            zone = zone,
+        )
+        assertEquals("12% less than February", r.changeText())
+
+        val first = ReportMath.build(
+            summary(nov, listOf(spend(88, FOOD, nov.atDay(1)))),
+            summary(oct, listOf(spend(100, FOOD, oct.atDay(1)))),
+            today = nov.atDay(1),
+            zone = zone,
+        )
+        assertEquals("12% less than 1 October", first.changeText())
+    }
+
     @Test fun percentChange() {
         assertNull(ReportMath.percentChange(0, 500))
         assertEquals(-12, ReportMath.percentChange(100_00, 88_00))

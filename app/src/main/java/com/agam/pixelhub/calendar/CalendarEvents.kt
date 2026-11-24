@@ -27,6 +27,7 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 /**
@@ -103,6 +104,9 @@ class CalendarEvents(context: Context) {
         val begin = if (event.allDay) CalendarAgenda.localToAllDayUtc(event.begin, zone) else event.begin
         val end = if (event.allDay) CalendarAgenda.localToAllDayUtc(event.end, zone) else event.end
         return Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(Events.CONTENT_URI, event.eventId))
+            // Own identity per occurrence: extras don't count, so widget PendingIntents for two
+            // occurrences of one repeating event would otherwise collide and share the later's times.
+            .setIdentifier(event.key)
             .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, begin)
             .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, end)
     }
@@ -347,11 +351,17 @@ object CalendarAgenda {
         events.filter { !it.allDay && it.begin >= now }.minByOrNull { it.begin }
             ?: events.filter { it.end > now }.minByOrNull { it.begin }
 
-    /** Where a new event on [day] should start: the next whole hour today, else 9:00 that day. */
+    /**
+     * Where a new event on [day] should start: the next whole hour today (in the last hour, the
+     * current quarter hour, so it stays on [day]), else 9:00 that day.
+     */
     fun suggestedStart(day: LocalDate, now: Long, zone: ZoneId): Long {
         val nowAt = Instant.ofEpochMilli(now).atZone(zone)
         return if (day == nowAt.toLocalDate()) {
-            nowAt.withMinute(0).withSecond(0).withNano(0).plusHours(1).toInstant().toEpochMilli()
+            val hourStart = nowAt.truncatedTo(ChronoUnit.HOURS)
+            val next = hourStart.plusHours(1)
+            (if (next.toLocalDate() == day) next else hourStart.withMinute(nowAt.minute / 15 * 15))
+                .toInstant().toEpochMilli()
         } else {
             day.atTime(9, 0).atZone(zone).toInstant().toEpochMilli()
         }

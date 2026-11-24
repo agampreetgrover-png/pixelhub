@@ -24,6 +24,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
 import java.time.ZonedDateTime
 
 enum class HealthStatus {
@@ -183,6 +186,8 @@ class HealthRepository(private val context: Context) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w("PixelHub", "Health Connect read failed", e)
                 readFailedState.value = true
+                // Past midnight, yesterday's figures must not pose as today's.
+                if (last?.asOf?.atZone(ZoneId.systemDefault())?.toLocalDate() != LocalDate.now()) last = null
             }
             emit(last)
             delay(periodMillis)
@@ -196,6 +201,9 @@ class HealthRepository(private val context: Context) {
 
     /** Background check for a nudge (called from the alarm receiver). */
     suspend fun check(nudge: HealthNudge): NudgeCheck {
+        // An alarm never fires early, so a clock before the nudge's time means it was handled
+        // after midnight: today's totals would be the new day's, so skip rather than nag.
+        if (LocalTime.now() < LocalTime.of(nudge.hour, nudge.minute)) return NudgeCheck.OnTrack
         val canRead = try {
             canReadInBackground()
         } catch (e: Exception) {

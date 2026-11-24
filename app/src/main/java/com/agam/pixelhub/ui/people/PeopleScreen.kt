@@ -255,7 +255,9 @@ private fun PersonPage(pb: PersonBalance, onBack: () -> Unit) {
         uiScope.launch {
             snackbar.currentSnackbarData?.dismiss()
             val undo = snackbar.showSnackbar(
-                "Deleted ${LedgerMath.entryText(person.name, r.amountPaise).lowercase()}",
+                // Only "You paid" becomes "you paid"; the person's name keeps its case.
+                "Deleted " + LedgerMath.entryText(person.name, r.amountPaise)
+                    .let { if (r.amountPaise >= 0) it.replaceFirstChar { c -> c.lowercase() } else it },
                 actionLabel = "Undo",
                 duration = SnackbarDuration.Short,
             )

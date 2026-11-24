@@ -228,7 +228,8 @@ fun ExpensesScreen(onOpenPeople: () -> Unit = {}) {
     // The last summary stays up while the next month loads, so nothing flashes empty. The report
     // carries the month's summary, so one live query feeds both the page and the Report card.
     var report by remember { mutableStateOf<MonthReport?>(null) }
-    LaunchedEffect(month) { app.expenses.report(month).collect { report = it } }
+    // Keyed on today too: the report reads the date only when Room emits, so a new day re-runs it.
+    LaunchedEffect(month, today) { app.expenses.report(month).collect { report = it } }
     var reportOpen by rememberSaveable { mutableStateOf(false) }
     val s = report?.summary
     // Opened from the monthly report notification: go to that month and show its report.
@@ -1510,7 +1511,8 @@ private fun BudgetField(
     HubTextField(
         value = value,
         onValueChange = { v ->
-            val kept = v.filter { it.isDigit() || it == '.' || it == ',' }
+            // A pasted "Rs. 50" loses its prefix first, or its dot would leave ".50".
+            val kept = Money.stripCurrencyPrefix(v).filter { it.isDigit() || it == '.' || it == ',' }
             // Up to 12 digits, like the People amounts: far past any real budget, and the threshold maths can't overflow.
             if (kept.count(Char::isDigit) <= 12) onChange(kept)
         },

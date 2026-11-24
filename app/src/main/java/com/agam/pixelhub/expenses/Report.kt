@@ -101,8 +101,15 @@ object ReportMath {
  */
 fun MonthReport.changeText(): String? {
     val pct = changePercent ?: return null
-    val prevName = month.minusMonths(1).format(DateTimeFormatter.ofPattern("MMMM", Locale.getDefault()))
-    val against = if (partial) "1–$days $prevName" else prevName
+    val prev = month.minusMonths(1)
+    val prevName = prev.format(DateTimeFormatter.ofPattern("MMMM", Locale.getDefault()))
+    // build() already compares the whole of a shorter previous month, so name only days it has.
+    val upTo = minOf(days, prev.lengthOfMonth())
+    val against = when {
+        !partial || upTo == prev.lengthOfMonth() -> prevName
+        upTo == 1 -> "1 $prevName"
+        else -> "1–$upTo $prevName"
+    }
     return when {
         pct == 0 -> "Same as $against"
         pct < 0 -> "${abs(pct)}% less than $against"

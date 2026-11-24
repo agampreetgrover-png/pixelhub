@@ -56,7 +56,12 @@ import com.agam.pixelhub.widget.kit.WidgetPalette
 import com.agam.pixelhub.widget.kit.WidgetShape
 import com.agam.pixelhub.widget.kit.openTab
 import com.agam.pixelhub.widget.kit.shapeOf
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import java.time.YearMonth
 import java.time.format.TextStyle as JavaTextStyle
 import java.util.Locale
@@ -70,9 +75,17 @@ class MoneyWidgetReceiver : GlanceAppWidgetReceiver() {
 class MoneyWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val month = context.container.expenses.month()
-        val first = month.first()
+        val expenses = context.container.expenses
+        val first = expenses.month().first()
+        // Re-reads the month every minute, so a session still open at midnight on the 1st moves on.
+        val month = flow {
+            while (true) {
+                emit(YearMonth.now())
+                delay(60_000L)
+            }
+        }.distinctUntilChanged().flatMapLatest { expenses.month(it) }
         provideContent {
             // Follows this month live: a new expense or budget redraws at once.
             val summary by remember { month }.collectAsState(first)
