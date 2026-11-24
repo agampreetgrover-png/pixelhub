@@ -286,7 +286,7 @@ fun RemindersScreen() {
                 )
             }
 
-            if (all != null && all.isEmpty()) {
+            if (all.isEmpty()) {
                 item(key = "empty", contentType = "empty") {
                     EmptyState(
                         title = "Nothing to remember yet",
@@ -569,29 +569,28 @@ private fun HeroPill(
 /** One-tap starting points. Each opens the editor already set to that time. */
 @Composable
 private fun QuickAdd(onPick: (ReminderDraft) -> Unit, modifier: Modifier = Modifier) {
-    // Re-read on resume (a skipped composable never re-reads the clock), so "In 1 hour" and
-    // "Tonight" are right after the app sat in the background.
+    // Re-read on resume (a skipped composable never re-reads the clock), so the choice between
+    // "Tonight" and "Next week" is right after the app sat in the background.
     var nowTime by remember { mutableStateOf(LocalDateTime.now()) }
     LifecycleResumeEffect(Unit) {
         nowTime = LocalDateTime.now()
         onPauseOrDispose { }
     }
-    val today = nowTime.toLocalDate()
-    val inAnHour = nowTime.plusHours(1).truncatedTo(ChronoUnit.MINUTES)
-    val tonight = LocalDateTime.of(today, LocalTime.of(20, 0))
-    val tomorrow = LocalDateTime.of(today.plusDays(1), LocalTime.of(9, 0))
-    val nextWeek = LocalDateTime.of(today.plusWeeks(1), LocalTime.of(9, 0))
+    val tonight = LocalDateTime.of(nowTime.toLocalDate(), LocalTime.of(20, 0))
+    // Each time is worked out from the clock at the tap, so a screen left open past midnight or
+    // for most of an hour still gives "Tomorrow" and "In 1 hour" their real meaning.
     // "Tonight" only while there's still an evening left; otherwise offer next week.
-    val third = if (nowTime.isBefore(tonight.minusHours(1))) {
-        Triple(Icons.Outlined.Bedtime, "Tonight", tonight)
-    } else {
-        Triple(Icons.Outlined.Event, "Next week", nextWeek)
-    }
-    val options = listOf(
-        Triple(Icons.Outlined.Add, "New", null),
-        Triple(Icons.Outlined.Timer, "In 1 hour", inAnHour),
+    val third: Triple<ImageVector, String, (LocalDateTime) -> LocalDateTime?> =
+        if (nowTime.isBefore(tonight.minusHours(1))) {
+            Triple(Icons.Outlined.Bedtime, "Tonight", { n -> LocalDateTime.of(n.toLocalDate(), LocalTime.of(20, 0)) })
+        } else {
+            Triple(Icons.Outlined.Event, "Next week", { n -> LocalDateTime.of(n.toLocalDate().plusWeeks(1), LocalTime.of(9, 0)) })
+        }
+    val options = listOf<Triple<ImageVector, String, (LocalDateTime) -> LocalDateTime?>>(
+        Triple(Icons.Outlined.Add, "New", { _ -> null }),
+        Triple(Icons.Outlined.Timer, "In 1 hour", { n -> n.plusHours(1).truncatedTo(ChronoUnit.MINUTES) }),
         third,
-        Triple(Icons.Outlined.WbSunny, "Tomorrow", tomorrow),
+        Triple(Icons.Outlined.WbSunny, "Tomorrow", { n -> LocalDateTime.of(n.toLocalDate().plusDays(1), LocalTime.of(9, 0)) }),
     )
     Row(
         modifier
@@ -599,14 +598,16 @@ private fun QuickAdd(onPick: (ReminderDraft) -> Unit, modifier: Modifier = Modif
             .hubCard(Hub.colors.raised)
             .padding(horizontal = 6.dp, vertical = 12.dp),
     ) {
-        options.forEach { (icon, label, at) ->
+        options.forEach { (icon, label, make) ->
             QuickAction(
                 icon = icon,
                 label = label,
                 onClick = {
-                    // A time that has slipped into the past since it was offered moves to an hour from now.
-                    val fresh = at?.takeIf { it.isAfter(LocalDateTime.now()) }
-                        ?: at?.let { LocalDateTime.now().plusHours(1).truncatedTo(ChronoUnit.MINUTES) }
+                    val n = LocalDateTime.now()
+                    val at = make(n)
+                    // A time already past (e.g. "Tonight" offered before 20:00, tapped after) moves to an hour from now.
+                    val fresh = at?.takeIf { it.isAfter(n) }
+                        ?: at?.let { n.plusHours(1).truncatedTo(ChronoUnit.MINUTES) }
                     onPick(if (fresh == null) ReminderDraft() else ReminderDraft(at = fresh))
                 },
                 modifier = Modifier.weight(1f),

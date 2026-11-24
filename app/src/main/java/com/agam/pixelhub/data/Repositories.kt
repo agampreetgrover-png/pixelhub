@@ -1,6 +1,7 @@
 package com.agam.pixelhub.data
 
 import com.agam.pixelhub.calendar.CalendarSync
+import com.agam.pixelhub.scheduling.Days
 import com.agam.pixelhub.scheduling.Recurrence
 import com.agam.pixelhub.scheduling.RecurrenceCalc
 import com.agam.pixelhub.scheduling.Scheduler
@@ -36,11 +37,15 @@ class ReminderRepository(
         anchor: LocalDateTime,
         recurrence: Recurrence,
         done: Boolean? = null,
+        previous: Reminder? = null,
     ): Reminder {
         val now = ZonedDateTime.now()
-        val next = RecurrenceCalc.nextTrigger(recurrence, anchor, now)
-        val trigger = (next ?: anchor.atZone(now.zone)).millis()
         val existing = if (id == 0L) null else dao.get(id)
+        // The row as it was (on an undo, the deleted one): a one-off that already went off stays
+        // fired, or a DST repeated hour or a move west would show it a second time.
+        val fired = (existing ?: previous)?.takeIf { !it.recurrence.isRepeating && it.notifiedAt > 0L }
+        val next = RecurrenceCalc.nextTriggerOnSave(recurrence, anchor, now, fired?.anchor)
+        val trigger = RecurrenceCalc.storedTriggerOnSave(next, anchor, now, fired?.anchor, fired?.triggerAt)
         val isDone = done ?: existing?.done ?: false
         val draft = Reminder(
             id = id, title = title.trim(), notes = notes.trim(),
@@ -51,7 +56,7 @@ class ReminderRepository(
             // reboot would pop it up as "missed while the phone was off".
             notifiedAt = if (next != null) 0L else existing?.notifiedAt?.takeIf { it > 0L } ?: now.millis(),
         )
-        val savedId = if (id == 0L) dao.insert(draft) else id.also { dao.update(draft) }
+        val savedId = if (id == 0L) dao.insert(draft) else id.also { dao.editKeepingEvent(draft) }
         // Only the text changed: keep a snooze in progress and the notification already showing
         // (the main trigger is replaced in place below). A new time, repeat or state starts over.
         val sameTiming = existing != null && existing.anchor == anchor &&
@@ -69,7 +74,33 @@ class ReminderRepository(
         calendarLock.withLock {
             calendar.select(calendarId)
             if (calendarId != null) dao.active().forEach { syncLocked(it) }
+            cleanupLocked()
         }
+    }
+
+    /**
+     * After a time-zone change (and rescheduleAll): moves the calendar copies to the reminders'
+     * wall-clock times in the new zone. A one-off that already went off keeps its event at the
+     * time it actually fired, as rescheduleAll keeps it fired.
+     */
+    suspend fun resyncCalendar() {
+        calendarLock.withLock {
+            dao.active().filter { it.recurrence.isRepeating || it.notifiedAt == 0L }.forEach { syncLocked(it) }
+        }
+    }
+
+    /**
+     * Removes calendar events that couldn't be removed while calendar access was off: those of
+     * deleted reminders, and of finished repeating ones (which would otherwise repeat forever).
+     */
+    suspend fun retryCalendarCleanup() {
+        calendarLock.withLock { cleanupLocked() }
+    }
+
+    private suspend fun cleanupLocked() {
+        if (!calendar.hasPermission()) return
+        calendar.retryPendingRemovals()
+        dao.doneWithEvent().filter { it.recurrence.isRepeating }.forEach { syncLocked(it) }
     }
 
     /**
@@ -88,12 +119,15 @@ class ReminderRepository(
         // un-ticking it saves again and copies it back as a fresh event.
         if (r.done && r.recurrence.isRepeating) {
             val eventId = r.calendarEventId ?: return r
-            calendar.remove(eventId)
-            return r.copy(calendarEventId = null).also { dao.update(it) }
+            // Not removed (no calendar access): keep the id so retryCalendarCleanup can try again.
+            if (!calendar.remove(eventId)) return r
+            dao.setCalendarEventId(r.id, null)
+            return r.copy(calendarEventId = null)
         }
         val eventId = calendar.push(r)
         if (eventId == r.calendarEventId) return r
-        return r.copy(calendarEventId = eventId).also { dao.update(it) }
+        dao.setCalendarEventId(r.id, eventId)
+        return r.copy(calendarEventId = eventId)
     }
 
     suspend fun setDone(reminder: Reminder, done: Boolean) {
@@ -102,7 +136,8 @@ class ReminderRepository(
             // The saved row, not the screen's copy: that may predate the calendar sync storing its
             // event id, and writing it back would make the next sync add a second event.
             val finished = calendarLock.withLock {
-                (dao.get(reminder.id) ?: return).copy(done = true).also { dao.update(it) }
+                dao.markDone(reminder.id)
+                dao.get(reminder.id) ?: return
             }
             syncToCalendar(finished)
         } else {
@@ -112,7 +147,7 @@ class ReminderRepository(
 
     /** Puts back a reminder that was just deleted (Undo). It gets a new id and calendar event. */
     suspend fun restore(r: Reminder): Reminder {
-        return save(0, r.title, r.notes, r.anchor, r.recurrence, done = r.done)
+        return save(0, r.title, r.notes, r.anchor, r.recurrence, done = r.done, previous = r)
     }
 
     suspend fun delete(reminder: Reminder) {
@@ -122,7 +157,7 @@ class ReminderRepository(
         calendarLock.withLock {
             val eventId = dao.get(reminder.id)?.calendarEventId ?: reminder.calendarEventId
             dao.delete(reminder)
-            eventId?.let { calendar.remove(it) }
+            eventId?.let { calendar.removeOrQueue(it) }
         }
     }
 
@@ -131,15 +166,21 @@ class ReminderRepository(
         val r = dao.get(id) ?: return null
         if (r.done) return null
         val now = ZonedDateTime.now()
-        var updated = r.copy(notifiedAt = now.millis())
-        if (r.recurrence.isRepeating) {
-            // Look slightly ahead so an early delivery can't re-schedule the same occurrence.
-            RecurrenceCalc.nextTrigger(r.recurrence, r.anchor, now.plusSeconds(30))?.let { next ->
-                updated = updated.copy(triggerAt = next.millis())
-                scheduler.scheduleReminder(id, updated.triggerAt)
-            }
+        // A one-off notifies once, whichever of this and rescheduleAll's "missed" gets there first.
+        if (!r.recurrence.isRepeating) return r.takeIf { dao.claimNotify(id, now.millis()) == 1 }
+        // A stale trigger (a reschedule re-armed an occurrence already handled here): this replaced
+        // the real next trigger, so put that back and show nothing.
+        if (r.triggerAt > now.millis() + 30_000) {
+            scheduler.scheduleReminder(id, r.triggerAt)
+            return null
         }
-        dao.update(updated)
+        var triggerAt = r.triggerAt
+        // Look slightly ahead so an early delivery can't re-schedule the same occurrence.
+        RecurrenceCalc.nextTrigger(r.recurrence, r.anchor, now.plusSeconds(30))?.let { next ->
+            triggerAt = next.millis()
+            scheduler.scheduleReminder(id, triggerAt)
+        }
+        dao.setTiming(id, triggerAt, now.millis())
         return r
     }
 
@@ -147,39 +188,56 @@ class ReminderRepository(
     suspend fun completeFromNotification(id: Long) {
         val r = dao.get(id) ?: return
         scheduler.cancelReminderSnooze(id)
-        if (!r.recurrence.isRepeating) dao.update(r.copy(done = true))
+        if (!r.recurrence.isRepeating) dao.markDone(id)
     }
 
     fun snooze(id: Long, minutes: Int) {
         scheduler.scheduleReminderSnooze(id, System.currentTimeMillis() + minutes * 60_000L)
     }
 
-    /** After boot or a clock/time-zone change. Returns reminders whose time passed while the phone was off. */
-    suspend fun rescheduleAll(): List<Reminder> {
+    /**
+     * After boot or a clock/time-zone change. Returns reminders whose time passed while the phone was off.
+     * [lostTriggers] false (a clock change): AlarmManager still holds every trigger and delivers
+     * overdue ones itself, so those aren't shown here as missed.
+     */
+    suspend fun rescheduleAll(lostTriggers: Boolean = true): List<Reminder> {
         val now = ZonedDateTime.now()
         val missed = mutableListOf<Reminder>()
         for (r in dao.active()) {
+            // onFired always moves a repeating reminder on to its next time, so one still in the
+            // past never went off. Due within the last minute (or with its trigger still held):
+            // fire it now rather than skip to the next occurrence. A past time fires at once.
+            if (r.recurrence.isRepeating && r.triggerAt in 1..now.millis() &&
+                (!lostTriggers || r.triggerAt >= now.millis() - MISSED_GRACE_MS)
+            ) {
+                scheduler.scheduleReminder(r.id, r.triggerAt)
+                continue
+            }
             val next = RecurrenceCalc.nextTrigger(r.recurrence, r.anchor, now)
             // A one-off that already went off stays fired, even if a time-zone change or the
             // clock going back puts its wall-clock time in the future again.
             if (next != null && (r.recurrence.isRepeating || r.notifiedAt == 0L)) {
                 val t = next.millis()
-                // onFired always moves a repeating reminder on to its next time, so one still in the
-                // past never went off (phone off): show it late instead of skipping to tomorrow. A
-                // minute's grace, so one going off right now isn't caught as well.
+                // Still in the past by more than the grace: it never went off (phone off), so
+                // show it late instead of skipping to tomorrow.
                 val late = r.recurrence.isRepeating && r.triggerAt in 1 until now.millis() - MISSED_GRACE_MS
-                val u = r.copy(triggerAt = t, notifiedAt = if (late) now.millis() else r.notifiedAt)
-                if (u != r) dao.update(u)
+                val notifiedAt = if (late) now.millis() else r.notifiedAt
+                if (t != r.triggerAt || notifiedAt != r.notifiedAt) dao.setTiming(r.id, t, notifiedAt)
                 scheduler.scheduleReminder(r.id, t)
-                if (late) missed += u
+                if (late) missed += r.copy(triggerAt = t, notifiedAt = notifiedAt)
             } else if (!r.recurrence.isRepeating && r.notifiedAt == 0L) {
-                val u = r.copy(notifiedAt = now.millis())
-                dao.update(u)
-                missed += u
+                // Claimed, so its still-armed trigger (onFired) can't show it a second time.
+                if (dao.claimNotify(r.id, now.millis()) == 1) missed += r.copy(notifiedAt = now.millis())
             }
         }
         return missed
     }
+
+    /** Writes everything but the calendar event id, which only the calendar sync owns. */
+    private suspend fun ReminderDao.editKeepingEvent(r: Reminder) = edit(
+        r.id, r.title, r.notes, r.anchor, r.triggerAt,
+        r.recurrence.type.name, r.recurrence.daysMask, r.recurrence.interval, r.done, r.notifiedAt,
+    )
 }
 
 class AlarmRepository(private val dao: AlarmDao, private val scheduler: Scheduler) {
@@ -220,14 +278,23 @@ class AlarmRepository(private val dao: AlarmDao, private val scheduler: Schedule
      * After boot or a clock change. Keeps a snooze in progress (the scheduler restores it).
      * Returns alarms that were due while the phone was off: a one-time one is switched off
      * rather than ringing a day late; a repeating one just moves on to its next day.
+     * [lostTriggers] false (a clock change): AlarmManager still holds every trigger and rings
+     * overdue ones itself, so those are left alone.
      */
-    suspend fun rescheduleAll(): List<Alarm> {
+    suspend fun rescheduleAll(lostTriggers: Boolean = true): List<Alarm> {
         val now = System.currentTimeMillis()
         val missed = mutableListOf<Alarm>()
         dao.enabled().forEach { a ->
-            // A minute's grace, so an alarm going off right now isn't taken for a missed one.
             val due = scheduler.alarmDueAt(a.id)
-            if (due != null && due < now - MISSED_GRACE_MS) {
+            if (due != null && due <= now) {
+                // Being delivered now; onFired switches a one-time alarm off or moves a repeating one on.
+                if (!lostTriggers) return@forEach
+                if (due >= now - MISSED_GRACE_MS) {
+                    // Due within the last minute and not handled yet (onFired would have moved
+                    // alarm_times on): ring now rather than skip to its next day.
+                    scheduler.scheduleAlarm(a.id, due)
+                    return@forEach
+                }
                 missed += a
                 if (a.daysMask == 0) {
                     dao.update(a.copy(enabled = false))
@@ -247,7 +314,7 @@ class AlarmRepository(private val dao: AlarmDao, private val scheduler: Schedule
 
     companion object {
         fun nextTrigger(a: Alarm, after: ZonedDateTime = ZonedDateTime.now()): ZonedDateTime =
-            RecurrenceCalc.nextAlarm(a.hour, a.minute, a.daysMask, after)
+            RecurrenceCalc.nextAlarm(a.hour, a.minute, a.daysMask, after, once = (a.daysMask and Days.ALL) == 0)
     }
 }
 

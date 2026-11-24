@@ -188,7 +188,7 @@ private fun RingScreen(ringing: AlarmRingService.Ringing, onSnooze: () -> Unit, 
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    ringing.label.ifBlank { "Alarm" },
+                    ringing.labels,
                     style = HubType.title.copy(fontSize = 22.sp, lineHeight = 30.sp),
                     color = on,
                     maxLines = 2,

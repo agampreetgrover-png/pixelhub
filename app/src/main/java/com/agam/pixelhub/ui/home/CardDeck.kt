@@ -10,7 +10,6 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -134,7 +133,7 @@ fun CardDeck(faces: List<CardFace>, modifier: Modifier = Modifier) {
     // Measured, not guessed: a fixed width cut "New alarm" off once the phone's font was scaled up.
     val notchWidth = notchWidthFor(faces.map { it.actionLabel }, chrome = NotchChrome + NotchGap, min = MinNotchWidth)
 
-    BoxWithConstraints(modifier.fillMaxWidth().height(Peek + CardHeight)) {
+    Box(modifier.fillMaxWidth().height(Peek + CardHeight)) {
         val notch = remember(notchWidth) { NotchShape(28.dp, 18.dp, notchWidth, NotchHeight) }
         faces.forEachIndexed { i, face ->
             // 1 when this card is in front, 0 at the back. Read inside the layout and draw lambdas.
@@ -239,7 +238,10 @@ private fun CardBody(face: CardFace, notchWidth: Dp) {
         Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
                 Text(face.kicker, style = HubType.small, color = soft, maxLines = 1)
-                RollingText(face.figure, HubType.clockLarge, color = on)
+                // "" while Home loads: an empty Text keeps the line's height so the foot doesn't jump,
+                // and RollingText then composes fresh with the real value, so nothing rolls.
+                if (face.figure.isEmpty()) Text("", style = HubType.clockLarge, color = on)
+                else RollingText(face.figure, HubType.clockLarge, color = on)
             }
             if (face.aside != null) {
                 Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 6.dp)) {

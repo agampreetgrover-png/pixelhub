@@ -23,8 +23,12 @@ import com.agam.pixelhub.expenses.Money
 import com.agam.pixelhub.expenses.MonthReport
 import com.agam.pixelhub.expenses.oneLine
 import com.agam.pixelhub.health.NudgeMath
+import com.agam.pixelhub.scheduling.Scheduler
 import com.agam.pixelhub.scheduling.runAsync
+import com.agam.pixelhub.ui.Fmt
 import com.agam.pixelhub.ui.Tab
+import java.time.Instant
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -198,6 +202,30 @@ object HealthNotifier {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
+}
+
+/**
+ * The ongoing "<label> snoozed / Rings again at … / Cancel snooze" note, posted again after a
+ * reboot or clock change (which clear notifications), when the snooze is re-armed. It matches
+ * the one AlarmRingService posts when the alarm is snoozed.
+ */
+object AlarmSnoozeNotifier {
+    fun show(context: Context, alarmId: Long, label: String, atMillis: Long) {
+        val at = Instant.ofEpochMilli(atMillis).atZone(ZoneId.systemDefault()).toLocalTime()
+        val n = NotificationCompat.Builder(context, Channels.ALARMS)
+            .setSmallIcon(R.drawable.ic_stat_pixelhub)
+            .setContentTitle("${label.ifBlank { "Alarm" }} snoozed")
+            .setContentText("Rings again at ${Fmt.time(context, at)}")
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setSilent(true)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .addAction(0, "Cancel snooze", context.container.scheduler.cancelSnoozeIntent(alarmId))
+            .build()
+        runCatching {
+            context.getSystemService(NotificationManager::class.java).notify(Scheduler.snoozedNotificationId(alarmId), n)
+        }
+    }
 }
 
 object ReminderNotifier {

@@ -36,6 +36,28 @@ class SettingsStore(private val context: Context) {
         context.settingsDataStore.edit { it[keyReportMonth] = month.toString() }
     }
 
+    /**
+     * Calendar events of deleted reminders that couldn't be removed yet (no calendar access then).
+     * In their own file, kept out of backup (data_extraction_rules.xml): event ids are per-device,
+     * and replayed on a new phone they could delete other PixelHub events there. Callers hold the
+     * reminders' calendar lock, so the read-modify-writes below don't interleave.
+     */
+    private val pendingDeletes get() = context.getSharedPreferences("calendar_pending", Context.MODE_PRIVATE)
+
+    fun pendingCalendarDeletes(): Set<Long> =
+        pendingDeletes.getStringSet(KEY_PENDING_IDS, null).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+
+    fun addPendingCalendarDelete(eventId: Long) {
+        // A new set each time: the one getStringSet returns must not be modified.
+        val ids = pendingDeletes.getStringSet(KEY_PENDING_IDS, null).orEmpty()
+        pendingDeletes.edit().putStringSet(KEY_PENDING_IDS, ids + eventId.toString()).commit()
+    }
+
+    fun removePendingCalendarDeletes(eventIds: Set<Long>) {
+        val ids = pendingDeletes.getStringSet(KEY_PENDING_IDS, null).orEmpty()
+        pendingDeletes.edit().putStringSet(KEY_PENDING_IDS, ids - eventIds.map { it.toString() }.toSet()).commit()
+    }
+
     suspend fun setCalendarId(id: Long?) {
         context.settingsDataStore.edit {
             if (id == null) it.remove(keyCalendar) else it[keyCalendar] = id
@@ -53,5 +75,6 @@ class SettingsStore(private val context: Context) {
 
     companion object {
         const val DEFAULT_STEP_GOAL = 8_000L
+        private const val KEY_PENDING_IDS = "ids"
     }
 }

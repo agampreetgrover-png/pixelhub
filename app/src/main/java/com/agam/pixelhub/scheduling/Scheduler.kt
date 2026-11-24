@@ -66,6 +66,16 @@ class Scheduler(private val context: Context) {
     /** True while a snooze of this alarm is waiting to ring. */
     fun hasAlarmSnooze(id: Long): Boolean = snoozes.contains("a$id")
 
+    /** Alarm snoozes waiting to ring, alarm id to ring time (a past one rings now, as in [restoreSnoozes]). */
+    fun alarmSnoozes(): Map<Long, Long> {
+        val now = System.currentTimeMillis()
+        return snoozes.all.mapNotNull { (key, value) ->
+            val id = key.takeIf { it.startsWith("a") }?.drop(1)?.toLongOrNull()
+            val at = value as? Long
+            if (id == null || at == null) null else id to at.coerceAtLeast(now)
+        }.toMap()
+    }
+
     /** Only the alarm's own trigger; a snooze in progress keeps going. */
     fun cancelAlarmTrigger(id: Long) {
         cancel(ACTION_ALARM, id)

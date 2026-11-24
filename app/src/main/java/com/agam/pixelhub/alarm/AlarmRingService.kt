@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.Ringtone
 import android.media.RingtoneManager
@@ -15,6 +17,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -49,15 +52,26 @@ class AlarmRingService : Service() {
         val snoozeMinutes: Int,
         /** Ringing again after a snooze, so the ring screen and notification say so. */
         val snoozed: Boolean = false,
-    )
+        /** Alarms due at the same time that this one took over: they share its ring, Snooze and Dismiss. */
+        val others: List<Ringing> = emptyList(),
+    ) {
+        /** This alarm and the ones ringing with it. */
+        val all: List<Ringing> get() = listOf(this) + others
+
+        /** Every ringing alarm's label, for the ring screen and notification. */
+        val labels: String get() = all.joinToString(" · ") { it.label.ifBlank { "Alarm" } }
+    }
 
     private var player: MediaPlayer? = null
     private var systemRingtone: Ringtone? = null
     private var vibrator: Vibrator? = null
+    private var focusRequest: AudioFocusRequest? = null
+    /** When the current alarm started ringing (elapsedRealtime). */
+    private var ringStartedAt = 0L
     private val handler = Handler(Looper.getMainLooper())
     /** Nobody answered for [AUTO_STOP_MS]: stop, but leave a "missed" note so it isn't silent. */
     private val autoStop = Runnable {
-        ringingState.value?.let { r ->
+        ringingState.value?.all?.forEach { r ->
             notifyMissed(this, r.alarmId, r.label, "Rang at ${Fmt.time(this, LocalTime.of(r.hour, r.minute))} for 10 minutes")
         }
         finishRinging()
@@ -77,15 +91,11 @@ class AlarmRingService : Service() {
         when (intent?.action) {
             ACTION_START -> startRinging(intent)
             ACTION_SNOOZE -> {
-                ringingState.value?.let { r ->
-                    val at = System.currentTimeMillis() + r.snoozeMinutes * 60_000L
-                    container.scheduler.scheduleAlarmSnooze(r.alarmId, at)
-                    showSnoozed(r, at)
-                }
+                ringingState.value?.all?.forEach { snooze(it) }
                 finishRinging()
             }
             ACTION_DISMISS -> {
-                ringingState.value?.let { container.scheduler.cancelAlarmSnooze(it.alarmId) }
+                ringingState.value?.all?.forEach { container.scheduler.cancelAlarmSnooze(it.alarmId) }
                 finishRinging()
             }
             // Android 14+ lets an unlocked user swipe a foreground-service notification away, which
@@ -107,19 +117,27 @@ class AlarmRingService : Service() {
             snoozeMinutes = intent.getIntExtra(EXTRA_SNOOZE, 10),
             snoozed = intent.getBooleanExtra(EXTRA_SNOOZED, false),
         )
-        // Another alarm is already ringing: snooze it rather than silently dropping it.
-        ringingState.value?.takeIf { it.alarmId != ringing.alarmId }?.let { previous ->
-            val at = System.currentTimeMillis() + previous.snoozeMinutes * 60_000L
-            container.scheduler.scheduleAlarmSnooze(previous.alarmId, at)
-            showSnoozed(previous, at)
+        // Other alarms already ringing (not this one again).
+        val previous = ringingState.value?.all.orEmpty()
+            .map { it.copy(others = emptyList()) }
+            .filter { it.alarmId != ringing.alarmId }
+        // One that started moments ago was due at the same time: ring them together, so one Dismiss
+        // covers both while Snooze and the missed note still cover each. An older one is snoozed
+        // rather than silently dropped.
+        val current = if (SystemClock.elapsedRealtime() - ringStartedAt <= TAKEOVER_GRACE_MS) {
+            ringing.copy(others = previous)
+        } else {
+            previous.forEach { snooze(it) }
+            ringing
         }
         stopSound()
         getSystemService(NotificationManager::class.java).cancel(Scheduler.snoozedNotificationId(ringing.alarmId))
         getSystemService(NotificationManager::class.java).cancel(missedNotificationId(ringing.alarmId))
         // Publish state before the full-screen intent can launch the activity.
-        ringingState.value = ringing
+        ringingState.value = current
+        ringStartedAt = SystemClock.elapsedRealtime()
         startForeground(
-            NOTIFICATION_ID, buildNotification(ringing),
+            NOTIFICATION_ID, buildNotification(current),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
         )
         playSound(intent.getStringExtra(EXTRA_RINGTONE))
@@ -139,7 +157,7 @@ class AlarmRingService : Service() {
         )
         return NotificationCompat.Builder(this, Channels.ALARMS)
             .setSmallIcon(R.drawable.ic_stat_pixelhub)
-            .setContentTitle(r.label.ifBlank { "Alarm" })
+            .setContentTitle(r.labels)
             .setContentText(
                 if (r.snoozed) "Snoozed · set for ${Fmt.time(this, LocalTime.of(r.hour, r.minute))}"
                 else Fmt.time(this, LocalTime.of(r.hour, r.minute)),
@@ -154,6 +172,13 @@ class AlarmRingService : Service() {
             .addAction(0, "Snooze ${r.snoozeMinutes} min", servicePending(ACTION_SNOOZE, 1))
             .addAction(0, "Dismiss", servicePending(ACTION_DISMISS, 2))
             .build()
+    }
+
+    /** Rings [r] again after its snooze time. */
+    private fun snooze(r: Ringing) {
+        val at = System.currentTimeMillis() + r.snoozeMinutes * 60_000L
+        container.scheduler.scheduleAlarmSnooze(r.alarmId, at)
+        showSnoozed(r, at)
     }
 
     /**
@@ -187,6 +212,14 @@ class AlarmRingService : Service() {
             .setUsage(AudioAttributes.USAGE_ALARM) // rings even when the phone is on silent
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
+        // Pause or duck music and podcasts. Best effort: focus is denied in a call, and the alarm must still ring.
+        // Kept while one alarm takes over from another, so the music doesn't resume in between.
+        // Only a granted request is kept, so a takeover after a denial (say, in a call) asks again.
+        if (focusRequest == null) {
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attrs).build()
+            val res = runCatching { getSystemService(AudioManager::class.java).requestAudioFocus(req) }.getOrNull()
+            if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) focusRequest = req
+        }
         val candidates = listOfNotNull(
             ringtone?.toUri(),
             RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_ALARM),
@@ -246,9 +279,16 @@ class AlarmRingService : Service() {
         vibrator = null
     }
 
+    /** Lets paused music play again; only once no alarm is ringing. */
+    private fun releaseFocus() {
+        focusRequest?.let { req -> runCatching { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(req) } }
+        focusRequest = null
+    }
+
     private fun finishRinging() {
         handler.removeCallbacks(autoStop)
         stopSound()
+        releaseFocus()
         ringingState.value = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelfResult(lastStartId)
@@ -257,6 +297,7 @@ class AlarmRingService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(autoStop)
         stopSound()
+        releaseFocus()
         ringingState.value = null
         releaseHandoffWake()
         super.onDestroy()
@@ -305,10 +346,15 @@ class AlarmRingService : Service() {
         private const val NOTIFICATION_ID = 42
         private const val AUTO_STOP_MS = 10 * 60 * 1000L
         private const val HANDOFF_WAKE_MS = 60_000L
+        /** A second alarm within this long of the first takes over without snoozing the first. */
+        private const val TAKEOVER_GRACE_MS = 60_000L
 
         private val ringingState = MutableStateFlow<Ringing?>(null)
         /** The alarm ringing right now, or null. */
         val state: StateFlow<Ringing?> = ringingState.asStateFlow()
+
+        /** Whether alarm [id] is ringing now, on its own or together with another. */
+        fun isRinging(id: Long): Boolean = ringingState.value?.all?.any { it.alarmId == id } == true
 
         /**
          * Keeps the CPU awake from the alarm broadcast until the service is ringing. The

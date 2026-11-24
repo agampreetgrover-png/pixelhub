@@ -109,39 +109,61 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         }
     }
 
-    /** Deletes an event PixelHub created (Calendar sync removes it from Google too). */
-    suspend fun remove(eventId: Long) {
-        if (!hasPermission()) return
-        withContext(Dispatchers.IO) {
-            runCatching { if (isOurs(eventId)) resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, eventId), null, null) }
-                .onFailure { Log.w("PixelHub", "Calendar delete failed for event $eventId", it) }
+    /**
+     * Deletes an event PixelHub created (Calendar sync removes it from Google too). True when the
+     * event is gone (or was never ours); false when it may still be there (no calendar access, or
+     * the provider failed), so the caller keeps the id and tries again later.
+     */
+    suspend fun remove(eventId: Long): Boolean {
+        if (!hasPermission()) return false
+        return withContext(Dispatchers.IO) {
+            try {
+                if (ourCalendarId(eventId) != null) resolver.delete(ContentUris.withAppendedId(Events.CONTENT_URI, eventId), null, null)
+                true
+            } catch (e: Exception) {
+                Log.w("PixelHub", "Calendar delete failed for event $eventId", e)
+                false
+            }
         }
+    }
+
+    /** For a reminder that is being deleted: removes its event now, or keeps the id to retry once access is back. */
+    suspend fun removeOrQueue(eventId: Long) {
+        if (!remove(eventId)) settings.addPendingCalendarDelete(eventId)
+    }
+
+    /** Retries the deletions [removeOrQueue] couldn't do (calendar access was off at the time). */
+    suspend fun retryPendingRemovals() {
+        if (!hasPermission()) return
+        val removed = settings.pendingCalendarDeletes().filter { remove(it) }
+        if (removed.isNotEmpty()) settings.removePendingCalendarDeletes(removed.toSet())
     }
 
     /**
      * An event id saved in the database can point at someone else's event after a restore onto
      * a new phone, or after Calendar Storage was cleared: ids are per-device. Only events that
-     * still exist and carry PixelHub's footer are ever changed or deleted.
+     * still exist and carry PixelHub's footer are ever changed or deleted. Returns the calendar
+     * the event lives in, or null when it isn't ours (or is gone).
      */
-    private fun isOurs(eventId: Long): Boolean =
+    private fun ourCalendarId(eventId: Long): Long? =
         resolver.query(
             ContentUris.withAppendedId(Events.CONTENT_URI, eventId),
-            arrayOf(Events.DESCRIPTION), "${Events.DELETED} = 0", null, null,
-        )?.use { c -> c.moveToFirst() && CalendarAgenda.isFromPixelHub(c.getString(0)) } == true
+            arrayOf(Events.DESCRIPTION, Events.CALENDAR_ID), "${Events.DELETED} = 0", null, null,
+        )?.use { c -> if (c.moveToFirst() && CalendarAgenda.isFromPixelHub(c.getString(0))) c.getLong(1) else null }
 
     private fun upsert(calendarId: Long, r: Reminder): Long {
         val values = CalendarRules.eventValues(r, ZoneId.systemDefault())
-        // Not ours (or gone): leave it alone and create a fresh event below.
-        r.calendarEventId?.takeIf { isOurs(it) }?.let { eventId ->
+        r.calendarEventId?.let { eventId ->
+            // Not ours (or gone): leave it alone and create a fresh event below.
+            val current = ourCalendarId(eventId) ?: return@let
             val uri = ContentUris.withAppendedId(Events.CONTENT_URI, eventId)
-            // Update in place only if it still lives in the chosen calendar and wasn't deleted.
-            val updated = resolver.update(
-                uri, values,
-                "${Events.CALENDAR_ID} = ? AND ${Events.DELETED} = 0", arrayOf(calendarId.toString()),
-            )
-            if (updated > 0) return eventId
-            // Stale: it's in a different calendar (user switched) or was deleted. Replace it.
-            resolver.delete(uri, null, null)
+            // No selection: the provider rejects one on a single-event URI (IllegalArgumentException).
+            if (current == calendarId) {
+                if (resolver.update(uri, values, null, null) > 0) return eventId
+            } else {
+                // The user switched calendars: remove the old copy and insert into the new one.
+                resolver.delete(uri, null, null)
+            }
         }
         values.put(Events.CALENDAR_ID, calendarId)
         val inserted = requireNotNull(resolver.insert(Events.CONTENT_URI, values)) { "Calendar insert returned null" }

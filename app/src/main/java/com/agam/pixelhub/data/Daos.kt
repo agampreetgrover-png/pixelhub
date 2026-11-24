@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Update
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
+import java.time.LocalDateTime
 
 @Dao
 interface ReminderDao {
@@ -19,9 +20,39 @@ interface ReminderDao {
     @Query("SELECT * FROM reminders WHERE done = 0")
     suspend fun active(): List<Reminder>
 
+    /** Finished repeating reminders whose calendar event couldn't be removed yet. */
+    @Query("SELECT * FROM reminders WHERE done = 1 AND calendarEventId IS NOT NULL")
+    suspend fun doneWithEvent(): List<Reminder>
+
     @Insert suspend fun insert(reminder: Reminder): Long
-    @Update suspend fun update(reminder: Reminder)
     @Delete suspend fun delete(reminder: Reminder)
+
+    // Column-level writes: each path writes only what it owns, so a calendar sync, a fire and a
+    // notification's Done running at once can't write back each other's stale copy of the row.
+
+    /** Every column except calendarEventId, which only the calendar sync writes. */
+    @Query(
+        "UPDATE reminders SET title = :title, notes = :notes, anchor = :anchor, triggerAt = :triggerAt, " +
+            "rec_type = :recType, rec_daysMask = :recDaysMask, rec_interval = :recInterval, " +
+            "done = :done, notifiedAt = :notifiedAt WHERE id = :id",
+    )
+    suspend fun edit(
+        id: Long, title: String, notes: String, anchor: LocalDateTime, triggerAt: Long,
+        recType: String, recDaysMask: Int, recInterval: Int, done: Boolean, notifiedAt: Long,
+    )
+
+    @Query("UPDATE reminders SET calendarEventId = :eventId WHERE id = :id")
+    suspend fun setCalendarEventId(id: Long, eventId: Long?)
+
+    @Query("UPDATE reminders SET done = 1 WHERE id = :id")
+    suspend fun markDone(id: Long)
+
+    @Query("UPDATE reminders SET triggerAt = :triggerAt, notifiedAt = :notifiedAt WHERE id = :id")
+    suspend fun setTiming(id: Long, triggerAt: Long, notifiedAt: Long)
+
+    /** Claims a one-off's single notification: 1 for the first caller, 0 once shown (or done). */
+    @Query("UPDATE reminders SET notifiedAt = :now WHERE id = :id AND notifiedAt = 0 AND done = 0")
+    suspend fun claimNotify(id: Long, now: Long): Int
 }
 
 @Dao

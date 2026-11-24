@@ -67,7 +67,11 @@ object RecurrenceCalc {
         val start = if (anchorDate.isAfter(afterDate)) anchorDate else afterDate
 
         return when (rule.type) {
-            RepeatType.NONE -> at(anchorDate).takeIf { it.isAfter(after) }
+            // In a DST fall-back overlap, the second pass of the hour still counts for a one-off
+            // (repeating rules keep the first pass only, or they would fire twice that night).
+            RepeatType.NONE -> at(anchorDate).let { e ->
+                if (e.isAfter(after)) e else e.withLaterOffsetAtOverlap().takeIf { it.isAfter(after) }
+            }
             RepeatType.DAILY -> stepFrom(start, 1, after, at)
             RepeatType.WEEKLY -> {
                 val mask = rule.daysMask and Days.ALL
@@ -87,11 +91,46 @@ object RecurrenceCalc {
         }
     }
 
-    /** Next ring time for an alarm; daysMask 0 means "the next time the clock shows hh:mm". */
-    fun nextAlarm(hour: Int, minute: Int, daysMask: Int, after: ZonedDateTime): ZonedDateTime {
+    /**
+     * [nextTrigger] for a reminder being saved. [firedAnchor]: the saved row's time when it is a
+     * one-off that already went off. That one-off stays fired (as at a reschedule) even when its
+     * time is ahead again: the second pass of a DST fall-back hour, or after a move west. A new
+     * time or repeat rule arms it afresh.
+     */
+    fun nextTriggerOnSave(
+        rule: Recurrence,
+        anchor: LocalDateTime,
+        after: ZonedDateTime,
+        firedAnchor: LocalDateTime?,
+    ): ZonedDateTime? =
+        if (!rule.isRepeating && anchor == firedAnchor) null else nextTrigger(rule, anchor, after)
+
+    /**
+     * The triggerAt stored for a reminder being saved: its [next] trigger when armed. A one-off
+     * that already went off at this time keeps [firedAt], the instant it went off: read in today's
+     * zone its time can be ahead again (after a move west), and it would show as upcoming with
+     * nothing armed. Otherwise the time in [after]'s zone, which has passed.
+     */
+    fun storedTriggerOnSave(
+        next: ZonedDateTime?,
+        anchor: LocalDateTime,
+        after: ZonedDateTime,
+        firedAnchor: LocalDateTime?,
+        firedAt: Long?,
+    ): Long = next?.toInstant()?.toEpochMilli()
+        ?: firedAt?.takeIf { anchor == firedAnchor && it > 0L }
+        ?: anchor.atZone(after.zone).toInstant().toEpochMilli()
+
+    /**
+     * Next ring time for an alarm; daysMask 0 means "the next time the clock shows hh:mm". [once]:
+     * a one-time alarm, which may also ring in the second pass of a DST fall-back hour (it rings
+     * only once, so that can't double up the way a daily rule would).
+     */
+    fun nextAlarm(hour: Int, minute: Int, daysMask: Int, after: ZonedDateTime, once: Boolean = false): ZonedDateTime {
         val mask = daysMask and Days.ALL
-        val rule = if (mask == 0) Recurrence(RepeatType.DAILY) else Recurrence(RepeatType.WEEKLY, mask)
         val anchor = LocalDateTime.of(after.toLocalDate(), LocalTime.of(hour, minute))
+        if (once && mask == 0) nextTrigger(Recurrence.NONE, anchor, after)?.let { return it }
+        val rule = if (mask == 0) Recurrence(RepeatType.DAILY) else Recurrence(RepeatType.WEEKLY, mask)
         return checkNotNull(nextTrigger(rule, anchor, after))
     }
 

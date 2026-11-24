@@ -75,7 +75,12 @@ class BootReceiver : BroadcastReceiver() {
         // actions are protected: only the system can send them.
         if (intent.action !in HANDLED) return
         val c = context.container
-        runAsync { c.rearmAll() }
+        runAsync {
+            // A clock or time-zone change keeps AlarmManager's triggers; overdue ones are delivered as usual.
+            c.rearmAll(lostTriggers = intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED)
+            // Reminders are wall-clock times: move their calendar copies to the new zone.
+            if (intent.action == Intent.ACTION_TIMEZONE_CHANGED) c.reminders.resyncCalendar()
+        }
     }
 
     private companion object {

@@ -116,6 +116,7 @@ import com.agam.pixelhub.ui.theme.HubType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalTime
+import java.time.ZonedDateTime
 
 /**
  * The violet card's fill. A touch deeper in dark mode, where white text on the bright violet
@@ -201,19 +202,18 @@ fun AlarmsScreen() {
     }
 
     fun quickAlarm(minutes: Int) {
-        // A double tap would set two alarms for the same minute; the second then rings again
-        // as "Snoozed" after the first is dismissed.
+        // A double tap would set two alarms for the same minute, leaving a duplicate in the list.
         val tap = SystemClock.uptimeMillis()
         if (tap - lastQuickTap[0] < 1_000L) return
         lastQuickTap[0] = tap
         // Rounded to the nearest minute.
-        val t = LocalTime.now().plusSeconds(minutes * 60L + 30L)
+        val t = ZonedDateTime.now().plusSeconds(minutes * 60L + 30L).toLocalTime()
         if (list.any { it.label == QUICK_LABEL && it.enabled && (it.daysMask and Days.ALL) == 0 && it.hour == t.hour && it.minute == t.minute }) return
         // Reuse a spent quick alarm, but never replace one that is still set to ring.
         // A one-shot quick alarm that rang and was snoozed is switched off but still due to ring.
         val reuse = list.firstOrNull {
             it.label == QUICK_LABEL && (it.daysMask and Days.ALL) == 0 && !it.enabled &&
-                !c.scheduler.hasAlarmSnooze(it.id) && AlarmRingService.state.value?.alarmId != it.id
+                !c.scheduler.hasAlarmSnooze(it.id) && !AlarmRingService.isRinging(it.id)
         }
         val base = reuse ?: Alarm(hour = t.hour, minute = t.minute, label = QUICK_LABEL)
         save(base.copy(hour = t.hour, minute = t.minute, enabled = true))

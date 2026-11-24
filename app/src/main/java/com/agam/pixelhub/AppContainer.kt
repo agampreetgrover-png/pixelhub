@@ -15,6 +15,7 @@ import com.agam.pixelhub.data.SettingsStore
 import com.agam.pixelhub.data.ShortcutRepository
 import com.agam.pixelhub.expenses.ExpenseRepository
 import com.agam.pixelhub.health.HealthRepository
+import com.agam.pixelhub.notify.AlarmSnoozeNotifier
 import com.agam.pixelhub.notify.BudgetNotifier
 import com.agam.pixelhub.notify.ReminderNotifier
 import com.agam.pixelhub.notify.ReportNotifier
@@ -83,16 +84,26 @@ class AppContainer(context: Context) {
     /**
      * Puts every alarm, snooze, nudge and reminder back into AlarmManager, which forgets them on
      * reboot, force-stop and restore. Safe to repeat: each one replaces its own PendingIntent.
-     * Reminders missed in the meantime are shown now.
+     * Reminders missed in the meantime are shown now. [lostTriggers] false (a clock or time-zone
+     * change): AlarmManager kept its triggers and delivers overdue ones itself.
      */
-    suspend fun rearmAll() {
+    suspend fun rearmAll(lostTriggers: Boolean = true) {
         scheduler.restoreSnoozes()
-        alarms.rescheduleAll().forEach { a ->
+        // A reboot clears notifications, and the "Snoozed" note is the only sign a snoozed
+        // one-time alarm (already off in the list) will ring again; it also refreshes its time.
+        scheduler.alarmSnoozes().forEach { (id, at) ->
+            if (AlarmRingService.state.value?.alarmId == id) return@forEach
+            val alarm = alarms.get(id)
+            if (alarm == null) scheduler.cancelAlarmSnooze(id) else AlarmSnoozeNotifier.show(appContext, id, alarm.label, at)
+        }
+        alarms.rescheduleAll(lostTriggers).forEach { a ->
             AlarmRingService.notifyMissed(appContext, a.id, a.label, "Due at ${Fmt.time(appContext, LocalTime.of(a.hour, a.minute))} while the phone was off")
         }
         healthNudges.rescheduleAll()
-        reminders.rescheduleAll().forEach { ReminderNotifier.show(appContext, it) }
+        reminders.rescheduleAll(lostTriggers).forEach { ReminderNotifier.show(appContext, it) }
         scheduleMonthlyReport()
+        // Calendar events left behind while calendar access was off.
+        reminders.retryCalendarCleanup()
     }
 
     /** A month whose report the Money page should open (from the report notification); the page clears it. */

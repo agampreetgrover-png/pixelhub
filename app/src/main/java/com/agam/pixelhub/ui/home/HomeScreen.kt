@@ -88,6 +88,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -137,6 +138,7 @@ import com.agam.pixelhub.ui.motion.revealExit
 import com.agam.pixelhub.ui.motion.staggerIn
 import com.agam.pixelhub.ui.reminders.ReminderDraft
 import com.agam.pixelhub.ui.reminders.ReminderEditorDialog
+import com.agam.pixelhub.ui.reminders.defaultReminderTime
 import com.agam.pixelhub.ui.settings.rememberSetupChecks
 import com.agam.pixelhub.ui.theme.Hub
 import com.agam.pixelhub.ui.theme.HubType
@@ -145,6 +147,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.YearMonth
 import java.time.ZoneId
@@ -171,7 +174,8 @@ private sealed interface TodayItem {
 private sealed interface HomeEditor {
     data class NewAlarm(val hour: Int, val minute: Int) : HomeEditor
     data class EditAlarm(val id: Long) : HomeEditor
-    data object NewReminder : HomeEditor
+    /** [at] is fixed when the editor opens, so the sheet's default time can't drift as the clock ticks. */
+    data class NewReminder(val at: LocalDateTime) : HomeEditor
     data class EditReminder(val id: Long) : HomeEditor
     data object NewExpense : HomeEditor
 }
@@ -183,7 +187,7 @@ private val HomeEditorSaver: Saver<HomeEditor?, String> = Saver(
             null -> null
             is HomeEditor.NewAlarm -> "na:${e.hour}:${e.minute}"
             is HomeEditor.EditAlarm -> "ea:${e.id}"
-            HomeEditor.NewReminder -> "nr"
+            is HomeEditor.NewReminder -> "nr:${e.at}"
             is HomeEditor.EditReminder -> "er:${e.id}"
             HomeEditor.NewExpense -> "nx"
         }
@@ -193,7 +197,10 @@ private val HomeEditorSaver: Saver<HomeEditor?, String> = Saver(
         when (p[0]) {
             "na" -> HomeEditor.NewAlarm(p[1].toInt(), p[2].toInt())
             "ea" -> HomeEditor.EditAlarm(p[1].toLong())
-            "nr" -> HomeEditor.NewReminder
+            // substringAfter, not p[1]: the ISO time itself contains ':'.
+            "nr" -> HomeEditor.NewReminder(
+                runCatching { LocalDateTime.parse(s.substringAfter(':')) }.getOrElse { defaultReminderTime() },
+            )
             "er" -> HomeEditor.EditReminder(p[1].toLong())
             else -> HomeEditor.NewExpense
         }
@@ -206,8 +213,12 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
     val context = LocalContext.current
     val app = context.container
     val colors = Hub.colors
-    val reminders by app.reminders.all.collectAsStateWithLifecycle(emptyList())
-    val alarms by app.alarms.all.collectAsStateWithLifecycle(emptyList())
+    // Null until Room answers, so returning to Home doesn't flash "No alarm on" and then roll.
+    val remindersOrNull by app.reminders.all.collectAsStateWithLifecycle<List<Reminder>?>(null)
+    val alarmsOrNull by app.alarms.all.collectAsStateWithLifecycle<List<Alarm>?>(null)
+    val loaded = remindersOrNull != null && alarmsOrNull != null
+    val reminders = remindersOrNull.orEmpty()
+    val alarms = alarmsOrNull.orEmpty()
     val checks = rememberSetupChecks()
     val pendingSetup = checks.count { !it.ok }
     val stagger = rememberStagger()
@@ -267,13 +278,14 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
         color = colors.dawn,
         onColor = colors.onDawn,
         icon = Icons.Outlined.Alarm,
-        corner = nextAlarm?.let { (a, _) -> Days.label(a.daysMask) } ?: "${alarms.size} saved",
-        kicker = if (nextAlarm != null) "Next alarm" else "No alarm on",
-        figure = nextAlarm?.let { (a, _) -> Fmt.time(context, LocalTime.of(a.hour, a.minute)) } ?: "Off",
+        // Blank while loading: "" grows into the real figure without a roll.
+        corner = if (!loaded) "" else nextAlarm?.let { (a, _) -> Days.label(a.daysMask) } ?: "${alarms.size} saved",
+        kicker = if (!loaded) "" else if (nextAlarm != null) "Next alarm" else "No alarm on",
+        figure = if (!loaded) "" else nextAlarm?.let { (a, _) -> Fmt.time(context, LocalTime.of(a.hour, a.minute)) } ?: "Off",
         asideLabel = nextAlarm?.let { "Rings in" },
         aside = nextAlarm?.let { (_, at) -> Fmt.untilText(at, nowMillis) },
-        footLabel = "Label",
-        foot = nextAlarm?.first?.label?.ifBlank { "Alarm" } ?: "Set one for tomorrow",
+        footLabel = if (!loaded) "" else "Label",
+        foot = if (!loaded) "" else nextAlarm?.first?.label?.ifBlank { "Alarm" } ?: "Set one for tomorrow",
         actionLabel = "New alarm",
         onAction = { editor = HomeEditor.NewAlarm(7, 0) },
         onOpen = { nextAlarm?.let { editor = HomeEditor.EditAlarm(it.first.id) } ?: onNavigate(Tab.ALARMS) },
@@ -283,19 +295,20 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
         color = colors.sun,
         onColor = colors.onSun,
         icon = Icons.Outlined.NotificationsActive,
-        corner = nextReminder?.let { dayOf(it.triggerAt) } ?: if (overdue > 0) "Overdue" else "All clear",
+        corner = if (!loaded) "" else nextReminder?.let { dayOf(it.triggerAt) } ?: if (overdue > 0) "Overdue" else "All clear",
         kicker = when {
+            !loaded -> ""
             nextReminder != null -> "Next reminder"
             overdue > 0 -> "Overdue"
             else -> "Nothing due"
         },
-        figure = nextReminder?.let { timeOf(it.triggerAt) } ?: if (overdue > 0) "$overdue" else "Free",
+        figure = if (!loaded) "" else nextReminder?.let { timeOf(it.triggerAt) } ?: if (overdue > 0) "$overdue" else "Free",
         asideLabel = nextReminder?.let { "Due in" },
         aside = nextReminder?.let { Fmt.untilText(it.triggerAt, nowMillis) },
-        footLabel = "Reminder",
-        foot = nextReminder?.title ?: if (overdue > 0) "$overdue overdue" else "Add what's on your mind",
+        footLabel = if (!loaded) "" else "Reminder",
+        foot = if (!loaded) "" else nextReminder?.title ?: if (overdue > 0) "$overdue overdue" else "Add what's on your mind",
         actionLabel = "Reminder",
-        onAction = { editor = HomeEditor.NewReminder },
+        onAction = { editor = HomeEditor.NewReminder(defaultReminderTime()) },
         onOpen = { nextReminder?.let { editor = HomeEditor.EditReminder(it.id) } ?: onNavigate(Tab.REMINDERS) },
     )
 
@@ -353,7 +366,7 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 QuickAction(Icons.Outlined.AddAlarm, "Alarm", onClick = { editor = HomeEditor.NewAlarm(7, 0) })
-                QuickAction(Icons.Outlined.AddAlert, "Reminder", onClick = { editor = HomeEditor.NewReminder })
+                QuickAction(Icons.Outlined.AddAlert, "Reminder", onClick = { editor = HomeEditor.NewReminder(defaultReminderTime()) })
                 QuickAction(Icons.Outlined.Payments, "Expense", onClick = { editor = HomeEditor.NewExpense })
                 QuickAction(Icons.Outlined.MoreHoriz, "More", onClick = onOpenMenu)
             }
@@ -380,12 +393,19 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                     .fillMaxWidth()
                     .hubCard(colors.raised)
                     .padding(bottom = 8.dp)
-                    .animateContentSize(if (reduced) snap() else tween(220, easing = Motion.EaseOut))
+                    // Added once Room has answered: a fresh node takes its first size as is, so the
+                    // load itself never animates, only later changes do.
+                    .then(if (loaded) Modifier.animateContentSize(if (reduced) snap() else tween(220, easing = Motion.EaseOut)) else Modifier)
                     .staggerIn(stagger, "today", 5),
             ) {
                 CardHeader("Today", "View all") { onNavigate(Tab.REMINDERS) }
                 if (today.isEmpty()) {
-                    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Kept as an invisible, inert placeholder while loading, so with nothing due the card's
+                    // height never changes and it doesn't flash "Nothing" before the real rows.
+                    Row(
+                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp).alpha(if (loaded) 1f else 0f),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
                             "Nothing in the next 24 hours.",
                             style = HubType.body, color = colors.inkMuted,
@@ -393,7 +413,7 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                         )
                         QuietButton(
                             "Add",
-                            onClick = { editor = HomeEditor.NewReminder },
+                            onClick = { if (loaded) editor = HomeEditor.NewReminder(defaultReminderTime()) },
                             modifier = Modifier.semantics { contentDescription = "Add reminder" },
                         )
                     }
@@ -417,8 +437,10 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                             // Ticking a repeating reminder would end the whole series; it shows when it fires next instead.
                             onDone = if (item.reminder.recurrence.isRepeating) null else {
                                 {
-                                    // The row has already drawn its tick and folded away.
+                                    // Written from appScope at tick time, so leaving Home or locking the
+                                    // phone can't lose it; the delay lets the row draw its tick and fold first.
                                     app.appScope.launch {
+                                        delay(if (reduced) 300L else 500L)
                                         ReminderNotifier.cancel(context, item.reminder.id)
                                         app.reminders.setDone(item.reminder, true)
                                     }
@@ -483,8 +505,8 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                 onDelete = { editor = null; app.appScope.launch { app.alarms.delete(a) } },
             )
         }
-        HomeEditor.NewReminder -> ReminderEditorDialog(
-            initial = ReminderDraft(),
+        is HomeEditor.NewReminder -> ReminderEditorDialog(
+            initial = ReminderDraft(at = e.at),
             isNew = true,
             onDismiss = { editor = null },
             onSave = { d -> editor = null; app.appScope.launch { app.reminders.save(0, d.title, d.notes, d.at, d.recurrence) } },
@@ -496,7 +518,11 @@ fun HomeScreen(onNavigate: (Tab) -> Unit, assistant: AssistantViewModel, onOpenM
                 onDismiss = { editor = null },
                 onSave = { d ->
                     editor = null
-                    app.appScope.launch { app.reminders.save(r.id, d.title, d.notes, d.at, d.recurrence) }
+                    // A new time or repeat brings a finished reminder back; a title fix leaves it done.
+                    val reopen = r.done && (d.at != r.anchor || d.recurrence != r.recurrence)
+                    app.appScope.launch {
+                        app.reminders.save(r.id, d.title, d.notes, d.at, d.recurrence, done = if (reopen) false else null)
+                    }
                 },
             )
         }
@@ -566,13 +592,12 @@ private fun ReminderRow(
             shown.targetState = false
         }
     }
-    // Only once it has fully folded away; fires once per tick. Normally the reminder then leaves
-    // the list and this row with it; if it is still here a while later, the tick didn't stick,
-    // so the row comes back instead of staying invisible.
+    // Once it has fully folded away the reminder normally leaves the list and this row with it;
+    // if it is still here a while later, the tick didn't stick, so the row comes back instead of
+    // staying invisible.
     LaunchedEffect(shown) {
         while (true) {
             snapshotFlow { shown.isIdle && !shown.currentState }.first { it }
-            done?.invoke()
             delay(2_000)
             ticked = false
             shown.targetState = true
@@ -607,7 +632,7 @@ private fun ReminderRow(
             CheckDot(
                 checked = ticked,
                 // Once only: a second tap while the row folds away does nothing.
-                onCheckedChange = { if (it && !ticked) ticked = true },
+                onCheckedChange = { if (it && !ticked) { ticked = true; done?.invoke() } },
                 accent = c.ok,
                 size = 24.dp,
                 contentDescription = "Mark ${r.title} done",

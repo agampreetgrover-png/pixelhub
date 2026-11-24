@@ -87,6 +87,98 @@ class RecurrenceTest {
     @Test fun weekdayAlarmSkipsWeekend() =
         assertEquals(at("2026-11-09T06:30"), RecurrenceCalc.nextAlarm(6, 30, Days.WEEKDAYS, at("2026-11-06T08:00")))
 
+    // UK clocks go back from 02:00 BST to 01:00 GMT on 2026-10-25, so 01:00-02:00 happens twice.
+    private val london = ZoneId.of("Europe/London")
+    private fun secondPass(s: String) = ldt(s).atZone(london).withLaterOffsetAtOverlap()
+
+    @Test fun oneOffInSecondPassOfRepeatedHourStillFires() =
+        assertEquals(
+            secondPass("2026-10-25T01:40"),
+            RecurrenceCalc.nextTrigger(Recurrence.NONE, ldt("2026-10-25T01:40"), secondPass("2026-10-25T01:10")),
+        )
+
+    @Test fun oneTimeAlarmInSecondPassOfRepeatedHourRingsToday() =
+        assertEquals(
+            secondPass("2026-10-25T01:40"),
+            RecurrenceCalc.nextAlarm(1, 40, 0, secondPass("2026-10-25T01:10"), once = true),
+        )
+
+    @Test fun dailyRuleFiresOnlyOnceInRepeatedHour() =
+        // After the first-pass 01:40 has gone off, the next one is tomorrow, not 01:40 GMT today.
+        assertEquals(
+            ldt("2026-10-26T01:40").atZone(london),
+            RecurrenceCalc.nextAlarm(1, 40, 0, ldt("2026-10-25T01:41").atZone(london)),
+        )
+
+    @Test fun savingOneOffThatFiredInFirstPassDoesNotRearmForSecondPass() =
+        // Fired at 01:40 BST; a title edit (or undo, or un-tick) at 01:45 BST must not arm 01:40 GMT.
+        assertNull(
+            RecurrenceCalc.nextTriggerOnSave(
+                Recurrence.NONE, ldt("2026-10-25T01:40"), ldt("2026-10-25T01:45").atZone(london),
+                firedAnchor = ldt("2026-10-25T01:40"),
+            ),
+        )
+
+    @Test fun savingNewOneOffInFirstPassStillArmsSecondPass() =
+        assertEquals(
+            secondPass("2026-10-25T01:40"),
+            RecurrenceCalc.nextTriggerOnSave(
+                Recurrence.NONE, ldt("2026-10-25T01:40"), ldt("2026-10-25T01:45").atZone(london), firedAnchor = null,
+            ),
+        )
+
+    @Test fun savingFiredOneOffWithNewTimeArmsIt() =
+        assertEquals(
+            at("2026-11-05T18:00"),
+            RecurrenceCalc.nextTriggerOnSave(
+                Recurrence.NONE, ldt("2026-11-05T18:00"), at("2026-11-05T10:00"), firedAnchor = ldt("2026-11-05T09:00"),
+            ),
+        )
+
+    @Test fun savingFiredOneOffAsRepeatingArmsIt() =
+        assertEquals(
+            at("2026-11-06T09:00"),
+            RecurrenceCalc.nextTriggerOnSave(
+                daily, ldt("2026-11-05T09:00"), at("2026-11-05T10:00"), firedAnchor = ldt("2026-11-05T09:00"),
+            ),
+        )
+
+    @Test fun savingFiredOneOffAfterMoveWestKeepsTheInstantItFired() {
+        // Fired at 10:00 IST (04:30Z); a title edit at 06:00 GMT in London must not store 10:00 GMT.
+        val anchor = ldt("2026-11-05T10:00")
+        val firedAt = at("2026-11-05T10:00").toInstant().toEpochMilli()
+        val now = ldt("2026-11-05T06:00").atZone(london)
+        val next = RecurrenceCalc.nextTriggerOnSave(Recurrence.NONE, anchor, now, firedAnchor = anchor)
+        assertNull(next)
+        assertEquals(firedAt, RecurrenceCalc.storedTriggerOnSave(next, anchor, now, anchor, firedAt))
+    }
+
+    @Test fun savingFiredOneOffInSecondPassKeepsFirstPassInstant() {
+        val anchor = ldt("2026-10-25T01:40")
+        val firstPass = anchor.atZone(london).toInstant().toEpochMilli()
+        val now = ldt("2026-10-25T01:45").atZone(london)
+        assertEquals(firstPass, RecurrenceCalc.storedTriggerOnSave(null, anchor, now, anchor, firstPass))
+    }
+
+    @Test fun storedTriggerIsTheArmedTimeOrThePastTime() {
+        val now = at("2026-11-05T10:00")
+        assertEquals(
+            at("2026-11-05T18:00").toInstant().toEpochMilli(),
+            RecurrenceCalc.storedTriggerOnSave(
+                at("2026-11-05T18:00"), ldt("2026-11-05T18:00"), now, ldt("2026-11-05T09:00"), 1L,
+            ),
+        )
+        // Past and never fired (or fired at another time): the time in today's zone.
+        assertEquals(
+            at("2026-11-05T08:00").toInstant().toEpochMilli(),
+            RecurrenceCalc.storedTriggerOnSave(null, ldt("2026-11-05T08:00"), now, ldt("2026-11-05T09:00"), 1L),
+        )
+        assertEquals(
+            at("2026-11-05T08:00").toInstant().toEpochMilli(),
+            RecurrenceCalc.storedTriggerOnSave(null, ldt("2026-11-05T08:00"), now, null, null),
+        )
+    }
+
     @Test fun describeUsesFriendlyNames() {
         assertEquals("Weekdays", Recurrence(RepeatType.WEEKLY, Days.WEEKDAYS).describe())
         assertEquals("Every 3 days", Recurrence(RepeatType.EVERY_N_DAYS, interval = 3).describe())

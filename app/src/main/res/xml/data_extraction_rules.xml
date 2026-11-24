@@ -5,14 +5,25 @@
   - assistant_log.json: the raw requests typed to the assistant ("Ravi owes me 500").
   - widget_health.xml: steps and activity copied out of Health Connect for the widget;
     Health Connect keeps its own data and its own backup.
+  - snoozes.xml, alarm_times.xml: this phone's AlarmManager state (snooze times, when each
+    alarm is next due). Restored elsewhere, a stale snooze would ring at once and every alarm
+    would look missed, switching one-time alarms off.
+  - calendar_pending.xml: calendar event ids queued for deletion. Ids are per-device; replayed
+    on a new phone they would delete other PixelHub events there.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="assistant_log.json" />
         <exclude domain="sharedpref" path="widget_health.xml" />
+        <exclude domain="sharedpref" path="snoozes.xml" />
+        <exclude domain="sharedpref" path="alarm_times.xml" />
+        <exclude domain="sharedpref" path="calendar_pending.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="assistant_log.json" />
         <exclude domain="sharedpref" path="widget_health.xml" />
+        <exclude domain="sharedpref" path="snoozes.xml" />
+        <exclude domain="sharedpref" path="alarm_times.xml" />
+        <exclude domain="sharedpref" path="calendar_pending.xml" />
     </device-transfer>
 </data-extraction-rules>
