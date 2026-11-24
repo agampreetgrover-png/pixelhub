@@ -289,7 +289,8 @@ fun AssistantScreen(vm: AssistantViewModel, onBack: () -> Unit) {
                         item = item,
                         onConfirm = { vm.confirm(item.id) },
                         onEdit = when (item.command) {
-                            is ParsedCommand.CreateReminder, is ParsedCommand.CreateAlarm -> ({ editingId = item.id })
+                            is ParsedCommand.CreateReminder, is ParsedCommand.CreateAlarm ->
+                                ({ if (item.status == ChatItem.Status.PENDING) editingId = item.id })
                             else -> null
                         },
                         onCancel = { vm.cancel(item.id) },
@@ -301,7 +302,12 @@ fun AssistantScreen(vm: AssistantViewModel, onBack: () -> Unit) {
         }
     }
 
-    (items.firstOrNull { it.id == editingId } as? ChatItem.Action)?.let { item ->
+    // Only a draft still waiting can be edited: once Confirm has saved it, an edit would be dropped.
+    val editing = (items.firstOrNull { it.id == editingId } as? ChatItem.Action)?.takeIf { it.status == ChatItem.Status.PENDING }
+    LaunchedEffect(editing == null, editingId) {
+        if (editing == null && editingId != null) editingId = null
+    }
+    editing?.let { item ->
         when (val cmd = item.command) {
             is ParsedCommand.CreateReminder -> ReminderEditorDialog(
                 initial = ReminderDraft(cmd.title, cmd.notes, cmd.at, cmd.recurrence),

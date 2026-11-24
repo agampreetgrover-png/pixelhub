@@ -7,6 +7,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.Month
+import java.time.temporal.TemporalAdjusters
 import kotlin.math.roundToLong
 
 /** Text being taken apart: each rule that matches removes its words, and what's left is the title. */
@@ -50,13 +51,24 @@ internal data class DateHit(
     val part: DayPart? = null,
     val fromWeekday: Boolean = false,
     val impossible: Boolean = false,
+    /** Said as "tomorrow" or "kal": after midnight that can mean the coming morning, today's date. */
+    val fromTomorrow: Boolean = false,
 )
 
-/** "in 20 minutes" ([minutes]) or "in 3 days" ([days]). */
-internal data class Relative(val minutes: Long? = null, val days: Long? = null)
+/** "in 20 minutes" ([minutes]), "in 3 days" ([days]) or "in 2 months" ([months]). */
+internal data class Relative(val minutes: Long? = null, val days: Long? = null, val months: Long? = null)
 
-/** A repeat rule. WEEKLY with [mask] 0 means "on the weekday of the date". */
-internal data class RepeatHit(val type: RepeatType, val mask: Int = 0, val interval: Int = 1, val part: DayPart? = null) {
+/**
+ * A repeat rule. WEEKLY with [mask] 0 means "on the weekday of the date". [unsupported] is a
+ * repeat the app can't keep ("every hour", "every month"): the caller must say so.
+ */
+internal data class RepeatHit(
+    val type: RepeatType,
+    val mask: Int = 0,
+    val interval: Int = 1,
+    val part: DayPart? = null,
+    val unsupported: Boolean = false,
+) {
     fun toRecurrence(day: DayOfWeek): Recurrence = when (type) {
         RepeatType.WEEKLY -> Recurrence(RepeatType.WEEKLY, daysMask = if (mask != 0) mask else Days.bit(day))
         RepeatType.EVERY_N_DAYS, RepeatType.EVERY_N_WEEKS -> Recurrence(type, interval = interval)
@@ -82,7 +94,7 @@ internal object DateTimeRules {
     private const val MER = """(am|pm|a\.?m\.?|p\.?m\.?)"""
     // Decimals too: "in 1.5 hours" was left in the title with the reminder at the default time.
     private const val NUM = """\d+(?:\.\d+)?|an?|one|ek|two|do|three|teen|four|char|chaar|five|paanch|half\s+an?|half|aadhe|aadha|adha|adhe"""
-    private const val UNIT = """minutes?|mins?|m|hours?|hrs?|h|days?|weeks?"""
+    private const val UNIT = """minutes?|mins?|m|hours?|hrs?|h|days?|weeks?|months?|years?|yrs?"""
 
     fun dayOf(word: String): DayOfWeek? = when (word.take(3)) {
         "mon" -> DayOfWeek.MONDAY
@@ -115,11 +127,20 @@ internal object DateTimeRules {
     private val PLURAL_DAYS = Regex("""\b(?:on\s+)?((?:$DAYS_FULL)s(?:\s*(?:,|and|&)\s*(?:$DAYS_FULL)s?)*)\b""")
     private val WEEKLY = Regex("""\b(?:every\s+weeks?|each\s+week)\b""")
     private val ONE_DAY = Regex(DAY)
+    // Repeats with no RepeatType: read as nothing, they became one reminder tomorrow at 9. A bare
+    // "monthly" only where it ends the phrase ("pay rent monthly", "monthly on the 1st"): in "the
+    // monthly report" or "my yearly checkup" it's part of the title.
+    private val UNSUPPORTED_REPEAT = Regex(
+        """\b(?:every\s+(?:\d+\s+|half\s+(?:an?\s+)?)?(?:hours?|hrs?|minutes?|mins?|months?|mahine|years?|saal)\b""" +
+            """|(?:hourly|monthly|yearly|annually)\b""" +
+            """(?=\s*$|\s*[,.!?]|\s+(?:on|at|from|starting|until|till|by|in|ko|se|to|about)\b(?!-)))""",
+    )
 
     private fun maskOf(list: String): Int =
         ONE_DAY.findAll(list).mapNotNull { dayOf(it.value) }.fold(0) { m, d -> m or Days.bit(d) }
 
     fun repeat(sc: Scan): RepeatHit? {
+        if (sc.take(UNSUPPORTED_REPEAT) != null) return RepeatHit(RepeatType.NONE, unsupported = true)
         sc.take(EVERY_N)?.let { m ->
             // Too big for an Int ("every 3000000000 days") is still just "as rarely as allowed".
             val n = m.groupValues[1].toIntOrNull() ?: Int.MAX_VALUE
@@ -151,6 +172,7 @@ internal object DateTimeRules {
     /** About ten years: further off is a typo, and much further overflows the date maths. */
     private const val MAX_REL_DAYS = 3_660L
     private const val MAX_REL_MINUTES = MAX_REL_DAYS * 24 * 60
+    private const val MAX_REL_MONTHS = 120L // the same ten years
 
     private fun amountOf(word: String): Double? = when {
         word.first().isDigit() -> word.toDoubleOrNull()
@@ -169,6 +191,9 @@ internal object DateTimeRules {
         val m = sc.take(REL_PRE) ?: sc.take(REL_POST) ?: return null
         val n = (amountOf(m.groupValues[1]) ?: return null) + if (m.groupValues[4].isNotEmpty()) 0.5 else 0.0
         val unit = m.groupValues[2]
+        // Months and years go by the calendar, not a fixed number of days.
+        if (unit.startsWith("mo")) return Relative(months = n.roundToLong().coerceIn(1, MAX_REL_MONTHS))
+        if (unit.startsWith("y")) return Relative(months = (n * 12).roundToLong().coerceIn(1, MAX_REL_MONTHS))
         val extraMinutes = m.groupValues[3].toDoubleOrNull()
         val minutesPerUnit = when {
             unit.startsWith("d") -> 24 * 60.0
@@ -204,9 +229,22 @@ internal object DateTimeRules {
             "|rotis?|chapatis?|tickets?|people|persons?|times|baar|kms?|cm|mm|ft|feet|inch|inches|meters?|metres?" +
             "|mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?|reps?|sets?|laps?|pages?|rs|rupees?|percent"
     private val NUMERIC = Regex(
-        """\b(?:on\s+)?(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b(?!\s*(?:%|(?:$QUANTITY_WORDS)\b))""",
+        """\b(?:on\s+)?(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b(?!\s*(?:%|(?:$QUANTITY_WORDS|am|pm|a\.m|p\.m)\b))""",
     )
+    // With dashes only when the year is there too: "2-3 lemons" and "6-7 pm" are ranges, not dates.
+    private val NUMERIC_DASH = Regex("""\b(?:on\s+)?(\d{1,2})-(\d{1,2})-(\d{2,4})\b""")
     private val ORDINAL = Regex("""\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b""")
+    // After "on", ending the phrase, or next to "next month": "on the 10th", "pay rent the 10th",
+    // "10th of next month", "next month 10th".
+    private val ORDINAL_DATE = Regex(
+        """\bon\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b|\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b(?=\s*$|\s*[,.!?])""" +
+            """|\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\s+(?:of\s+)?(?=next\s+(?:months?|mahine)\b)""" +
+            """|(?<=\bnext (?:month|mahine) )(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b""",
+    )
+    // Not "next month's rent": that names what, not when.
+    private val NEXT_SPAN = Regex("""\bnext\s+(weeks?|months?|mahine|years?|saal)\b(?!')""")
+    // "next week friday", "friday next week": that weekday in the coming Monday-to-Sunday week.
+    private val NEXT_WEEK_DAY = Regex("""\bnext\s+week\s+(?:on\s+)?($DAY)\b|\b(?:on\s+)?($DAY)\s+(?:of\s+)?next\s+week\b""")
 
     private fun monthOf(word: String): Month? = Month.entries.firstOrNull { it.name.lowercase().startsWith(word.take(3)) }
 
@@ -217,11 +255,16 @@ internal object DateTimeRules {
     fun date(sc: Scan, today: LocalDate, past: Boolean): DateHit? {
         if (sc.take(DAY_BEFORE) != null) return DateHit(today.minusDays(2))
         if (sc.take(DAY_AFTER) != null) return DateHit(if (past) today.minusDays(2) else today.plusDays(2))
-        if (sc.take(TOMORROW) != null) return DateHit(today.plusDays(1))
+        if (sc.take(TOMORROW) != null) return DateHit(today.plusDays(1), fromTomorrow = true)
         if (sc.take(YESTERDAY) != null) return DateHit(today.minusDays(1))
-        if (sc.take(KAL) != null) return DateHit(if (past) today.minusDays(1) else today.plusDays(1))
+        if (sc.take(KAL) != null) return if (past) DateHit(today.minusDays(1)) else DateHit(today.plusDays(1), fromTomorrow = true)
         if (sc.take(TONIGHT) != null) return DateHit(today, part = DayPart.NIGHT)
         if (sc.take(TODAY) != null) return DateHit(today)
+        if (!past) sc.take(NEXT_WEEK_DAY)?.let { m ->
+            val day = dayOf(m.groupValues[1].ifEmpty { m.groupValues[2] }) ?: return null
+            val monday = today.plusWeeks(1).with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+            return DateHit(monday.with(TemporalAdjusters.nextOrSame(day)), fromWeekday = true)
+        }
         (sc.take(WEEKDAY) ?: sc.take(WEEKDAY_ABBR))?.let { m ->
             val day = dayOf(m.groupValues[2]) ?: return null
             val back = m.groupValues[1] == "last" || past
@@ -236,28 +279,63 @@ internal object DateTimeRules {
         }
         sc.take(DAY_MONTH)?.let { m -> return dayMonth(m.groupValues[1].toInt(), monthOf(m.groupValues[2]), null, today, past) }
         sc.take(MONTH_DAY)?.let { m -> return dayMonth(m.groupValues[2].toInt(), monthOf(m.groupValues[1]), null, today, past) }
-        sc.take(NUMERIC)?.let { m ->
-            val month = m.groupValues[2].toInt().takeIf { it in 1..12 }?.let { Month.of(it) }
+        // Checked before it's taken out: words that turn out not to be a date stay in the title.
+        (NUMERIC.find(sc.rest) ?: NUMERIC_DASH.find(sc.rest))?.let { m ->
+            val month = m.groupValues[2].toInt()
             val year = m.groupValues[3].takeIf { it.isNotEmpty() }?.toInt()?.let { if (it < 100) 2000 + it else it }
             val day = m.groupValues[1].toInt()
-            // Numbers that can't be a day and month ("50/50") were never a date; "31/4" was.
-            if (day !in 1..31) return null
-            return dayMonth(day, month, year, today, past)
+            if (day in 1..31 && month in 1..12) {
+                sc.cut(m.range)
+                return dayMonth(day, Month.of(month), year, today, past)
+            }
+            // "on 12/25", "13/13/2026": meant as a date, but there's no such day. "50/50" never was one.
+            if (day in 1..31 && (m.value.trimStart().startsWith("on") || year != null)) {
+                sc.cut(m.range)
+                return DateHit(today, impossible = true)
+            }
         }
-        sc.take(ORDINAL)?.let { m ->
-            val day = m.groupValues[1].toInt()
-            // The nearest month that has this day, ahead (or behind, for spending): "the 31st"
-            // said in November is 31 December, not dropped; "the 30th" in March looking back is
-            // 30 January, not a clamped 28 February.
-            val date = generateSequence(today.withDayOfMonth(1)) { if (past) it.minusMonths(1) else it.plusMonths(1) }
-                .take(13)
-                .mapNotNull { runCatching { it.withDayOfMonth(day) }.getOrNull() }
-                .firstOrNull { if (past) !it.isAfter(today) else !it.isBefore(today) }
-                ?: return null
-            return DateHit(date)
+        // An ordinal written as a date ("on the 10th") beats "next month"; one that names a thing
+        // ("our 25th anniversary", "the 2nd installment") doesn't, so it comes after NEXT_SPAN.
+        ORDINAL_DATE.find(sc.rest)?.let { m ->
+            val day = m.groupValues.drop(1).first { it.isNotEmpty() }.toInt()
+            // "next month on the 10th": the 10th of next month, not this one.
+            val span = if (past) null else NEXT_SPAN.find(sc.rest)
+                ?.takeIf { it.groupValues[1].startsWith("mo") || it.groupValues[1] == "mahine" }
+            if (span != null) {
+                val date = runCatching { today.plusMonths(1).withDayOfMonth(day) }.getOrNull()
+                // Cut the later words first, so the other range still points at the right text.
+                listOf(m.range, span.range).sortedByDescending { it.first }.forEach { sc.cut(it) }
+                return if (date != null) DateHit(date) else DateHit(today, impossible = true)
+            }
+            nearestWithDay(day, today, past)?.let { sc.cut(m.range); return DateHit(it) }
+        }
+        if (!past) sc.take(NEXT_SPAN)?.let { m ->
+            val unit = m.groupValues[1]
+            return DateHit(
+                when {
+                    unit.startsWith("w") -> today.plusWeeks(1)
+                    unit.startsWith("y") || unit == "saal" -> today.plusYears(1)
+                    else -> today.plusMonths(1)
+                },
+            )
+        }
+        // None ("the 40th anniversary"): not a date, and the words stay in the title.
+        ORDINAL.find(sc.rest)?.let { m ->
+            nearestWithDay(m.groupValues[1].toInt(), today, past)?.let { sc.cut(m.range); return DateHit(it) }
         }
         return null
     }
+
+    /**
+     * The nearest month that has [day], ahead (or behind, for spending): "the 31st" said in
+     * November is 31 December, not dropped; "the 30th" in March looking back is 30 January, not a
+     * clamped 28 February. Null when no month has it.
+     */
+    private fun nearestWithDay(day: Int, today: LocalDate, past: Boolean): LocalDate? =
+        generateSequence(today.withDayOfMonth(1)) { if (past) it.minusMonths(1) else it.plusMonths(1) }
+            .take(13)
+            .mapNotNull { runCatching { it.withDayOfMonth(day) }.getOrNull() }
+            .firstOrNull { if (past) !it.isAfter(today) else !it.isBefore(today) }
 
     private fun dayMonth(day: Int, month: Month?, year: Int?, today: LocalDate, past: Boolean): DateHit? {
         month ?: return null
@@ -275,7 +353,11 @@ internal object DateTimeRules {
     private val FRACTION = Regex("""\b(?:at\s+)?(saadhe|sadhe|sade|saade|sava|savaa|sawa|paune|pone)\s+(\d{1,2})(?:\s*oclock)?\b""")
     private val DEDH = Regex("""\b(?:at\s+)?(dedh|derh|dhai|dhaai|adhai)\s+oclock\b""")
     private val NOON = Regex("""\b(?:at\s+)?(noon|midday|midnight)\b""")
-    private val HHMM = Regex("""(?:\bat\s+|@\s*|\b)(\d{1,2})[:.](\d{2})\s*$MER?(?:\s*oclock)?(?![a-z\d])""")
+    // Not an amount: "take 2.50 mg at 8pm" was set for 14:50.
+    private val HHMM = Regex(
+        """(?:\bat\s+|@\s*|\b)(\d{1,2})[:.](\d{2})(?!\s*(?:%|(?:$QUANTITY_WORDS|mg|mcg|k|thousand|lakhs?|lacs?|crores?|cr)\b))""" +
+            """\s*$MER?(?:\s*oclock)?(?![a-z\d])""",
+    )
     private val H_MER = Regex("""(?:\bat\s+|@\s*|\b)(\d{1,2})\s*$MER(?![a-z])""")
     private val H_OCLOCK = Regex("""(?:\bat\s+)?\b(\d{1,2})\s*oclock\b""")
     // "this evening at 7" whole: taking only "evening at 7" left "this" in the title.
@@ -305,6 +387,41 @@ internal object DateTimeRules {
         sc.take(H_PART)?.let { m -> return ClockTime(m.groupValues[1].toInt(), 0, part = partOf(m.groupValues[2])) }
         sc.take(AT_H)?.let { m -> return ClockTime(m.groupValues[1].toInt(), 0) }
         return null
+    }
+
+    // Alarms only, where a bare number can only be the time: "alarm 7", "alarm for 6", "alarm at 7 30".
+    // "7 30" only after "at" or "for", a part of the day, or first in what's left (the trigger and
+    // date are gone by then): in "wake me up at 6 for the 10 30 train" the time is 6.
+    private val SPACED_HM = Regex(
+        """(?:\bat\s+|\bfor\s+|^\s*|(?<=\b(?:morning|afternoon|evening|night)\s{1,3}))""" +
+            """(\d{1,2})\s+(\d{2})\s*$MER?(?![a-z\d])(?!\s*(?:%|(?:$QUANTITY_WORDS)\b))""",
+    )
+    // Anywhere, once the anchored form and [time] have found nothing: "gym alarm 6 30". Not after
+    // "in" or "after", like BARE_H.
+    private val SPACED_HM_ANYWHERE = Regex(
+        """(?:\bat\s+|\bfor\s+|\b)(?<!\b(?:in|after)\s{1,3})(\d{1,2})\s+(\d{2})\s*$MER?(?![a-z\d])""" +
+            """(?!\s*(?:%|(?:$QUANTITY_WORDS)\b))""",
+    )
+    // Not "in 20" or "after 5": minutes without the unit, so asking beats a wrong alarm. Nor either
+    // number of a "10 30" (SPACED_HM_ANYWHERE takes a real one before this runs).
+    private val BARE_H = Regex(
+        """(?:\bat\s+|\bfor\s+|\b)(?<!\b(?:in|after)\s{1,3})(?<!\d\s{1,3})(\d{1,2})\b(?![:.]\d)(?!\s+\d)""" +
+            """(?!\s*(?:%|(?:$QUANTITY_WORDS)\b))""",
+    )
+
+    /** [time], plus the bare forms an alarm allows, removed from [sc]. */
+    fun alarmTime(sc: Scan): ClockTime? {
+        fun spaced(m: MatchResult) = ClockTime(m.groupValues[1].toInt(), m.groupValues[2].toInt(), meridiemOf(m.groupValues[3]))
+        // A "for 10 30" doesn't beat an "at 6": in "wake me up at 6 for 10 30 train" the time is 6.
+        SPACED_HM.find(sc.rest)
+            ?.takeIf { !it.value.trimStart().startsWith("for") || !AT_H.containsMatchIn(sc.rest) }
+            ?.let { sc.cut(it.range); return spaced(it) }
+        // [time] before the unanchored pair: in "wake me up at 6 for the 10 30 train" the time is 6.
+        // A bare hour before an unanchored pair: in "alarm 6 for the 10 30 train" the time is 6.
+        // BARE_H skips both numbers of a pair, so "gym alarm 6 30" still reaches the pair.
+        return time(sc)
+            ?: sc.take(BARE_H)?.let { ClockTime(it.groupValues[1].toInt(), 0) }
+            ?: sc.take(SPACED_HM_ANYWHERE)?.let { spaced(it) }
     }
 
     /** "morning", "in the evening", "shaam ko", removed from [sc]. */

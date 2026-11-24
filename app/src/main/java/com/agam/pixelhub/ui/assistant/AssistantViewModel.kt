@@ -119,10 +119,14 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
         val item = find(id) ?: return
         runOnce(id) {
             when (val cmd = item.command) {
-                is ParsedCommand.CreateReminder -> createReminder(cmd.title, cmd.notes, cmd.at, cmd.recurrence)
-                is ParsedCommand.CreateAlarm -> createAlarm(
-                    Alarm(hour = cmd.hour, minute = cmd.minute, daysMask = cmd.daysMask, label = cmd.label),
-                )
+                // "in 10 minutes" counts from the tap: a slow Confirm must not land in the past (or tomorrow).
+                is ParsedCommand.CreateReminder -> createReminder(cmd.title, cmd.notes, fromNow(cmd.inMinutes) ?: cmd.at, cmd.recurrence)
+                is ParsedCommand.CreateAlarm -> {
+                    val t = fromNow(cmd.inMinutes)
+                    createAlarm(
+                        Alarm(hour = t?.hour ?: cmd.hour, minute = t?.minute ?: cmd.minute, daysMask = cmd.daysMask, label = cmd.label),
+                    )
+                }
                 is ParsedCommand.OpenApp -> {
                     val t = item.target
                     when {
@@ -159,9 +163,13 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
     // so a double tap can't create two reminders.
     private val inFlight = mutableSetOf<Long>()
 
-    private fun runOnce(id: Long, work: suspend () -> Outcome) {
-        val item = find(id) ?: return
-        if (item.status != ChatItem.Status.PENDING || !inFlight.add(id)) return
+    private fun fromNow(minutes: Long?): LocalDateTime? =
+        minutes?.let { CommandParser.ceilToMinute(ZonedDateTime.now().plusMinutes(it).toLocalDateTime()) }
+
+    /** Starts [work] unless the action is already saved, cancelled or saving; false when it didn't. */
+    private fun runOnce(id: Long, work: suspend () -> Outcome): Boolean {
+        val item = find(id) ?: return false
+        if (item.status != ChatItem.Status.PENDING || !inFlight.add(id)) return false
         viewModelScope.launch {
             try {
                 // A failed save (database, scheduling) shows on the card instead of crashing the app;
@@ -178,16 +186,36 @@ class AssistantViewModel(app: Application) : AndroidViewModel(app) {
                 inFlight.remove(id)
             }
         }
+        return true
     }
 
     /** Saves a reminder the user adjusted in the editor. */
     fun saveReminder(id: Long, draft: ReminderDraft) {
-        runOnce(id) { createReminder(draft.title, draft.notes, draft.at, draft.recurrence) }
+        saveEdited(id, ParsedCommand.CreateReminder(draft.title, draft.at, draft.recurrence, draft.notes)) {
+            createReminder(draft.title, draft.notes, draft.at, draft.recurrence)
+        }
     }
 
     /** Saves an alarm the user adjusted in the editor. */
     fun saveAlarm(id: Long, alarm: Alarm) {
-        runOnce(id) { createAlarm(alarm) }
+        saveEdited(id, ParsedCommand.CreateAlarm(alarm.hour, alarm.minute, alarm.daysMask, alarm.label)) { createAlarm(alarm) }
+    }
+
+    /**
+     * The card (and a reopened editor) and the Settings log show the edited [command], even if the
+     * save fails. Inside runOnce, so an edit can't rewrite a card that was already saved.
+     */
+    private fun saveEdited(id: Long, command: ParsedCommand, save: suspend () -> Outcome) {
+        val started = runOnce(id) {
+            updateAction(id) { it.copy(command = command) }
+            find(id)?.logId?.let { c.assistantLog.setSummary(it, command) }
+            save()
+        }
+        // Confirm was tapped first and is saving (or saved) the original draft.
+        val status = find(id)?.status
+        if (!started && status != null && status != ChatItem.Status.CANCELLED) {
+            add(ChatItem.Bot(newId(), "That was already saved as first understood, so your changes weren't applied.", isError = true))
+        }
     }
 
     fun cancel(id: Long) {

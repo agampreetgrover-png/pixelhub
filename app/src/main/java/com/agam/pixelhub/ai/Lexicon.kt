@@ -44,8 +44,11 @@ internal object Lexicon {
         "ravivar|raviwar|itvar|itwar|etvar" to "sunday",
     ).map { (from, to) -> Regex("""\b(?:$from)\b""") to to }
 
-    /** Lower-case, ₹ → "rs", "1,20,000" → "120000", punctuation spaced out, synonyms applied. */
-    fun normalize(raw: String): String {
+    /**
+     * Lower-case, ₹ → "rs", "1,20,000" → "120000", punctuation spaced out, synonyms applied unless
+     * [synonyms] is false (for names, places and search queries: "har ki pauri" isn't "every ki pauri").
+     */
+    fun normalize(raw: String, synonyms: Boolean = true): String {
         var s = raw.lowercase(Locale.ROOT)
             .replace('’', '\'').replace('‘', '\'')
             .replace("₹", " rs ")
@@ -54,7 +57,7 @@ internal object Lexicon {
         s = Regex("""[!?;"“”()\[\]]""").replace(s, " ")
         s = Regex("""\.(?=\s|$)""").replace(s, " ")
         s = Regex("""\s+""").replace(s, " ").trim()
-        for ((re, to) in SYNONYMS) s = re.replace(s, to)
+        if (synonyms) for ((re, to) in SYNONYMS) s = re.replace(s, to)
         return s
     }
 
@@ -71,10 +74,13 @@ internal object Lexicon {
             """)\b""",
     )
 
-    /** Starts an alarm ("wake me up", "alarm laga do", "utha dena"). */
+    /**
+     * Starts an alarm ("wake me up", "alarm laga do", "utha dena"). It leaves "at" and "for" in
+     * place: taking them left a bare "7" in "alarm at 7", which no time rule reads.
+     */
     val ALARM = Regex(
         """\b(?:(?:please|pls|plz)\s+)?(?:""" +
-            """wake\s+me\s+up|wake\s+me|wake\s+up|set\s+(?:an?\s+|the\s+)?alarm(?:\s+(?:for|at))?|alarm(?:\s+(?:for|at))?""" +
+            """wake\s+me\s+up|wake\s+me|wake\s+up|set\s+(?:an?\s+|the\s+)?alarm|alarm""" +
             """|uthaa?(?:na|o|do|dena)?|jaga(?:na|o|do|dena)?""" +
             """)\b""",
     )
@@ -150,8 +156,14 @@ internal object Lexicon {
 
     val CALL = Regex("""^(?:(?:please|pls)\s+)?(?:call|dial|phone|ring)\s+(?:up\s+|to\s+)?(.+)$""")
     val CALL_HI = Regex("""^(.+?)\s+(?:ko\s+|pe\s+|par\s+)?(?:call|phone|fone)\s*(?:karo|kar\s+do|kar|lagao|laga\s+do|lagana|milao)$""")
-    val PHONE = Regex("""\+?\d[\d\s-]{5,}\d""")
-    val SMS = Regex("""^(?:text|sms|message|msg)\s+(?:to\s+)?(\+?\d[\d\s-]{5,}\d)(?:\s+(?:saying\s+|that\s+)?(.+))?$""")
+    /**
+     * A phone number, in groups of any size ("98765 43210", "98 76 54 32 10", "+44 20 7946 0958").
+     * It can run on into a message that starts with a number; CommandParser's splitNumber puts
+     * the "5" of "text 9876543210 5 min late" back in the message.
+     */
+    const val PHONE_NUM = """\+?\d(?:[\d-]|\s(?=\d))*\d"""
+    val PHONE = Regex(PHONE_NUM)
+    val SMS = Regex("""^(?:text|sms|message|msg)\s+(?:to\s+)?($PHONE_NUM)(?:\s+(?:saying\s+|that\s+)?(.+))?$""")
     val NAVIGATE = Regex("""^(?:(?:please|pls)\s+)?(?:navigate|directions?|take\s+me|drive|route)\s+(?:to\s+|for\s+)?(.+)$""")
     val NAVIGATE_HI = Regex(
         """^(.+?)\s+(?:ka|ki|ke)\s+(?:rasta|raasta|route|directions?)(?:\s+(?:dikhao|batao|do|dikha\s+do))?$""" +
@@ -161,9 +173,14 @@ internal object Lexicon {
     val SEARCH_HI = Regex("""^(.+?)\s+(?:search|google|dhundo|dhoondo|khojo)\s*(?:karo|kar\s+do|kar)?$""")
     val EMAIL = Regex("""[\w.+-]+@[\w-]+(?:\.[\w-]+)+""")
     val MAIL_WORD = Regex("""\b(?:e-?mail|mail)\b""")
+    /**
+     * A link on its own, matched against the raw text: normalising lower-cases paths and drops the
+     * "?" of a query string. A full stop or comma at the very end isn't part of it.
+     */
     val URL_ONLY = Regex(
-        """^(?:(?:open|go\s+to|visit|browse|launch)\s+)?((?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*""" +
-            """\.(?:com|in|org|net|io|co|dev|app|ai|me|gov|edu|info)(?:\.[a-z]{2})?(?:/\S*)?)$""",
+        """^\s*(?:(?:please|pls)\s+)?(?:(?:open|go\s+to|visit|browse|launch)\s+)?((?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*""" +
+            """\.(?:com|in|org|net|io|co|dev|app|ai|me|gov|edu|info)(?:\.[a-z]{2})?(?:/\S*?)?)[.,]?\s*$""",
+        RegexOption.IGNORE_CASE,
     )
 
     // ---- Money categories ---------------------------------------------------------------
@@ -202,7 +219,8 @@ internal object Lexicon {
         ExpenseCategory.SALARY to listOf("salary", "stipend", "payroll", "bonus", "tankhwah", "tankha"),
         ExpenseCategory.FREELANCE to listOf("freelance", "client", "project", "gig", "invoice"),
         ExpenseCategory.GIFTS to listOf("gift", "gifts", "birthday", "shagun"),
-        ExpenseCategory.REFUNDS to listOf("refund", "refunded", "cashback", "return"),
+        // Not "return": "return flight 5000" is travel spending, not a refund.
+        ExpenseCategory.REFUNDS to listOf("refund", "refunded", "cashback"),
         ExpenseCategory.INVESTMENTS to listOf("dividend", "interest", "sip", "mutual", "stocks", "shares", "fd"),
     )
 

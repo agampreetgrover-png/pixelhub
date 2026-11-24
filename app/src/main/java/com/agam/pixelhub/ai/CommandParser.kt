@@ -50,21 +50,67 @@ object CommandParser {
         val s = Lexicon.normalize(text)
         if (s.isEmpty()) return ParseResult(ParsedCommand.Invalid("Type or say something first."), "empty")
         if (Lexicon.HELP.matches(s)) return ParseResult(ParsedCommand.Answer(HELP_TEXT), "help")
+        url(text)?.let { return it }
+        // Without the Hinglish rewrites, for names, places and queries: "aaj tak" is not "today tak".
+        val plain = Lexicon.normalize(text, synonyms = false)
 
         // "remind me to wake up dad" is a reminder: whichever trigger comes first wins.
         val reminderAt = Lexicon.REMINDER.find(s)?.range?.first
         val alarmAt = Lexicon.ALARM.find(s)?.range?.first
-        if (reminderAt != null && (alarmAt == null || reminderAt <= alarmAt)) return ParseResult(reminder(s, text, now), "reminder")
-        if (alarmAt != null) return ParseResult(alarm(s, text, now), "alarm")
+        val triggerAt = listOfNotNull(reminderAt, alarmAt).minOrNull()
+        if (triggerAt != null) {
+            // "open reminders", "alarm kholo": an app, not a reminder or alarm. Only when the app is
+            // the reminders or alarm one: "remind me to keep the shop open" is still a reminder.
+            val target = (Lexicon.OPEN.matchEntire(plain) ?: Lexicon.OPEN_HI.matchEntire(plain))?.groupValues?.get(1)
+            if (target != null && TRIGGER_APP.matches(target)) {
+                openApp(plain, text)?.let { return ParseResult(it, "open_app") }
+            }
+            val triggered = if (reminderAt != null && (alarmAt == null || reminderAt <= alarmAt)) {
+                ParseResult(reminder(s, text, now), "reminder")
+            } else {
+                ParseResult(alarm(s, text, now), "alarm")
+            }
+            // "spent 500 on alarm clock": the trigger word was a noun (there's no time to read), and
+            // money came first. A reminder or alarm that parses always wins: in "paid 500 for gym,
+            // remind me on 5 dec to renew" the date and time belong to the reminder. The amount
+            // must come before the trigger ("bought tickets, wake me up in 20" isn't ₹20), unless
+            // the only trigger word is "alarm clock": "bought an alarm clock for 500".
+            val spentAt = SPENT_PAST.find(s)?.range?.first
+            val onlyAlarmClock = ALARM_CLOCK.replace(s, " ")
+                .let { !Lexicon.ALARM.containsMatchIn(it) && !Lexicon.REMINDER.containsMatchIn(it) }
+            if (triggered.command is ParsedCommand.Invalid && spentAt != null && spentAt < triggerAt &&
+                (onlyAlarmClock || money(s.substring(0, triggerAt), text, now)?.command is ParsedCommand.LogExpense)
+            ) {
+                money(s, text, now)?.let { return it }
+            }
+            return triggered
+        }
 
-        link(s, text)?.let { return it }
-        openApp(s, text)?.let { return ParseResult(it, "open_app") }
+        // A whole app name before the search rule: "google maps" opens Maps, not a search for "maps".
+        appNames.firstOrNull { val n = Lexicon.normalize(it, synonyms = false); plain == n || plain == "$n app" }
+            ?.let { return ParseResult(ParsedCommand.OpenApp(it), "app_name") }
+        link(s, plain, text)?.let { return it }
+        openApp(plain, text)?.let { return ParseResult(it, "open_app") }
         ledger(s, text, now, people)?.let { return it }
         money(s, text, now)?.let { return it }
-        appNames.firstOrNull { s == it.lowercase() || s == "${it.lowercase()} app" }
-            ?.let { return ParseResult(ParsedCommand.OpenApp(it), "app_name") }
         return ParseResult(ParsedCommand.Invalid(NOT_UNDERSTOOD), "none")
     }
+
+    /** The only open targets that beat a reminder or alarm trigger: the apps themselves. */
+    private val TRIGGER_APP = Regex("""^(?:(?:the|my)\s+)?(?:reminders?|alarms?|alarm\s+clock|clock)(?:\s+app)?$""")
+
+    /**
+     * Past-tense spending only: "buy milk, remind me at 6" and "kal doodh kharidna yaad dilana"
+     * are still reminders.
+     */
+    private val SPENT_PAST = Regex("""\b(?:spent|paid|payed|bought|purchased|costs?)\b""")
+
+    /** The thing you buy, not an alarm being set. */
+    private val ALARM_CLOCK = Regex("""\balarm\s+clocks?\b""")
+
+    /** "1 minute from now", rounded up to the next whole minute so it's never early. */
+    internal fun ceilToMinute(t: LocalDateTime): LocalDateTime =
+        t.truncatedTo(ChronoUnit.MINUTES).let { if (it == t) it else it.plusMinutes(1) }
 
     // ---- Reminders ----------------------------------------------------------------------
 
@@ -72,6 +118,7 @@ object CommandParser {
         val sc = Scan(s)
         sc.take(Lexicon.REMINDER)
         val repeat = DateTimeRules.repeat(sc)
+        if (repeat?.unsupported == true) return ParsedCommand.Invalid(UNSUPPORTED_REPEAT)
         val rel = DateTimeRules.relative(sc)
         val date = DateTimeRules.date(sc, now.toLocalDate(), past = false)
         if (date?.impossible == true) return ParsedCommand.Invalid(NO_SUCH_DATE)
@@ -83,9 +130,17 @@ object CommandParser {
         val nowLocal = now.toLocalDateTime().truncatedTo(ChronoUnit.MINUTES)
         var at: LocalDateTime
         if (rel?.minutes != null) {
-            at = nowLocal.plusMinutes(rel.minutes)
+            // From the real time, rounded up: from the start of the minute, "in 1 minute" could already be past.
+            at = ceilToMinute(now.plusMinutes(rel.minutes).toLocalDateTime())
         } else {
-            val day = date?.date ?: rel?.days?.let { now.toLocalDate().plusDays(it) }
+            // "tomorrow at 9am" said at 00:30 means the coming morning.
+            val lateNight = date?.fromTomorrow == true && now.hour < LATE_NIGHT_END
+            val day = when {
+                lateNight -> now.toLocalDate()
+                date != null -> date.date
+                rel?.months != null -> now.toLocalDate().plusMonths(rel.months)
+                else -> rel?.days?.let { now.toLocalDate().plusDays(it) }
+            }
             val clock = time?.let { DateTimeRules.resolve(it, part) }
             if (time != null && clock == null) return ParsedCommand.Invalid("That time doesn't look right. Try \"at 6:30 pm\".")
             val timePart = time?.part ?: part
@@ -103,15 +158,22 @@ object CommandParser {
                 day != null -> day.atTime(DateTimeRules.likelyHour(clock.hour), clock.minute)
                 else -> DateTimeRules.nextOccurrence(clock.hour, clock.minute, nowLocal)
             }
-            // "at 9am" said at 10am, with no day: tomorrow.
-            if (day == null && repeat == null && !at.isAfter(nowLocal)) at = at.plusDays(1)
+            // "at 9am" said at 10am, with no day: tomorrow. Likewise "tomorrow at 12:15am" said at 00:30.
+            if ((day == null || lateNight) && repeat == null && !at.isAfter(nowLocal)) at = at.plusDays(1)
         }
         val recurrence = repeat?.toRecurrence(at.dayOfWeek) ?: Recurrence.NONE
         if (recurrence.isRepeating) {
             at = RecurrenceCalc.nextTrigger(recurrence, at, now)?.toLocalDateTime()?.truncatedTo(ChronoUnit.MINUTES) ?: at
         }
-        return ParsedCommand.CreateReminder(title, at, recurrence)
+        val inMinutes = rel?.minutes?.takeIf { !recurrence.isRepeating }
+        return ParsedCommand.CreateReminder(title, at, recurrence, inMinutes = inMinutes)
     }
+
+    /** Before this hour, "tomorrow" may mean the coming morning (it's already the next day). */
+    private const val LATE_NIGHT_END = 5
+
+    private const val UNSUPPORTED_REPEAT =
+        "I can only repeat daily, weekly, or every few days or weeks. For hourly or monthly ones, set each one separately."
 
     // ---- Alarms -------------------------------------------------------------------------
 
@@ -121,14 +183,17 @@ object CommandParser {
         val repeat = DateTimeRules.repeat(sc)
         val rel = DateTimeRules.relative(sc)
         val date = DateTimeRules.date(sc, now.toLocalDate(), past = false)
-        val time = DateTimeRules.time(sc)
+        val time = if (rel?.minutes == null) DateTimeRules.alarmTime(sc) else DateTimeRules.time(sc)
         val part = DateTimeRules.part(sc) ?: date?.part ?: repeat?.part
         val label = phrase(sc.rest, Lexicon.ALARM_FILLERS, original)
 
+        if (repeat?.unsupported == true) return ParsedCommand.Invalid(UNSUPPORTED_REPEAT)
         if (date?.impossible == true) return ParsedCommand.Invalid(NO_SUCH_DATE)
 
         val clock = when {
-            rel?.minutes != null -> now.plusMinutes(rel.minutes).let { HourMinute(it.hour, it.minute, certain = true) }
+            // Rounded up from the real time, so "in 1 minute" said at 10:00:50 isn't 10:01.
+            rel?.minutes != null -> ceilToMinute(now.plusMinutes(rel.minutes).toLocalDateTime())
+                .let { HourMinute(it.hour, it.minute, certain = true) }
             time != null -> DateTimeRules.resolve(time, part)
                 ?: return ParsedCommand.Invalid("That time doesn't look right. Try \"alarm at 6:30\".")
             else -> return ParsedCommand.Invalid("What time? Try \"alarm at 6:30\" or \"wake me up at 7 on weekdays\".")
@@ -138,14 +203,24 @@ object CommandParser {
         // wait for a later date: "wake me up on 12 nov at 7" used to ring at the next 7:00 instead.
         // "on friday" (said on Thursday) or "tomorrow at 7" is fine: that is the next ring. A single
         // weekday further off used to repeat every week, which nobody asked for.
-        val onDay = if (repeat == null) date?.date ?: rel?.days?.let { now.toLocalDate().plusDays(it) } else null
+        val onDay = if (repeat == null) {
+            date?.date ?: rel?.months?.let { now.toLocalDate().plusMonths(it) } ?: rel?.days?.let { now.toLocalDate().plusDays(it) }
+        } else {
+            null
+        }
         if (onDay != null) {
             val nowLocal = now.toLocalDateTime()
             fun nextRing(h: Int): LocalDateTime =
                 now.toLocalDate().atTime(h, clock.minute).let { if (it.isAfter(nowLocal)) it else it.plusDays(1) }
             // "tonight at 12" rings in the small hours after that night.
             val smallHours = clock.hour < 6 && (time?.part ?: part) == DayPart.NIGHT
-            val ringsOn = if (smallHours) setOf(onDay, onDay.plusDays(1)) else setOf(onDay)
+            // "tomorrow at 7" said at 00:30 means the coming morning, today's date.
+            val lateNight = date?.fromTomorrow == true && now.hour < LATE_NIGHT_END
+            val ringsOn = when {
+                smallHours -> setOf(onDay, onDay.plusDays(1))
+                lateNight -> setOf(onDay.minusDays(1), onDay)
+                else -> setOf(onDay)
+            }
             // "tomorrow at 7" with no am or pm: whichever of 7:00 and 19:00 rings on that day.
             val hours = if (clock.certain || clock.hour !in 1..11) listOf(clock.hour) else listOf(clock.hour, clock.hour + 12)
             hour = hours.firstOrNull { nextRing(it).toLocalDate() in ringsOn } ?: return ParsedCommand.Invalid(
@@ -154,7 +229,7 @@ object CommandParser {
             )
         }
         val mask = repeat?.toAlarmMask(date?.date?.dayOfWeek ?: now.dayOfWeek) ?: 0
-        return ParsedCommand.CreateAlarm(hour, clock.minute, mask, label)
+        return ParsedCommand.CreateAlarm(hour, clock.minute, mask, label, inMinutes = rel?.minutes?.takeIf { repeat == null })
     }
 
     private const val NO_SUCH_DATE = "That date doesn't exist. Check the day and month, like \"30 april\"."
@@ -164,9 +239,20 @@ object CommandParser {
     // Two lookbehinds, not [\d.]: a number may follow "rs." ("Rs.500") but not a digit and a dot,
     // so "1.5" is never read again as 5.
     private val AMOUNT = Regex(
-        """(?:\b(rs|inr)\.?\s*)?(?<!\d)(?<!\d\.)(\d+(?:\.\d{1,2})?)(?:\s*(k|thousand|hazaar|hazar|hajar|lakhs?|lacs?))?""" +
+        """(?:\b(rs|inr)\.?\s*)?(?<!\d)(?<!\d\.)(\d+(?:\.\d{1,2})?)(?:\s*(k|thousand|hazaar|hazar|hajar|lakhs?|lacs?|crores?|cr))?""" +
             """(?:\s*(rs|rupees?|rupaye|rupay|rupaiye|rupiya|inr|bucks|/-))?(?![a-z\d])""",
     )
+
+    /** "2k", "1.5 lakh", "2 cr": what the amount's unit multiplies it by ("" for plain rupees). */
+    private fun unitMultiplier(unit: String): Double = when {
+        unit.isEmpty() -> 1.0
+        unit.startsWith("la") -> 1_00_000.0
+        unit.startsWith("c") -> 1_00_00_000.0
+        else -> 1_000.0
+    }
+
+    // "spent 300 tomorrow": saved, it would sit outside this month's totals and budget.
+    private const val FUTURE_MONEY = "That date is still ahead. Log money once it's spent, or set a reminder."
 
     /** Words that put a price right after them, so a bare number there is the amount. */
     private val AMOUNT_CUE = Regex("""\b(?:spent|spend|paid|pay|payed|cost|costs|gave|add|added|for|worth|of)\s+$""")
@@ -193,12 +279,8 @@ object CommandParser {
         val marked = m.groupValues[1].isNotEmpty() || m.groupValues[3].isNotEmpty() || m.groupValues[4].isNotEmpty()
         if (!incomeWord && !expenseWord && !marked && categoryIn(s, null) == null) return null
         if (date?.impossible == true) return ParseResult(ParsedCommand.Invalid(NO_SUCH_DATE), "expense")
-        val multiplier = when {
-            m.groupValues[3].isEmpty() -> 1.0
-            m.groupValues[3].startsWith("la") -> 1_00_000.0
-            else -> 1_000.0
-        }
-        val paise = Money.fromRupees(m.groupValues[2].toDouble() * multiplier)?.takeIf { it < MAX_EXPENSE_PAISE }
+        if (date != null && date.date.isAfter(now.toLocalDate())) return ParseResult(ParsedCommand.Invalid(FUTURE_MONEY), "expense")
+        val paise = Money.fromRupees(m.groupValues[2].toDouble() * unitMultiplier(m.groupValues[3]))?.takeIf { it < MAX_EXPENSE_PAISE }
             ?: return ParseResult(ParsedCommand.Invalid("That amount doesn't look right."), "expense")
         sc.cut(m.range)
         sc.takeAll(Lexicon.MONEY_VERBS)
@@ -317,16 +399,12 @@ object CommandParser {
         val sc = Scan(Regex("""\b${Regex.escape(nameWord)}\b""").replaceFirst(text, " "))
         val date = DateTimeRules.date(sc, now.toLocalDate(), past = true)
         if (date?.impossible == true) return ParseResult(ParsedCommand.Invalid(NO_SUCH_DATE), "ledger")
+        if (date != null && date.date.isAfter(now.toLocalDate())) return ParseResult(ParsedCommand.Invalid(FUTURE_MONEY), "ledger")
         val m = AMOUNT.findAll(sc.rest).toList().let { all ->
             all.firstOrNull { it.groupValues[1].isNotEmpty() || it.groupValues[3].isNotEmpty() || it.groupValues[4].isNotEmpty() }
                 ?: all.firstOrNull()
         } ?: return ParseResult(ParsedCommand.Invalid("How much? Try \"paid $name 30\"."), "ledger")
-        val multiplier = when {
-            m.groupValues[3].isEmpty() -> 1.0
-            m.groupValues[3].startsWith("la") -> 1_00_000.0
-            else -> 1_000.0
-        }
-        val paise = Money.fromRupees(m.groupValues[2].toDouble() * multiplier)?.takeIf { it < MAX_EXPENSE_PAISE }
+        val paise = Money.fromRupees(m.groupValues[2].toDouble() * unitMultiplier(m.groupValues[3]))?.takeIf { it < MAX_EXPENSE_PAISE }
             ?: return ParseResult(ParsedCommand.Invalid("That amount doesn't look right."), "ledger")
         sc.cut(m.range)
         sc.takeAll(Lexicon.LEDGER_WORDS)
@@ -345,42 +423,81 @@ object CommandParser {
 
     /** Lexicon.SMS, read against the raw text so the body keeps its case and punctuation. */
     private val SMS_BODY = Regex(
-        """^\s*(?:text|sms|message|msg)\s+(?:to\s+)?\+?\d[\d\s-]{5,}\d\s+(?:saying\s+|that\s+)?(.+)$""",
+        """^\s*(?:text|sms|message|msg)\s+(?:to\s+)?(${Lexicon.PHONE_NUM})(?:\s+(?:saying\s+|that\s+)?(.+))?$""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
 
-    private fun link(s: String, original: String): ParseResult? {
-        Lexicon.URL_ONLY.matchEntire(s)?.let { m ->
-            val url = m.groupValues[1]
-            return ParseResult(ParsedCommand.OpenLink(if (url.startsWith("http")) url else "https://$url"), "url")
-        }
+    /** A link on its own, kept exactly as typed: paths and query strings are case-sensitive. */
+    private fun url(original: String): ParseResult? {
+        val m = Lexicon.URL_ONLY.matchEntire(original) ?: return null
+        val parts = URL_PARTS.matchEntire(m.groupValues[1]) ?: return null
+        // Scheme and host can be lower-cased safely (Android matches them case-sensitively); the path can't.
+        val url = parts.groupValues[1].ifEmpty { "https://" }.lowercase() + parts.groupValues[2].lowercase() + parts.groupValues[3]
+        return ParseResult(ParsedCommand.OpenLink(url), "url")
+    }
+
+    /** Scheme (maybe none), host, then the path as typed. */
+    private val URL_PARTS = Regex("""^((?:https?://)?)([^/]*)(.*)$""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+
+    /** [s] is the normalised text; [plain] the same without synonyms, for places and queries. */
+    private fun link(s: String, plain: String, original: String): ParseResult? {
         Lexicon.EMAIL.find(s)?.let { m ->
             if (Lexicon.MAIL_WORD.containsMatchIn(s) || s == m.value) return ParseResult(ParsedCommand.OpenLink("mailto:${m.value}"), "email")
         }
         Lexicon.SMS.matchEntire(s)?.let { m ->
-            val number = digits(m.groupValues[1])
             // The message as typed: the normalised text is lower-case and has lost its ! and ?.
-            val body = SMS_BODY.find(original)?.groupValues?.get(1)?.trim() ?: m.groupValues[2].trim()
+            val typed = SMS_BODY.find(original) ?: m
+            val (numberText, overflow) = splitNumber(typed.groupValues[1])
+            val number = digits(numberText)
+            if (number.count { it.isDigit() } !in PHONE_DIGITS) {
+                return ParseResult(ParsedCommand.Invalid("That number doesn't look right. Try \"text 9876543210 running late\"."), "sms")
+            }
+            val body = listOf(overflow, typed.groupValues[2].trim()).filter { it.isNotEmpty() }.joinToString(" ")
             val uri = if (body.isEmpty()) "sms:$number" else "sms:$number?body=${encode(body)}"
             return ParseResult(ParsedCommand.OpenLink(uri), "sms")
         }
         (Lexicon.CALL.matchEntire(s) ?: Lexicon.CALL_HI.matchEntire(s))?.let { m ->
-            val number = Lexicon.PHONE.find(m.groupValues[1])?.value
+            // Split: "call 9876543210 2 baar" must not dial 98765432102.
+            val number = Lexicon.PHONE.find(m.groupValues[1])?.value?.let { digits(splitNumber(it).first) }
+                ?.takeIf { n -> n.count { it.isDigit() } in PHONE_DIGITS }
                 ?: return ParseResult(ParsedCommand.Invalid("I can only call phone numbers. Try \"call 9876543210\"."), "call")
-            return ParseResult(ParsedCommand.OpenLink("tel:${digits(number)}"), "call")
+            return ParseResult(ParsedCommand.OpenLink("tel:$number"), "call")
         }
-        (Lexicon.NAVIGATE.matchEntire(s) ?: Lexicon.NAVIGATE_HI.matchEntire(s))?.let { m ->
+        (Lexicon.NAVIGATE.matchEntire(plain) ?: Lexicon.NAVIGATE_HI.matchEntire(plain))?.let { m ->
             val place = (m.groupValues.drop(1).firstOrNull { it.isNotBlank() } ?: "").trim()
             if (place.isNotEmpty()) return ParseResult(ParsedCommand.OpenLink("google.navigation:q=${encode(place)}"), "navigate")
         }
         // "paid 130 for google" is spending at Google, not a search for "paid 130 for".
         val aboutMoney = (Lexicon.EXPENSE.containsMatchIn(s) || Lexicon.INCOME.containsMatchIn(s)) && s.any { it.isDigit() }
-        if (!aboutMoney) (Lexicon.SEARCH.matchEntire(s) ?: Lexicon.SEARCH_HI.matchEntire(s))?.let { m ->
+        if (!aboutMoney) (Lexicon.SEARCH.matchEntire(plain) ?: Lexicon.SEARCH_HI.matchEntire(plain))?.let { m ->
             val query = m.groupValues[1].trim()
             if (query.isNotEmpty()) return ParseResult(ParsedCommand.OpenLink("https://www.google.com/search?q=${encode(query)}"), "search")
         }
         return null
     }
+
+    /** Shortest local number to the longest international one. */
+    private val PHONE_DIGITS = 7..15
+
+    /**
+     * Splits off digit groups after the number has ten digits: in "text 9876543210 100 rs bhej"
+     * the 100 is part of the message, not a 13-digit number. A leading country code isn't one of
+     * the ten: "+91 98 76 54 32 10" is all number. Without a "+", "91" or "0" counts as one only
+     * when the ten digits follow it.
+     */
+    private fun splitNumber(number: String): Pair<String, String> {
+        val groups = number.split(' ').filter { it.isNotEmpty() }
+        fun digitsIn(g: String) = g.count { it.isDigit() }
+        val first = groups.firstOrNull().orEmpty()
+        val code = digitsIn(first).takeIf { COUNTRY_CODE.matches(first) } ?: 0
+        val limit = if (code > 0 && (first.startsWith('+') || groups.sumOf { digitsIn(it) } >= 10 + code)) 10 + code else 10
+        var count = 0
+        val taken = groups.takeWhile { g -> (count < limit).also { count += digitsIn(g) } }
+        return taken.joinToString(" ") to groups.drop(taken.size).joinToString(" ")
+    }
+
+    /** A country code (or trunk 0) written as its own group. */
+    private val COUNTRY_CODE = Regex("""^(?:\+\d{1,3}|91|0)$""")
 
     private fun digits(number: String) = number.filter { it.isDigit() || it == '+' }
 

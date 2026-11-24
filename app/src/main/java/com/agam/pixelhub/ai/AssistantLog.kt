@@ -76,6 +76,12 @@ class AssistantLog(private val file: File, private val scope: CoroutineScope) {
         persist()
     }
 
+    /** Shows the draft as the user edited it, in place of what was first understood. */
+    fun setSummary(id: Long, command: ParsedCommand) {
+        _entries.update { list -> list.map { if (it.id == id) it.copy(summary = summarize(command)) else it } }
+        persist()
+    }
+
     fun clear() {
         _entries.value = emptyList()
         persist()

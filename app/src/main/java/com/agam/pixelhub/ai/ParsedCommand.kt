@@ -7,14 +7,23 @@ import java.time.LocalDateTime
 
 /** What the assistant wants to do. Always shown to the user for confirmation first. */
 sealed interface ParsedCommand {
+    /** [inMinutes]: said as "in 10 minutes", so [at] is worked out again from when it's confirmed. */
     data class CreateReminder(
         val title: String,
         val at: LocalDateTime,
         val recurrence: Recurrence,
         val notes: String = "",
+        val inMinutes: Long? = null,
     ) : ParsedCommand
 
-    data class CreateAlarm(val hour: Int, val minute: Int, val daysMask: Int, val label: String) : ParsedCommand
+    /** [inMinutes]: said as "in 10 minutes", so the time is worked out again from when it's confirmed. */
+    data class CreateAlarm(
+        val hour: Int,
+        val minute: Int,
+        val daysMask: Int,
+        val label: String,
+        val inMinutes: Long? = null,
+    ) : ParsedCommand
 
     /** Money spent or received. [at] null = "now" (decided when the user confirms). */
     data class LogExpense(

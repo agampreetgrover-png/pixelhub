@@ -21,6 +21,8 @@ class CommandParserTest {
     private fun parse(text: String) = CommandParser.parse(text, now, apps).command
     private fun at(month: Int, day: Int, hour: Int, minute: Int = 0) = LocalDateTime.of(2026, month, day, hour, minute)
     private fun reminder(title: String, at: LocalDateTime, rec: Recurrence = Recurrence.NONE) = ParsedCommand.CreateReminder(title, at, rec)
+    private fun reminderIn(title: String, at: LocalDateTime, minutes: Long) =
+        ParsedCommand.CreateReminder(title, at, Recurrence.NONE, inMinutes = minutes)
     private fun spent(rupees: Long, category: ExpenseCategory, note: String, at: LocalDateTime? = null) =
         ParsedCommand.LogExpense(rupees * 100, category, note, at, ExpenseKind.EXPENSE)
     private fun earned(rupees: Long, category: ExpenseCategory, note: String) =
@@ -46,13 +48,14 @@ class CommandParserTest {
     @Test fun midnightOnANamedNightIsTheNextDay() =
         assertEquals(reminder("Lock the door", at(11, 7, 0)), parse("remind me to lock the door tomorrow night at 12"))
 
-    @Test fun inTwoHours() = assertEquals(reminder("Pay rent", at(11, 5, 12)), parse("remind me to pay rent in 2 hours"))
+    @Test fun inTwoHours() = assertEquals(reminderIn("Pay rent", at(11, 5, 12), 120), parse("remind me to pay rent in 2 hours"))
 
-    @Test fun inTwentyMinutesBeforeTitle() = assertEquals(reminder("Check the oven", at(11, 5, 10, 20)), parse("remind me in 20 min to check the oven"))
+    @Test fun inTwentyMinutesBeforeTitle() =
+        assertEquals(reminderIn("Check the oven", at(11, 5, 10, 20), 20), parse("remind me in 20 min to check the oven"))
 
-    @Test fun halfAnHour() = assertEquals(reminder("Stretch", at(11, 5, 10, 30)), parse("remind me to stretch in half an hour"))
+    @Test fun halfAnHour() = assertEquals(reminderIn("Stretch", at(11, 5, 10, 30), 30), parse("remind me to stretch in half an hour"))
 
-    @Test fun decimalHours() = assertEquals(reminder("Stretch", at(11, 5, 11, 30)), parse("remind me to stretch in 1.5 hours"))
+    @Test fun decimalHours() = assertEquals(reminderIn("Stretch", at(11, 5, 11, 30), 90), parse("remind me to stretch in 1.5 hours"))
 
     @Test fun typedFillerPairStaysInTitle() =
         assertEquals(reminder("Go to the gym", at(11, 6, 7)), parse("remind me to go to the gym tomorrow at 7am"))
@@ -105,7 +108,7 @@ class CommandParserTest {
         parse("har somvar subah 8 baje gym yaad dilana"),
     )
 
-    @Test fun ghanteBaad() = assertEquals(reminder("Khana banana", at(11, 5, 12)), parse("2 ghante baad khana banana yaad dilana"))
+    @Test fun ghanteBaad() = assertEquals(reminderIn("Khana banana", at(11, 5, 12), 120), parse("2 ghante baad khana banana yaad dilana"))
 
     @Test fun saadhe() = assertEquals(reminder("Bijli bill bharna", at(11, 6, 18, 30)), parse("kal shaam saadhe 6 baje bijli bill bharna yaad dilana"))
 
@@ -124,7 +127,7 @@ class CommandParserTest {
 
     @Test fun alarmWithLabel() = assertEquals(ParsedCommand.CreateAlarm(17, 45, 0, "Gym"), parse("alarm at 5:45 pm for gym"))
 
-    @Test fun alarmInMinutes() = assertEquals(ParsedCommand.CreateAlarm(10, 30, 0, ""), parse("wake me up in 30 minutes"))
+    @Test fun alarmInMinutes() = assertEquals(ParsedCommand.CreateAlarm(10, 30, 0, "", inMinutes = 30), parse("wake me up in 30 minutes"))
 
     @Test fun alarmEveryDay() = assertEquals(ParsedCommand.CreateAlarm(5, 0, Days.ALL, ""), parse("alarm at 5am every day"))
 
@@ -339,9 +342,9 @@ class CommandParserTest {
 
     @Test fun thisEveningAt() = assertEquals(reminder("Call mom", at(11, 5, 19)), parse("remind me to call mom this evening at 7"))
 
-    @Test fun hourAndMinutes() = assertEquals(reminder("Stretch", at(11, 5, 11, 30)), parse("remind me to stretch in 1 hour 30 minutes"))
+    @Test fun hourAndMinutes() = assertEquals(reminderIn("Stretch", at(11, 5, 11, 30), 90), parse("remind me to stretch in 1 hour 30 minutes"))
 
-    @Test fun hourAndAHalf() = assertEquals(reminder("Stretch", at(11, 5, 11, 30)), parse("remind me to stretch in an hour and a half"))
+    @Test fun hourAndAHalf() = assertEquals(reminderIn("Stretch", at(11, 5, 11, 30), 90), parse("remind me to stretch in an hour and a half"))
 
     @Test fun hugeRepeatDoesNotCrash() = assertEquals(
         Recurrence(RepeatType.EVERY_N_DAYS, interval = 365),
@@ -372,6 +375,277 @@ class CommandParserTest {
         } finally {
             Locale.setDefault(before)
         }
+    }
+
+    // ---- Regressions from the second review ----
+
+    @Test fun spentOnAlarmClockIsExpense() =
+        assertEquals(spent(500, ExpenseCategory.OTHER, "Alarm clock"), parse("spent 500 on alarm clock"))
+
+    @Test fun openRemindersOpensTheApp() = assertEquals(ParsedCommand.OpenApp("Reminders"), parse("open reminders"))
+
+    @Test fun openAlarmOpensTheApp() = assertEquals(ParsedCommand.OpenApp("Alarm"), parse("open alarm"))
+
+    @Test fun remindToPayAnAmountIsStillAReminder() =
+        assertEquals(reminder("Pay 500 rent", at(11, 6, 9)), parse("remind me to pay 500 rent tomorrow"))
+
+    @Test fun bareGoogleAppNameOpensIt() = assertEquals(ParsedCommand.OpenApp("Google Maps"), parse("google maps"))
+
+    private val halfPast = ZonedDateTime.of(2026, 11, 5, 10, 0, 30, 0, ZoneId.of("Asia/Kolkata"))
+
+    @Test fun relativeReminderRoundsUp() = assertEquals(
+        reminderIn("Stretch", at(11, 5, 10, 2), 1),
+        CommandParser.parse("remind me in 1 minute to stretch", halfPast).command,
+    )
+
+    @Test fun relativeAlarmRoundsUp() = assertEquals(
+        ParsedCommand.CreateAlarm(10, 2, 0, "", inMinutes = 1),
+        CommandParser.parse("alarm in 1 minute", halfPast).command,
+    )
+
+    @Test fun ceilToMinute() {
+        assertEquals(at(11, 5, 10, 1), CommandParser.ceilToMinute(LocalDateTime.of(2026, 11, 5, 10, 0, 1)))
+        assertEquals(at(11, 5, 10, 0), CommandParser.ceilToMinute(at(11, 5, 10, 0)))
+    }
+
+    @Test fun inMonths() =
+        assertEquals(reminder("Renew passport", LocalDateTime.of(2027, 1, 5, 9, 0)), parse("remind me in 2 months to renew passport"))
+
+    @Test fun inAYear() =
+        assertEquals(reminder("Renew passport", LocalDateTime.of(2027, 11, 5, 9, 0)), parse("remind me in 1 year to renew passport"))
+
+    @Test fun nextWeek() = assertEquals(reminder("Call", at(11, 12, 9)), parse("remind me next week to call"))
+
+    @Test fun everyHourFails() = invalid("remind me to drink water every hour")
+
+    @Test fun everyTwoHoursFails() = invalid("remind me to drink water every 2 hours")
+
+    @Test fun everyMonthFails() = invalid("remind me to pay rent every month on 1st")
+
+    @Test fun alarmEveryHourFails() = invalid("alarm every hour")
+
+    private val afterMidnight = ZonedDateTime.of(2026, 11, 5, 0, 30, 0, 0, ZoneId.of("Asia/Kolkata"))
+    private fun lateParse(text: String) = CommandParser.parse(text, afterMidnight).command
+
+    @Test fun tomorrowAfterMidnightIsTheComingMorningAlarm() {
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), lateParse("wake me up tomorrow at 7"))
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), lateParse("wake me up tomorrow at 7am"))
+    }
+
+    @Test fun tomorrowAfterMidnightIsTheComingMorningReminder() =
+        assertEquals(reminder("Call mom", at(11, 5, 9)), lateParse("remind me tomorrow at 9am to call mom"))
+
+    @Test fun namedDateAfterMidnightStaysThatDate() =
+        assertEquals(reminder("Call mom", at(11, 6, 9)), lateParse("remind me on 6 nov at 9am to call mom"))
+
+    @Test fun croreIsTooMuch() = invalid("spent 1 crore on house")
+
+    @Test fun halfACrore() = assertEquals(spent(50_00_000, ExpenseCategory.OTHER, "Flat"), parse("spent 0.5 cr on flat"))
+
+    @Test fun croreInLedgerIsTooMuch() = invalid("paid rahul 2 cr")
+
+    @Test fun moneyTomorrowFails() = invalid("spent 300 tomorrow")
+
+    @Test fun moneyOnAFutureDateFails() = invalid("spent 2000 on rent 1/12/2026")
+
+    @Test fun urlKeepsThePathsCase() = assertEquals(ParsedCommand.OpenLink("https://example.com/AbC"), parse("HTTPS://Example.com/AbC"))
+
+    @Test fun urlKeepsItsQuery() =
+        assertEquals(ParsedCommand.OpenLink("https://youtube.com/watch?v=AbCdEf"), parse("youtube.com/watch?v=AbCdEf"))
+
+    @Test fun openUrlWithQuery() =
+        assertEquals(ParsedCommand.OpenLink("https://example.com/Path?Q=1"), parse("open https://example.com/Path?Q=1"))
+
+    @Test fun urlWithoutTheFullStop() = assertEquals(ParsedCommand.OpenLink("https://youtube.com"), parse("open youtube.com."))
+
+    @Test fun placeKeepsHinglishWords() =
+        assertEquals(ParsedCommand.OpenLink("google.navigation:q=har%20ki%20pauri"), parse("navigate to har ki pauri"))
+
+    @Test fun searchKeepsHinglishWords() = assertEquals(
+        ParsedCommand.OpenLink("https://www.google.com/search?q=raat%20akeli%20hai%20song"),
+        parse("search raat akeli hai song"),
+    )
+
+    @Test fun appNameKeepsHinglishWords() = assertEquals(ParsedCommand.OpenApp("Aaj tak"), parse("aaj tak kholo"))
+
+    @Test fun bareHinglishAppName() =
+        assertEquals(ParsedCommand.OpenApp("Aaj Tak"), CommandParser.parse("aaj tak", now, listOf("Aaj Tak")).command)
+
+    @Test fun dashRangeIsNotADate() = assertEquals(reminder("Buy 2-3 lemons", at(11, 6, 9)), parse("remind me to buy 2-3 lemons"))
+
+    @Test fun dashTimeRangeIsNotADate() =
+        assertEquals(at(11, 5, 19), (parse("remind me to call between 6-7 pm") as ParsedCommand.CreateReminder).at)
+
+    @Test fun dashRangeInExpenseIsNotADate() =
+        assertEquals(null, (parse("spent 100 on 3-4 samosas") as ParsedCommand.LogExpense).at)
+
+    @Test fun dashDateWithYear() =
+        assertEquals(reminder("Pay rent", LocalDateTime.of(2027, 11, 12, 9, 0)), parse("remind me on 12-11-2027 to pay rent"))
+
+    @Test fun impossibleNumericDateFails() = invalid("remind me on 12/25 to pay")
+
+    @Test fun splitFiftyFiftyStaysInTitle() = assertEquals(reminder("Split bill 50/50", at(11, 6, 9)), parse("remind me to split bill 50/50"))
+
+    @Test fun ordinalThatIsNoDateStaysInTitle() =
+        assertEquals(reminder("Plan the 40th anniversary", at(11, 5, 18)), parse("remind me to plan the 40th anniversary at 6pm"))
+
+    @Test fun decimalDoseIsNotATime() = assertEquals(reminder("Take 2.50 mg", at(11, 5, 20)), parse("remind me to take 2.50 mg at 8pm"))
+
+    @Test fun decimalWeightIsNotATime() =
+        assertEquals(reminder("Buy 1.25 kg rice", at(11, 5, 18)), parse("remind me to buy 1.25 kg rice at 6pm"))
+
+    @Test fun dotTimeStillWorks() = assertEquals(ParsedCommand.CreateAlarm(6, 30, 0, ""), parse("alarm at 6.30"))
+
+    @Test fun alarmAtBareHour() {
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), parse("alarm at 7"))
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), parse("set alarm for 7"))
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), parse("alarm 7"))
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, Days.ALL, ""), parse("alarm at 7 every day"))
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, ""), parse("set alarm for 7 tomorrow"))
+        assertEquals(ParsedCommand.CreateAlarm(7, 30, 0, ""), parse("alarm at 7 30"))
+    }
+
+    @Test fun smsBodyStartingWithANumber() =
+        assertEquals(ParsedCommand.OpenLink("sms:9876543210?body=5%20min%20late"), parse("text 9876543210 5 min late"))
+
+    @Test fun smsSpacedNumber() = assertEquals(ParsedCommand.OpenLink("sms:9876543210?body=hi"), parse("text 98765 43210 hi"))
+
+    @Test fun smsBodyStartingWithALongNumber() =
+        assertEquals(ParsedCommand.OpenLink("sms:9876543210?body=100%20rs%20bhej"), parse("text 9876543210 100 rs bhej"))
+
+    // ---- Regressions from the fixes above ----
+
+    private fun isReminder(text: String) =
+        assertTrue("expected a reminder for \"$text\", got ${parse(text)}", parse(text) is ParsedCommand.CreateReminder)
+
+    @Test fun reminderEndingInOpenIsStillAReminder() {
+        isReminder("remind me to keep the shop open")
+        isReminder("remind me to check if the bank is open")
+        isReminder("kal 9 baje yaad dilana, dukaan kholna")
+        isReminder("open the shop at 9 remind me")
+    }
+
+    @Test fun openingTheRemindersOrAlarmAppHinglish() {
+        assertEquals(ParsedCommand.OpenApp("Alarm"), parse("alarm kholo"))
+        assertEquals(ParsedCommand.OpenApp("Reminders"), parse("reminders app open karo"))
+    }
+
+    @Test fun spendingBeforeAReminderLeavesItAReminder() {
+        isReminder("bought the tickets, remind me at 6 to print them")
+        isReminder("paid the electricity bill, remind me again on 5th")
+        assertEquals(
+            LocalDateTime.of(2026, 12, 5, 9, 0),
+            (parse("paid 500 for gym, remind me on 5 dec to renew") as ParsedCommand.CreateReminder).at,
+        )
+    }
+
+    @Test fun monthlyInATitleIsNotARepeat() {
+        assertEquals(reminder("Submit the monthly report", at(11, 6, 10)), parse("remind me to submit the monthly report tomorrow at 10"))
+        isReminder("remind me to book my yearly checkup on friday")
+        assertEquals(ParsedCommand.CreateAlarm(7, 0, 0, "Monthly meeting"), parse("alarm at 7 for the monthly meeting"))
+    }
+
+    @Test fun monthlyAsTheRepeatStillFails() {
+        invalid("remind me to pay rent monthly")
+        invalid("remind me to pay rent monthly on the 1st")
+        invalid("remind me to drink water hourly")
+    }
+
+    @Test fun namedDayBeatsNextMonthsInTheTitle() =
+        assertEquals(reminder("Pay next month's rent", at(12, 1, 9)), parse("remind me on 1st to pay next month's rent"))
+
+    @Test fun nextWeekFriday() {
+        assertEquals(reminder("Call", at(11, 13, 9)), parse("remind me next week friday to call"))
+        assertEquals(reminder("Call", at(11, 13, 9)), parse("remind me on friday next week to call"))
+    }
+
+    @Test fun phoneNumberInSmallGroups() {
+        assertEquals(ParsedCommand.OpenLink("tel:9876543210"), parse("call 98 76 54 32 10"))
+        assertEquals(ParsedCommand.OpenLink("sms:9876543210?body=running%20late"), parse("text 98 76 54 32 10 running late"))
+        assertEquals(ParsedCommand.OpenLink("sms:+442079460958?body=hi"), parse("text +44 20 7946 0958 hi"))
+    }
+
+    @Test fun spacedNumberInTheLabelIsNotTheTime() {
+        val train = parse("wake me up at 6 for the 10 30 train") as ParsedCommand.CreateAlarm
+        assertEquals(6 to 0, train.hour to train.minute)
+        val colon = parse("alarm at 6:30 for the 10 45 train") as ParsedCommand.CreateAlarm
+        assertEquals(6 to 30, colon.hour to colon.minute)
+    }
+
+    @Test fun spacedTimeAfterAPartOfTheDay() = assertEquals(ParsedCommand.CreateAlarm(6, 30, 0, ""), parse("alarm kal subah 6 30"))
+
+    @Test fun minutesWithoutTheUnitAskForTheTime() {
+        invalid("wake me up in 20")
+        invalid("alarm in 5")
+    }
+
+    // ---- Regressions from the third review ----
+
+    @Test fun phoneNumberWithACountryCodeInSmallGroups() {
+        assertEquals(ParsedCommand.OpenLink("tel:+919876543210"), parse("call +91 98 76 54 32 10"))
+        assertEquals(ParsedCommand.OpenLink("tel:919876543210"), parse("call 91 98 76 54 32 10"))
+        assertEquals(ParsedCommand.OpenLink("tel:+919876543210"), parse("call +91 9876 54 32 10"))
+        assertEquals(ParsedCommand.OpenLink("sms:+919876543210?body=hi"), parse("text +91 98 76 54 32 10 hi"))
+        assertEquals(ParsedCommand.OpenLink("sms:919876543210?body=hi"), parse("text 91 98 76 54 32 10 hi"))
+        assertEquals(ParsedCommand.OpenLink("sms:+919876543210?body=100%20rs%20bhej"), parse("text +91 98765 43210 100 rs bhej"))
+        // Ten digits that happen to start with 91, then a message starting with a number.
+        assertEquals(ParsedCommand.OpenLink("sms:9123456789?body=5%20min%20late"), parse("text 91 23 45 67 89 5 min late"))
+    }
+
+    @Test fun ordinalInTheTitleDoesNotBeatNextMonthOrYear() {
+        assertEquals(
+            reminder("Our 25th anniversary", LocalDateTime.of(2027, 11, 5, 9, 0)),
+            parse("remind me next year about our 25th anniversary"),
+        )
+        assertEquals(reminder("Dad's 50th birthday", at(12, 5, 9)), parse("remind me next month about dad's 50th birthday"))
+        assertEquals(reminder("2nd installment", at(11, 12, 9)), parse("remind me next week about the 2nd installment"))
+    }
+
+    @Test fun nextMonthOnAnOrdinalIsThatDayNextMonth() {
+        assertEquals(reminder("Pay rent", at(12, 10, 9)), parse("remind me next month on the 10th to pay rent"))
+        assertEquals(reminder("Pay rent", at(12, 10, 9)), parse("remind me to pay rent on the 10th next month"))
+        assertEquals(reminder("Pay rent", at(12, 10, 9)), parse("remind me next month 10th to pay rent"))
+        assertEquals(reminder("Pay rent", at(12, 10, 9)), parse("remind me 10th next month to pay rent"))
+        assertEquals(reminder("Pay rent", at(12, 10, 9)), parse("remind me to pay rent 10th of next month"))
+    }
+
+    @Test fun bareHourBeatsASpacedPairInTheLabel() {
+        for (text in listOf("alarm 6 for the 10 30 train", "wake me up 6 for the 10 30 train")) {
+            val a = parse(text) as ParsedCommand.CreateAlarm
+            assertEquals(text, 6 to 0, a.hour to a.minute)
+        }
+    }
+
+    @Test fun atTimeBeatsAForPairInTheLabel() {
+        val a = parse("wake me up at 6 for 10 30 train") as ParsedCommand.CreateAlarm
+        assertEquals(6 to 0, a.hour to a.minute)
+        val b = parse("alarm for 7 30") as ParsedCommand.CreateAlarm
+        assertEquals(7 to 30, b.hour to b.minute)
+    }
+
+    @Test fun returnTripIsSpendingNotARefund() {
+        for (text in listOf("return cab 200", "return flight 5000")) {
+            val e = parse(text) as ParsedCommand.LogExpense
+            assertEquals(text, ExpenseKind.EXPENSE, e.kind)
+        }
+    }
+
+    @Test fun callDoesNotSwallowATrailingNumber() {
+        assertEquals(ParsedCommand.OpenLink("tel:9876543210"), parse("call 9876543210 2 baar"))
+    }
+
+    @Test fun spacedTimeAfterALabel() {
+        assertEquals(ParsedCommand.CreateAlarm(6, 30, 0, "Gym"), parse("gym alarm 6 30"))
+        assertEquals(ParsedCommand.CreateAlarm(7, 15, 0, "Office"), parse("office alarm 7 15"))
+        assertEquals(ParsedCommand.CreateAlarm(6, 30, 0, "Gym"), parse("alarm for gym 6 30"))
+        assertEquals(ParsedCommand.CreateAlarm(6, 30, 0, "Gym"), parse("wake me up for gym 6 30"))
+    }
+
+    @Test fun boughtAnAlarmClockIsExpense() {
+        assertEquals(spent(500, ExpenseCategory.OTHER, "Alarm clock"), parse("bought an alarm clock for 500"))
+        assertEquals(spent(1200, ExpenseCategory.OTHER, "Alarm clock"), parse("paid for the alarm clock 1200"))
+        invalid("bought tickets, wake me up in 20")
+        invalid("bought an alarm clock, wake me up in 20")
     }
 
     // ---- Everything else ----
