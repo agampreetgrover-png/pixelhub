@@ -1,6 +1,8 @@
 # PixelHub
 
-A personal all-in-one Android app for a Google Pixel 9a. Everything works by hand first, and an assistant can do the same things from a sentence.
+A personal all-in-one Android app for Google Pixel phones. Everything works by hand first, and an assistant can do the same things from a sentence.
+
+It is meant for any Pixel on Android 15 or later (Pixel 6 and newer), but it has only been tested on a **Pixel 9a**.
 
 - **Reminders**: one-off or repeating (daily, chosen weekdays, every N days or weeks), with Done and Snooze buttons on the notification. Swipe to delete, with Undo.
 - **Alarms**: exact alarms that ring full-screen over the lock screen, even in silent mode. Snooze, repeat days, ringtone and vibration are configurable. Swipe an alarm left to delete it (or use Delete in its editor), with Undo.
@@ -8,7 +10,8 @@ A personal all-in-one Android app for a Google Pixel 9a. Everything works by han
 - **People**: who owes whom, under **Money → People**. Record "I paid" or "they paid" for each person and PixelHub keeps the running balance, with history, swipe-to-delete with Undo, and a **Send a reminder** button that opens WhatsApp or SMS with what they owe. Or tell the assistant "paid Naruna 30", "rahul ko 50 diye", "Naruna paid me 30" or "naruna ka hisaab". It is kept apart from Expenses, so lending or being paid back never changes your spending or budgets.
 - **Health**: reads steps, distance, active calories and exercise from Health Connect, shows today and the past week against a daily step goal, and can send nudges, e.g. a reminder to walk when you're behind.
 - **Calendar**: shows your upcoming Google Calendar events, read from the calendars synced to the phone, so no sign-in is needed. It can also write your reminders and alarms into a calendar you pick.
-- **Assistant**: type or speak "remind me to call mom at 6pm", "spent 250 on lunch", "add 30 to food" or Hinglish like "kal subah 7 baje dawai yaad dilana". Keyword rules on the phone turn it into a draft card that you confirm before anything is created, in well under a millisecond and with no internet or AI service. It also opens apps ("open spotify", "whatsapp kholo"), dials numbers, navigates and searches. If a request isn't understood, it says so straight away. Every request is logged under **Settings → Assistant log**.
+- **Notes**: quick notes with colours, pinning and a formatting bar for headings, bold, italic, strikethrough, bullets and checklists.
+- **Assistant**: type or speak "remind me to call mom at 6pm", "spent 250 on lunch", "add 30 to food" or Hinglish like "kal subah 7 baje dawai yaad dilana". It is not an AI model: regular expressions on the phone match the request, and only for a fixed set of operations. These are reminders, alarms, expenses and income, the People ledger, opening apps ("open spotify", "whatsapp kholo"), calls, texts, navigation and web search. A match becomes a draft card that you confirm before anything is created. This takes well under a millisecond and needs no internet. Anything outside those operations gets an immediate "I didn't understand that". Every request is logged under **Settings → Assistant log**.
 - **Widgets**: home-screen widgets for Health, Reminders, Alarms, Money and Calendar, each with a layout for every size from 1×1 to 4×4. They use your PixelHub theme. You can tick off a reminder and switch an alarm on or off straight from the home screen; tapping anywhere else opens that section. They update the moment their data changes while PixelHub is running, and every 30 minutes otherwise. A **Now playing** widget shows what Spotify or any other player is playing, with live times and controls, and follows song changes as they happen.
 
 **Home** greets you by name and gathers it all:
@@ -25,16 +28,16 @@ It is built with Kotlin, Jetpack Compose, Material 3, Room, DataStore, Health Co
 
 ## Build and install
 
-1. Install **Android Studio**. It includes the Android SDK, `adb` and a JDK 21.
+1. Clone the repo (`git clone https://github.com/agampreetgrover-png/pixel.git`) and install **Android Studio**. It includes the Android SDK, `adb` and a JDK 21.
    The Android Gradle plugin needs JDK 17–21. Java 25 is too new, so use Android Studio's bundled JDK.
-2. **File → Open** the `pixel9a` folder and let Gradle sync.
+2. **File → Open** the cloned folder and let Gradle sync.
 3. Prepare the phone:
    - Go to **Settings → About phone** and tap **Build number** 7 times.
    - Go to **Settings → System → Developer options** and turn on **USB debugging**.
    - Plug the phone in and accept the prompt.
 4. Pick the Pixel in the device dropdown and press **Run ▶**.
 
-From the command line, point `JAVA_HOME` at a JDK 17–21 first. On this machine that is `%LOCALAPPDATA%\Android\jdk-21`. Then:
+From the command line, point `JAVA_HOME` at a JDK 17–21 first (Android Studio's bundled one is the `jbr` folder in its install directory). Then:
 
 ```
 gradlew test           # unit tests: recurrence, assistant parsing (English and Hinglish), expenses, People ledger, calendar, nudges, themes
@@ -67,7 +70,7 @@ gradlew installDebug   # build and install on the connected phone
   adb shell am start -f 0x14000000 -n com.agam.pixelhub/.MainActivity --es com.agam.pixelhub.extra.TAB EXPENSES
   ```
 
-  The tabs are `HOME`, `REMINDERS`, `ALARMS`, `EXPENSES`, `PEOPLE`, `HEALTH`, `CALENDAR`, `ASSISTANT` and `SETTINGS`.
+  The tabs are `HOME`, `REMINDERS`, `ALARMS`, `EXPENSES`, `PEOPLE`, `HEALTH`, `CALENDAR`, `NOTES`, `ASSISTANT` and `SETTINGS`.
 
 ## Accessibility
 
@@ -93,3 +96,7 @@ gradlew installDebug   # build and install on the connected phone
 | `.../ui/` | Compose screens: Home, Reminders, Alarms, Money, People, Health, Calendar, Assistant and Settings. |
 | `.../ui/theme/` | Colour tokens (`HubColors`), the 10 themes, and Poppins type. |
 | `.../ui/motion/` | One shared motion vocabulary: press feedback, springs, entrance stagger, rolling numbers, shape morphs and the small helpers in `Micro.kt`. |
+
+## License
+
+MIT, see [LICENSE](LICENSE). The Poppins font is under the SIL Open Font License, see [licenses/fonts/Poppins-OFL.txt](licenses/fonts/Poppins-OFL.txt).
