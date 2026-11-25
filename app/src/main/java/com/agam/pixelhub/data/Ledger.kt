@@ -12,7 +12,7 @@ import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import java.util.Locale
 
-/** Someone you lend to or borrow from. [nameKey] keeps "Naruna" and "naruna" one person. */
+/** Someone you lend to or borrow from. [nameKey] keeps "Neha" and "neha" one person. */
 @Entity(tableName = "people", indices = [Index(value = ["nameKey"], unique = true)])
 data class Person(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

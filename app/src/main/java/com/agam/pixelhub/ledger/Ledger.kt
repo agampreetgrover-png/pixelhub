@@ -88,11 +88,11 @@ class LedgerRepository(private val people: PeopleDao, private val records: Ledge
 object LedgerMath {
     private val SHARE_DATE = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
 
-    /** "naruna  sharma" → "Naruna Sharma". */
+    /** "neha  sharma" → "Neha Sharma". */
     fun tidyName(name: String): String = name.trim().split(Regex("""\s+""")).filter { it.isNotEmpty() }
         .joinToString(" ") { w -> w.replaceFirstChar { it.titlecase(Locale.ROOT) } }
 
-    /** "Naruna owes you ₹230", "You owe Naruna ₹50" or "All square with Naruna". */
+    /** "Neha owes you ₹230", "You owe Neha ₹50" or "All square with Neha". */
     fun balanceText(name: String, paise: Long): String = when {
         paise > 0 -> "$name owes you ${Money.format(paise)}"
         paise < 0 -> "You owe $name ${Money.format(-paise)}"

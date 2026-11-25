@@ -150,7 +150,7 @@ fun PeopleScreen(onBack: () -> Unit) {
                     Column(hubAnimateItem().fillMaxWidth().hubCard(Hub.colors.raised).padding(bottom = 20.dp)) {
                         EmptyState(
                             title = "No one here yet",
-                            body = "Add the people you lend to or borrow from, or tell the assistant “paid Naruna 30”.",
+                            body = "Add the people you lend to or borrow from, or tell the assistant “paid Neha 30”.",
                             accent = Hub.colors.ok,
                             action = { PrimaryButton("Add person", onClick = { adding = true }, icon = Icons.Outlined.PersonAdd) },
                         )

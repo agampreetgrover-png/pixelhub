@@ -28,7 +28,7 @@ object CommandParser {
             "• Reminders: \"remind me to call mom at 6pm\", \"kal subah 7 baje dawai yaad dilana\"\n" +
             "• Alarms: \"wake me up at 6:30 on weekdays\", \"subah 6 baje utha dena\"\n" +
             "• Money: \"spent 250 on lunch\", \"add 30 to food\", \"salary 50000 mili\"\n" +
-            "• People: \"paid naruna 30\", \"rahul ko 50 diye\", \"naruna paid me 30\", \"naruna ka hisaab\"\n" +
+            "• People: \"paid neha 30\", \"rahul ko 50 diye\", \"neha paid me 30\", \"neha ka hisaab\"\n" +
             "• Apps: \"open spotify\", \"whatsapp kholo\"\n" +
             "• Calls and links: \"call 9876543210\", \"navigate to india gate\", \"search cricket score\""
 
@@ -365,7 +365,7 @@ object CommandParser {
 
     /** A ledger entry or balance question, or null when the message isn't about a person. */
     private fun ledger(s: String, original: String, now: ZonedDateTime, people: List<String>): ParseResult? {
-        // A saved name anywhere in the message: the longest match wins ("Naruna S" over "Naruna").
+        // A saved name anywhere in the message: the longest match wins ("Neha S" over "Neha").
         val match = people.sortedByDescending { it.length }.firstNotNullOfOrNull { p ->
             Regex("""\b${Regex.escape(Lexicon.normalize(p))}\b""").takeIf { it.containsMatchIn(s) }?.let { p to it }
         }

@@ -7,7 +7,7 @@ It is meant for any Pixel on Android 15 or later (Pixel 6 and newer), but it has
 - **Reminders**: one-off or repeating (daily, chosen weekdays, every N days or weeks), with Done and Snooze buttons on the notification. Swipe to delete, with Undo.
 - **Alarms**: exact alarms that ring full-screen over the lock screen, even in silent mode. Snooze, repeat days, ringtone and vibration are configurable. Swipe an alarm left to delete it (or use Delete in its editor), with Undo.
 - **Money**: log expenses and income, set a monthly budget and per-category budgets, filter by category, and see where the money went each month. Hold **Add** (or **Income**) to repeat the last entry.
-- **People**: who owes whom, under **Money → People**. Record "I paid" or "they paid" for each person and PixelHub keeps the running balance, with history, swipe-to-delete with Undo, and a **Send a reminder** button that opens WhatsApp or SMS with what they owe. Or tell the assistant "paid Naruna 30", "rahul ko 50 diye", "Naruna paid me 30" or "naruna ka hisaab". It is kept apart from Expenses, so lending or being paid back never changes your spending or budgets.
+- **People**: who owes whom, under **Money → People**. Record "I paid" or "they paid" for each person and PixelHub keeps the running balance, with history, swipe-to-delete with Undo, and a **Send a reminder** button that opens WhatsApp or SMS with what they owe. Or tell the assistant "paid Neha 30", "rahul ko 50 diye", "Neha paid me 30" or "neha ka hisaab". It is kept apart from Expenses, so lending or being paid back never changes your spending or budgets.
 - **Health**: reads steps, distance, active calories and exercise from Health Connect, shows today and the past week against a daily step goal, and can send nudges, e.g. a reminder to walk when you're behind.
 - **Calendar**: shows your upcoming Google Calendar events, read from the calendars synced to the phone, so no sign-in is needed. It can also write your reminders and alarms into a calendar you pick.
 - **Notes**: quick notes with colours, pinning and a formatting bar for headings, bold, italic, strikethrough, bullets and checklists.
@@ -28,7 +28,7 @@ It is built with Kotlin, Jetpack Compose, Material 3, Room, DataStore, Health Co
 
 ## Build and install
 
-1. Clone the repo (`git clone https://github.com/agampreetgrover-png/pixel.git`) and install **Android Studio**. It includes the Android SDK, `adb` and a JDK 21.
+1. Clone the repo (`git clone https://github.com/agampreetgrover-png/pixelhub.git`) and install **Android Studio**. It includes the Android SDK, `adb` and a JDK 21.
    The Android Gradle plugin needs JDK 17–21. Java 25 is too new, so use Android Studio's bundled JDK.
 2. **File → Open** the cloned folder and let Gradle sync.
 3. Prepare the phone:
@@ -62,7 +62,7 @@ gradlew installDebug   # build and install on the connected phone
 - **Doze**: with USB connected, run `adb shell dumpsys deviceidle force-idle`. A reminder should still fire on time.
 - **Reboot**: restart the phone. `adb shell dumpsys alarm | findstr pixelhub` should still list the scheduled items.
 - **Assistant**: try "wake me up at 6:30 on weekdays", "spent 250 on lunch", "kal subah 7 baje dawai yaad dilana" and "open spotify". Each should show a confirmation card at once. "what is the weather" should get an immediate "I didn't understand that". Both show up under **Settings → Assistant log**, with the rule that matched and how long it took. Type "help" for everything it understands.
-- **People**: in **Money → People**, add someone, tap **I paid** for ₹30 and then **they paid** for ₹30. The balance should go to ₹30 and then "All square". In the assistant, "paid Naruna 30" should show a card, and "naruna ka hisaab" should answer at once. Your Expenses totals shouldn't change.
+- **People**: in **Money → People**, add someone, tap **I paid** for ₹30 and then **they paid** for ₹30. The balance should go to ₹30 and then "All square". In the assistant, "paid Neha 30" should show a card, and "neha ka hisaab" should answer at once. Your Expenses totals shouldn't change.
 - **Widgets**: long-press the home screen, open **Widgets → PixelHub** and add each one. Resize them: the layout should change at each size. Tick a reminder and switch an alarm from the widget, then open the app: both should match. With music playing, skip a song in the player: **Now playing** should change within a second or two.
 - **Open a tab directly**:
 

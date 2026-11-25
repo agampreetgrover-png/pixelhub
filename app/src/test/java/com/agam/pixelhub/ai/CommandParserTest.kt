@@ -190,16 +190,16 @@ class CommandParserTest {
 
     // ---- People ledger ----
 
-    private val people = listOf("Naruna", "Mummy", "Rahul Sharma")
+    private val people = listOf("Neha", "Mummy", "Rahul Sharma")
     private fun ledger(text: String) = CommandParser.parse(text, now, apps, people).command
     private fun owesMe(name: String, rupees: Long, note: String = "", new: Boolean = false, at: LocalDateTime? = null) =
         ParsedCommand.LedgerEntry(name, rupees * 100, note, at, isNewPerson = new)
     private fun iOwe(name: String, rupees: Long, note: String = "", new: Boolean = false, at: LocalDateTime? = null) =
         ParsedCommand.LedgerEntry(name, -rupees * 100, note, at, isNewPerson = new)
 
-    @Test fun paidSavedPerson() = assertEquals(owesMe("Naruna", 30), ledger("i paid naruna 30"))
+    @Test fun paidSavedPerson() = assertEquals(owesMe("Neha", 30), ledger("i paid neha 30"))
 
-    @Test fun paidWithNote() = assertEquals(owesMe("Naruna", 30, "Lunch"), ledger("paid Naruna 30 for lunch"))
+    @Test fun paidWithNote() = assertEquals(owesMe("Neha", 30, "Lunch"), ledger("paid Neha 30 for lunch"))
 
     @Test fun paidNewPerson() = assertEquals(owesMe("Rahul", 50, new = true), parse("paid rahul 50"))
 
@@ -210,21 +210,21 @@ class CommandParserTest {
     @Test fun koDiyeNewPerson() = assertEquals(owesMe("Rahul", 50, new = true), parse("rahul ko 50 diye"))
 
     @Test fun koDiyeWithNoteAndDate() =
-        assertEquals(owesMe("Naruna", 80, "Auto", at = at(11, 4, 10)), ledger("kal naruna ko auto ke liye 80 diye"))
+        assertEquals(owesMe("Neha", 80, "Auto", at = at(11, 4, 10)), ledger("kal neha ko auto ke liye 80 diye"))
 
-    @Test fun keLiye() = assertEquals(owesMe("Naruna", 120, "Movie ticket"), ledger("naruna ke liye 120 ka movie ticket"))
+    @Test fun keLiye() = assertEquals(owesMe("Neha", 120, "Movie ticket"), ledger("neha ke liye 120 ka movie ticket"))
 
-    @Test fun paidForSavedPerson() = assertEquals(owesMe("Naruna", 60, "Coffee"), ledger("paid 60 for naruna coffee"))
+    @Test fun paidForSavedPerson() = assertEquals(owesMe("Neha", 60, "Coffee"), ledger("paid 60 for neha coffee"))
 
-    @Test fun theyPaidMe() = assertEquals(iOwe("Naruna", 30), ledger("naruna paid me 30"))
+    @Test fun theyPaidMe() = assertEquals(iOwe("Neha", 30), ledger("neha paid me 30"))
 
-    @Test fun theyPaidForMe() = assertEquals(iOwe("Naruna", 150, "Dinner"), ledger("naruna paid 150 for me dinner"))
+    @Test fun theyPaidForMe() = assertEquals(iOwe("Neha", 150, "Dinner"), ledger("neha paid 150 for me dinner"))
 
-    @Test fun gotFrom() = assertEquals(iOwe("Naruna", 100), ledger("got 100 from naruna"))
+    @Test fun gotFrom() = assertEquals(iOwe("Neha", 100), ledger("got 100 from neha"))
 
     @Test fun seMileSavedIsLedger() = assertEquals(iOwe("Mummy", 2000), ledger("mummy se 2000 mile"))
 
-    @Test fun neDiye() = assertEquals(iOwe("Naruna", 200), ledger("naruna ne mere liye 200 diye"))
+    @Test fun neDiye() = assertEquals(iOwe("Neha", 200), ledger("neha ne mere liye 200 diye"))
 
     @Test fun borrowedNewPerson() = assertEquals(iOwe("Karan", 300, new = true), parse("borrowed 300 from karan"))
 
@@ -234,11 +234,11 @@ class CommandParserTest {
 
     @Test fun multiWordSavedName() = assertEquals(owesMe("Rahul Sharma", 90), ledger("paid rahul sharma 90"))
 
-    @Test fun ledgerNeedsAmount() = assertTrue(ledger("paid naruna") is ParsedCommand.Invalid)
+    @Test fun ledgerNeedsAmount() = assertTrue(ledger("paid neha") is ParsedCommand.Invalid)
 
-    @Test fun balanceHinglish() = assertEquals(ParsedCommand.LedgerBalance("Naruna"), ledger("naruna ka hisaab"))
+    @Test fun balanceHinglish() = assertEquals(ParsedCommand.LedgerBalance("Neha"), ledger("neha ka hisaab"))
 
-    @Test fun balanceEnglish() = assertEquals(ParsedCommand.LedgerBalance("Naruna"), ledger("how much does naruna owe me"))
+    @Test fun balanceEnglish() = assertEquals(ParsedCommand.LedgerBalance("Neha"), ledger("how much does neha owe me"))
 
     @Test fun balanceUnknownName() = assertEquals(ParsedCommand.LedgerBalance("Vikram"), parse("vikram ka hisaab"))
 
@@ -256,10 +256,10 @@ class CommandParserTest {
     @Test fun unsavedSeMileStaysIncome() = assertEquals(earned(2000, ExpenseCategory.OTHER, "Papa"), ledger("papa se 2000 mile"))
 
     @Test fun savedNameInPlainExpenseStaysExpense() =
-        assertTrue(ledger("spent 250 on lunch with naruna") is ParsedCommand.LogExpense)
+        assertTrue(ledger("spent 250 on lunch with neha") is ParsedCommand.LogExpense)
 
     @Test fun remindAboutPersonIsReminder() =
-        assertTrue(ledger("remind me to pay naruna 30 tomorrow") is ParsedCommand.CreateReminder)
+        assertTrue(ledger("remind me to pay neha 30 tomorrow") is ParsedCommand.CreateReminder)
 
     // ---- Apps and links ----
 

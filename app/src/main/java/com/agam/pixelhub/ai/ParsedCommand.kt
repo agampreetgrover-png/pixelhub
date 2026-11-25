@@ -49,7 +49,7 @@ sealed interface ParsedCommand {
         val isNewPerson: Boolean = false,
     ) : ParsedCommand
 
-    /** "naruna ka hisaab": answered at once from the ledger, no card. */
+    /** "neha ka hisaab": answered at once from the ledger, no card. */
     data class LedgerBalance(val name: String) : ParsedCommand
 
     data class OpenApp(val query: String) : ParsedCommand

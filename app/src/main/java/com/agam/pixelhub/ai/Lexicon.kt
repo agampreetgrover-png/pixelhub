@@ -121,7 +121,7 @@ internal object Lexicon {
 
     // ---- People ledger (who owes whom) ---------------------------------------------------
 
-    /** Ledger words removed from the note ("paid naruna 30 for lunch" → "lunch"). */
+    /** Ledger words removed from the note ("paid neha 30 for lunch" → "lunch"). */
     val LEDGER_WORDS = Regex(
         """\b(?:paid|gave|lent|lend|sent|transferred|owes|owe|borrowed|got|received|recieved|spent""" +
             """|de\s+diye|de\s+diya|diye|diya|udhaar|udhar|le\s+liye|liye|liya|mile|mila|mili|aaye|aaya""" +

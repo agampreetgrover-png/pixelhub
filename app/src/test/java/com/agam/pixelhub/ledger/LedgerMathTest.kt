@@ -12,9 +12,9 @@ class LedgerMathTest {
     private fun r(id: Long, rupees: Long, day: Int, note: String = "") = LedgerRecord(id, 1, rupees * 100, note, on(day))
 
     @Test fun balanceTexts() {
-        assertEquals("Naruna owes you ₹230", LedgerMath.balanceText("Naruna", 23_000))
-        assertEquals("You owe Naruna ₹50", LedgerMath.balanceText("Naruna", -5_000))
-        assertEquals("All square with Naruna", LedgerMath.balanceText("Naruna", 0))
+        assertEquals("Neha owes you ₹230", LedgerMath.balanceText("Neha", 23_000))
+        assertEquals("You owe Neha ₹50", LedgerMath.balanceText("Neha", -5_000))
+        assertEquals("All square with Neha", LedgerMath.balanceText("Neha", 0))
     }
 
     @Test fun shortTexts() {
@@ -23,7 +23,7 @@ class LedgerMathTest {
         assertEquals("All square", LedgerMath.shortText(0))
     }
 
-    @Test fun tidiesNames() = assertEquals("Naruna Sharma", LedgerMath.tidyName("  naruna   sharma "))
+    @Test fun tidiesNames() = assertEquals("Neha Sharma", LedgerMath.tidyName("  neha   sharma "))
 
     @Test fun runningBalancesNewestFirst() {
         // Oldest to newest: +100, -30, +50 → balances 100, 70, 120.
@@ -45,19 +45,19 @@ class LedgerMathTest {
     @Test fun shareMessageWhenTheyOweYou() {
         val open = listOf(r(3, 150, 3, "Lunch"), r(4, 80, 5, "Auto"))
         assertEquals(
-            "Hi Naruna, quick reminder: you owe me ₹230.\n• 3 Nov · Lunch · ₹150\n• 5 Nov · Auto · ₹80",
-            LedgerMath.shareMessage("Naruna Sharma", 23_000, open, zone),
+            "Hi Neha, quick reminder: you owe me ₹230.\n• 3 Nov · Lunch · ₹150\n• 5 Nov · Auto · ₹80",
+            LedgerMath.shareMessage("Neha Sharma", 23_000, open, zone),
         )
     }
 
     @Test fun shareMessageMarksTheirPayments() {
         val open = listOf(r(1, 100, 1), r(2, -30, 2))
         assertEquals(
-            "Hi Naruna, quick reminder: you owe me ₹70.\n• 1 Nov · I paid · ₹100\n• 2 Nov · you paid · −₹30",
-            LedgerMath.shareMessage("Naruna", 7_000, open, zone),
+            "Hi Neha, quick reminder: you owe me ₹70.\n• 1 Nov · I paid · ₹100\n• 2 Nov · you paid · −₹30",
+            LedgerMath.shareMessage("Neha", 7_000, open, zone),
         )
     }
 
     @Test fun shareMessageWhenYouOweThem() =
-        assertEquals("Hi Naruna, I owe you ₹50. Will settle soon.", LedgerMath.shareMessage("Naruna", -5_000, emptyList(), zone))
+        assertEquals("Hi Neha, I owe you ₹50. Will settle soon.", LedgerMath.shareMessage("Neha", -5_000, emptyList(), zone))
 }
